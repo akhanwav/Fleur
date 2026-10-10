@@ -10,6 +10,17 @@
 
 import SwiftUI
 
+/// Label that goes dark on the white focus platter. With a white tint
+/// `.borderedProminent` keeps it white, so the focused glyph vanished (#325).
+private struct FocusContrastLabel<Content: View>: View {
+    @Environment(\.isFocused) private var isFocused
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content.foregroundStyle(isFocused ? Color.black : Color.white)
+    }
+}
+
 struct MusicNowPlayingView: View {
     @Binding var isPresented: Bool
     @ObservedObject private var musicQueue = MusicQueue.shared
@@ -146,7 +157,9 @@ struct MusicNowPlayingView: View {
 
     private var bottomBar: some View {
         HStack {
-            Button("Info") { }
+            Button { } label: {
+                FocusContrastLabel { Text("Info") }
+            }
                 .buttonStyle(.borderedProminent)
                 .buttonBorderShape(.capsule)
                 .tint(Color.white.opacity(0.16))
@@ -167,7 +180,7 @@ struct MusicNowPlayingView: View {
 
     private var contextMenuButton: some View {
         Button { } label: {
-            Image(systemName: "ellipsis")
+            FocusContrastLabel { Image(systemName: "ellipsis") }
         }
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.circle)
@@ -191,8 +204,10 @@ struct MusicNowPlayingView: View {
 
     private func circleButton(systemImage: String, tint: Color = Color.white.opacity(0.16), action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .semibold))
+            FocusContrastLabel {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .semibold))
+            }
         }
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.circle)
