@@ -89,6 +89,15 @@ nonisolated struct PlexLiveTVChannel: Codable, Identifiable, Sendable {
         return Int(cleaned)
     }
 
+    /// Channel name without the number PMS prepends to `channelTitle`
+    /// ("666 HALLHDP"); the number is shown separately everywhere (#336).
+    var displayName: String {
+        let full = channelTitle ?? title
+        guard let number = channelNumber, full.hasPrefix(number + " ") else { return full }
+        let rest = full.dropFirst(number.count + 1).trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? full : rest
+    }
+
     /// Whether this appears to be an HD channel
     var isHD: Bool {
         let title = (channelTitle ?? title).lowercased()
@@ -562,7 +571,7 @@ extension PlexLiveTVChannel {
             sourceType: .plex,
             sourceId: sourceId,
             channelNumber: parsedChannelNumber,
-            name: channelTitle ?? title,
+            name: displayName,
             callSign: channelCallSign ?? channelShortTitle,
             logoURL: logoURL,
             streamURL: streamURLValue,

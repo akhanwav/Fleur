@@ -84,14 +84,22 @@ final class PlexLiveTunerGroupTests: XCTestCase {
 
     // MARK: - Channel → guide group
 
-    private func makeChannel(tunerName: String?) -> PlexLiveTVChannel {
+    private func makeChannel(tunerName: String?, title: String = "ABC", number: String = "2") -> PlexLiveTVChannel {
         PlexLiveTVChannel(
             ratingKey: "ABC", key: "/tv.plex.providers.epg.xmltv:159/metadata/ABC",
-            guid: nil, type: "channel", title: "ABC", summary: nil, thumb: nil, art: nil,
+            guid: nil, type: "channel", title: title, summary: nil, thumb: nil, art: nil,
             year: nil, channelCallSign: "ABC", channelIdentifier: "ABC", channelShortTitle: nil,
-            channelThumb: nil, channelTitle: "ABC", channelNumber: "2", streamURL: nil,
+            channelThumb: nil, channelTitle: title, channelNumber: number, streamURL: nil,
             tunerName: tunerName
         )
+    }
+
+    /// PMS sends `channelTitle` as "<number> <name>" (#336).
+    func test_displayNameDropsTheLeadingChannelNumber() {
+        XCTAssertEqual(makeChannel(tunerName: nil, title: "13 NBC 13 WVTM", number: "13").displayName, "NBC 13 WVTM")
+        XCTAssertEqual(makeChannel(tunerName: nil, title: "ABC", number: "2").displayName, "ABC")
+        XCTAssertEqual(makeChannel(tunerName: nil, title: "24 Hour News", number: "5").displayName, "24 Hour News")
+        XCTAssertEqual(makeChannel(tunerName: nil, title: "666 ", number: "666").displayName, "666 ")
     }
 
     func test_tunerNameBecomesTheGuideGroup() {
