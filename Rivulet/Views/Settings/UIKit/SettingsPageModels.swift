@@ -190,6 +190,7 @@ enum SettingsContent {
         case .displaySizePicker:      return displaySizePicker
         case .autoplayCountdownPicker: return autoplayCountdownPicker
         case .skipIntervalPicker:     return skipIntervalPicker
+        case .skipBackIntervalPicker: return skipBackIntervalPicker
         case .homeQualityPicker:      return qualityPicker(home: true)
         case .awayQualityPicker:      return qualityPicker(home: false)
         case .contentFilter:          return contentFilter
@@ -220,6 +221,14 @@ enum SettingsContent {
             SettingsRowItem(id: "si_\(opt.rawValue)", title: opt.description, kind: .option(
                 isSelected: { SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue) == opt.rawValue },
                 select: { SettingsStore.setInt(SkipInterval.storageKey, opt.rawValue) }))
+        }
+    }
+
+    private static var skipBackIntervalPicker: [SettingsRowItem] {
+        SkipInterval.allCases.map { opt in
+            SettingsRowItem(id: "sbi_\(opt.rawValue)", title: opt.description, kind: .option(
+                isSelected: { Int(InputConfig.tapSeekBackSeconds) == opt.rawValue },
+                select: { SettingsStore.setInt(SkipInterval.backStorageKey, opt.rawValue) }))
         }
     }
 
@@ -335,9 +344,13 @@ enum SettingsContent {
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
                                 AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
                             })),
-            SettingsRowItem(id: "skipLength", title: "Skip Length",
+            SettingsRowItem(id: "skipLength", title: "Skip Forward Length",
                             kind: .navigationValue(.skipIntervalPicker, value: {
                                 SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
+                            })),
+            SettingsRowItem(id: "skipBackLength", title: "Skip Back Length",
+                            kind: .navigationValue(.skipBackIntervalPicker, value: {
+                                SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
                             })),
             toggle("showPostVideoUpNext", "Show Up Next Panel", key: "showPostVideoUpNext", default: true),
             SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",

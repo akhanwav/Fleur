@@ -34,6 +34,21 @@ final class SkipIntervalSettingTests: XCTestCase {
         super.tearDown()
     }
 
+    /// Skip Back follows Skip Forward until it is set on its own (#335).
+    func test_skipBack_followsForwardUntilSet() {
+        let backKey = SkipInterval.backStorageKey
+        let savedBack = UserDefaults.standard.object(forKey: backKey)
+        defer { UserDefaults.standard.set(savedBack, forKey: backKey) }
+        UserDefaults.standard.removeObject(forKey: backKey)
+
+        UserDefaults.standard.set(15, forKey: key)
+        XCTAssertEqual(InputConfig.tapSeekDelta(forward: false), -15, accuracy: 0.0001)
+
+        UserDefaults.standard.set(5, forKey: backKey)
+        XCTAssertEqual(InputConfig.tapSeekDelta(forward: false), -5, accuracy: 0.0001)
+        XCTAssertEqual(InputConfig.tapSeekDelta(forward: true), 15, accuracy: 0.0001)
+    }
+
     // MARK: Enum integrity
 
     func testSkipIntervalOptionsAreNumberedGlyphMagnitudes() {

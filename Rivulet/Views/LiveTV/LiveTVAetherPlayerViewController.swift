@@ -764,7 +764,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         ])
         railView.scrubberFocusProxy = scrubberProxy
         scrubberProxy.onSkip = { [weak self] forward in
-            self?.skip(by: forward ? InputConfig.tapSeekSeconds : -InputConfig.tapSeekSeconds)
+            self?.skip(by: InputConfig.tapSeekDelta(forward: forward))
         }
         scrubberProxy.onShuttle = scrubberProxy.onSkip
         scrubberProxy.onSelect = { [weak self] in self?.togglePlayPause() }
@@ -1954,7 +1954,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
     private func handleHiddenChromeDirection(_ direction: DirectionalInputBinding.Direction) {
         switch direction {
         case .left:
-            skip(by: -InputConfig.tapSeekSeconds)
+            skip(by: -InputConfig.tapSeekBackSeconds)
         case .right:
             skip(by: InputConfig.tapSeekSeconds)
         case .up:
@@ -2358,7 +2358,7 @@ extension LiveTVAetherPlayerViewController: PlaybackInputTarget {
         case .seekRelative(let seconds):
             skip(by: seconds)
         case .stepSeek(let forward), .scrubNudge(let forward):
-            skip(by: forward ? InputConfig.tapSeekSeconds : -InputConfig.tapSeekSeconds)
+            skip(by: InputConfig.tapSeekDelta(forward: forward))
         case .jumpSeek(let forward):
             skip(by: forward ? InputConfig.jumpSeekSeconds : -InputConfig.jumpSeekSeconds)
         case .showInfo:

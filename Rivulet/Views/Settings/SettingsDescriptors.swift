@@ -164,7 +164,11 @@ enum SettingsDescriptorStore {
         ),
         "skipLength": SettingDescriptor(
             icon: "forward.fill",
-            description: "How far a single Left or Right press skips during playback."
+            description: "How far a single Right press skips ahead during playback."
+        ),
+        "skipBackLength": SettingDescriptor(
+            icon: "backward.fill",
+            description: "How far a single Left press skips back during playback."
         ),
         "showPostVideoUpNext": SettingDescriptor(
             icon: "rectangle.stack",
@@ -430,6 +434,7 @@ enum SettingsDescriptorStore {
         case .displaySizePicker: return ("textformat.size", .systemOrange)
         case .autoplayCountdownPicker: return ("forward.end.alt", .systemPurple)
         case .skipIntervalPicker: return ("forward.fill", .systemBlue)
+        case .skipBackIntervalPicker: return ("backward.fill", .systemBlue)
         case .homeQualityPicker: return ("house.fill", .systemBlue)
         case .awayQualityPicker: return ("antenna.radiowaves.left.and.right", .systemBlue)
         case .contentFilter: return ("hand.raised.fill", .systemOrange)

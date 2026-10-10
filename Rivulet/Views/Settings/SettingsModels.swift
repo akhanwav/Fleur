@@ -51,7 +51,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case homeRows
     case liveTVSourceDetail, liveTVFavorites
     case addLiveTVSource, addOwnServer, addPlaylistURL
-    case displaySizePicker, autoplayCountdownPicker, skipIntervalPicker
+    case displaySizePicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
     case homeQualityPicker, awayQualityPicker
     case contentFilter, contentFilterStrength
 
@@ -77,7 +77,8 @@ enum SettingsPage: Hashable, CaseIterable {
         case .cache: return "Cache & Storage"
         case .displaySizePicker: return "Display Size"
         case .autoplayCountdownPicker: return "Autoplay Countdown"
-        case .skipIntervalPicker: return "Skip Length"
+        case .skipIntervalPicker: return "Skip Forward Length"
+        case .skipBackIntervalPicker: return "Skip Back Length"
         case .homeQualityPicker: return "Home Streaming"
         case .awayQualityPicker: return "Away Streaming"
         case .contentFilter: return "Content Filtering"
@@ -117,6 +118,8 @@ enum SkipInterval: Int, CaseIterable, CustomStringConvertible {
 
     /// UserDefaults key backing the Skip Length setting.
     static let storageKey = "skipSeconds"
+    /// Backs Skip Back Length; unset means "same as forward".
+    static let backStorageKey = "skipBackSeconds"
     static let defaultValue: SkipInterval = .thirtySeconds
 
     var description: String { "\(rawValue) seconds" }

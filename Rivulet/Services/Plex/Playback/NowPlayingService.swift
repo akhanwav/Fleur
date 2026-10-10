@@ -327,7 +327,7 @@ final class NowPlayingService: ObservableObject {
         // Skip backward (see note above).
         commandCenter.skipBackwardCommand.isEnabled = true
         commandCenter.skipBackwardCommand.addTarget { [weak self] _ in
-            self?.dispatchInputAction(.seekRelative(seconds: -InputConfig.tapSeekSeconds))
+            self?.dispatchInputAction(.seekRelative(seconds: -InputConfig.tapSeekBackSeconds))
             return .success
         }
 
@@ -410,10 +410,9 @@ final class NowPlayingService: ObservableObject {
     /// user's Skip Length setting. The handlers already seek by the live
     /// `InputConfig.tapSeekSeconds`; this only drives the displayed interval.
     private func refreshSkipIntervals() {
-        let intervals = [NSNumber(value: InputConfig.tapSeekSeconds)]
         let commandCenter = MPRemoteCommandCenter.shared()
-        commandCenter.skipForwardCommand.preferredIntervals = intervals
-        commandCenter.skipBackwardCommand.preferredIntervals = intervals
+        commandCenter.skipForwardCommand.preferredIntervals = [NSNumber(value: InputConfig.tapSeekSeconds)]
+        commandCenter.skipBackwardCommand.preferredIntervals = [NSNumber(value: InputConfig.tapSeekBackSeconds)]
     }
 
     private func dispatchInputAction(_ action: PlaybackInputAction) {

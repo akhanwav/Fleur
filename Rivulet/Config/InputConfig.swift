@@ -37,6 +37,15 @@ enum InputConfig {
     static var tapSeekSeconds: TimeInterval {
         TimeInterval(SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))
     }
+    /// Single-press Left skip. Follows Skip Forward until Settings → Playback →
+    /// Skip Back Length is set (#335).
+    static var tapSeekBackSeconds: TimeInterval {
+        TimeInterval(SettingsStore.int(SkipInterval.backStorageKey, default: Int(tapSeekSeconds)))
+    }
+    /// Signed single-press skip for a direction.
+    static func tapSeekDelta(forward: Bool) -> TimeInterval {
+        forward ? tapSeekSeconds : -tapSeekBackSeconds
+    }
     static let jumpSeekSeconds: TimeInterval = 30
 
     static let dpadThreshold: Float = 0.3

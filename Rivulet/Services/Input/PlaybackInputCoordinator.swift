@@ -36,7 +36,7 @@ final class PlaybackInputCoordinator {
 
         switch action {
         case .stepSeek(let forward):
-            let delta = forward ? InputConfig.tapSeekSeconds : -InputConfig.tapSeekSeconds
+            let delta = InputConfig.tapSeekDelta(forward: forward)
             handleRelativeSeek(delta, source: source, target: target)
 
         case .jumpSeek(let forward):
