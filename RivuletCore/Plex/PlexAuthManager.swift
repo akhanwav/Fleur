@@ -1003,6 +1003,15 @@ extension PlexAuthManager {
 
 /// URLSession delegate that trusts self-signed certificates for Plex servers
 nonisolated final class PlexCertificateDelegate: NSObject, URLSessionDelegate {
+    /// Origins whose certificate is accepted without system trust: IPv4 literals,
+    /// plex.direct names, and the default Plex port. Playback asks the same
+    /// question, so a URL that browses also plays (#314, #337).
+    static func trustsUnverifiedCertificate(for space: URLProtectionSpace) -> Bool {
+        let host = space.host
+        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
+        return isIPAddress || host.hasSuffix(".plex.direct") || space.port == 32400
+    }
+
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
@@ -1014,18 +1023,7 @@ nonisolated final class PlexCertificateDelegate: NSObject, URLSessionDelegate {
             return
         }
 
-        let host = challenge.protectionSpace.host
-        let port = challenge.protectionSpace.port
-
-        // Trust self-signed certificates for:
-        // - IP addresses (local Plex servers)
-        // - plex.direct domains
-        // - Port 32400 (default Plex port)
-        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
-        let isPlexDirect = host.hasSuffix(".plex.direct")
-        let isPlexPort = port == 32400
-
-        if isIPAddress || isPlexDirect || isPlexPort {
+        if Self.trustsUnverifiedCertificate(for: challenge.protectionSpace) {
             let credential = URLCredential(trust: serverTrust)
             completionHandler(.useCredential, credential)
         } else {

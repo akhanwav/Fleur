@@ -197,6 +197,9 @@ final class AetherPlayer: ObservableObject {
         } catch {
             fatalError("Unable to create AetherEngine: \(error)")
         }
+        // The engine otherwise uses system trust alone, so a server the API
+        // session accepts would browse and never play (#337).
+        EngineTLS.serverTrustEvaluator = { PlexCertificateDelegate.trustsUnverifiedCertificate(for: $0) }
         // The app owns the session on iOS, so the engine releases it off-main
         // on final teardown (no host-side setActive(false) racing the stop).
         engine.deactivatesAudioSessionOnStop = true

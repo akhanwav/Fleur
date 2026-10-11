@@ -330,6 +330,21 @@ final class PlexAuthManagerTests: XCTestCase {
         XCTAssertFalse(playable("https://1-2-3-4.abc123.plex.direct:8443"))
         XCTAssertFalse(playable("not a url"))
     }
+
+    // The trust rule shared by the API session and the player (#337)
+    func testTrustsUnverifiedCertificate() {
+        func trusts(_ host: String, _ port: Int) -> Bool {
+            PlexCertificateDelegate.trustsUnverifiedCertificate(
+                for: URLProtectionSpace(host: host, port: port, protocol: "https", realm: nil,
+                                        authenticationMethod: NSURLAuthenticationMethodServerTrust))
+        }
+        XCTAssertTrue(trusts("192.168.50.5", 32400))
+        XCTAssertTrue(trusts("8.8.8.8", 443))
+        XCTAssertTrue(trusts("1-2-3-4.abc123.plex.direct", 8443))
+        XCTAssertTrue(trusts("plex.example.com", 32400))
+        XCTAssertFalse(trusts("plex.example.com", 443))
+        XCTAssertFalse(trusts("plex.direct.evil.com", 443))
+    }
 }
 
 // MARK: - Test Helpers

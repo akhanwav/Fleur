@@ -526,7 +526,8 @@ struct IOSPlayerChrome<Video: View, Trailing: View>: View {
                 Button("Close", action: actions.close)
                     .buttonStyle(.glass)
                 if failure.canRetry {
-                    Button("Retry", action: actions.retry)
+                    // The chrome's white tint fills this button, so the label goes dark.
+                    Button(action: actions.retry) { Text("Retry").foregroundStyle(.black) }
                         .buttonStyle(.glassProminent)
                 }
             }
