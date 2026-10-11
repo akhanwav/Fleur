@@ -424,6 +424,14 @@ Key components:
 
 **Playback States** (PlayerProtocol): `.idle`, `.loading`, `.playing`, `.paused`, `.buffering`, `.ended`, `.failed`
 
+**Playback trusts the same certificates as the Plex API session.** One rule,
+`PlexCertificateDelegate.trustsUnverifiedCertificate` (IPv4 literal, `*.plex.direct`,
+port 32400), is what `EngineTLS.serverTrustEvaluator` answers with in both
+`AetherPlayer` adapters. AVPlayer has no trust hook, so the tvOS `hls` route goes
+through `HLSTrustRelay` (a loopback relay) when system trust refuses the server.
+Never send a Plex server request through `URLSession.shared`: it browses fine on
+most servers and fails on the ones behind a raw-IP or private certificate (#314, #337).
+
 #### Routing policy (VOD)
 1. `ContentRouter.plan(...)` returns `PlaybackPlan { primary, fallbacks }`. Route cases: `.aether`, `.hls`.
 2. `.aether` — whenever a direct-play URL is available (AetherEngine handles demux + remux + HDR internally; software-decodes AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). DV P7 plays as HDR10 base.

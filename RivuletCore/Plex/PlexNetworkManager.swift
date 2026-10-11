@@ -1884,7 +1884,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             request.addValue(value, forHTTPHeaderField: key)
         }
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await session.data(for: request)
             if let status = (response as? HTTPURLResponse)?.statusCode, status != 200 {
                 print("[Plex] Transcode decision returned HTTP \(status)")
             }
@@ -1908,7 +1908,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         } catch {
             // Best-effort — don't block on failure
@@ -2580,7 +2580,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         var request = URLRequest(url: url)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw PlexAPIError.invalidResponse
         }
@@ -3108,19 +3108,7 @@ extension PlexNetworkManager: URLSessionDelegate {
             return
         }
 
-        let host = challenge.protectionSpace.host
-        let port = challenge.protectionSpace.port
-
-        // Trust self-signed certificates for:
-        // - IP addresses (local Plex servers)
-        // - plex.direct domains
-        // - Port 32400 (default Plex port)
-        let isIPAddress = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
-        let isPlexDirect = host.hasSuffix(".plex.direct")
-        let isPlexPort = port == 32400
-
-        if isIPAddress || isPlexDirect || isPlexPort {
-            // Trust the self-signed certificate
+        if PlexCertificateDelegate.trustsUnverifiedCertificate(for: challenge.protectionSpace) {
             let credential = URLCredential(trust: serverTrust)
             completionHandler(.useCredential, credential)
         } else {

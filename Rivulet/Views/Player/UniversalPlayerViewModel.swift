@@ -304,6 +304,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// HLS manifest enricher — injects audio/subtitle track labels into the master playlist.
     /// Must be retained for the lifetime of the AVURLAsset.
     private var hlsManifestEnricher: HLSManifestEnricher?
+    /// Set while the HLS origin's certificate fails system trust; see `prepareHLSRelay`.
+    private var hlsRelay: HLSTrustRelay?
 
     /// KVO observers
     private var rateObservation: NSKeyValueObservation?
@@ -2348,6 +2350,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Fetch and log the HLS master manifest to inspect track labels and I-frame playlists.
     private func logHLSManifest(url: URL, headers: [String: String]) async {
+        let url = avPlayerURL(url)
         var request = URLRequest(url: url)
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
@@ -2414,6 +2417,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     ///   gets nothing. `retryWithoutEnrichment` calls this to trade the labels
     ///   for a session that plays.
     private func loadAVPlayer(url: URL, headers: [String: String]?, allowEnrichment: Bool = true) throws {
+        let url = avPlayerURL(url)
         teardownAVPlayerObservers()
         player?.pause()
         hlsManifestEnricher = nil
@@ -2891,6 +2895,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         player = nil
         _playerForCleanup = nil
         hlsManifestEnricher = nil
+        hlsRelay = nil
     }
 
     /// Frees the server transcode this session was playing, if any.
@@ -3468,6 +3473,22 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - HLS Trust Relay
+
+    /// AVPlayer and the preflight use system trust, so an origin the Plex API
+    /// session accepts on its own rule is reached through a loopback relay (#337).
+    private func prepareHLSRelay(for url: URL) async {
+        if hlsRelay?.localURL(for: url) != nil { return }
+        hlsRelay = nil
+        guard await HLSTrustRelay.systemTrustRefuses(url) else { return }
+        hlsRelay = await HLSTrustRelay.start(for: url)
+        diagnostics.step("hls_trust_relay", detail: hlsRelay == nil ? "failed to start" : "started")
+    }
+
+    private func avPlayerURL(_ url: URL) -> URL {
+        hlsRelay?.localURL(for: url) ?? url
+    }
+
     // MARK: - HLS Transcode Preflight
 
     /// Wait for the HLS transcode session to be ready before loading playback.
@@ -3478,6 +3499,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     ///   - headers: HTTP headers including auth token
     /// - Returns: true if the transcode is ready, false if it failed to start
     private func waitForHLSTranscodeReady(url: URL, headers: [String: String]) async -> Bool {
+        await prepareHLSRelay(for: url)
+        let url = avPlayerURL(url)
         await PlexNetworkManager.shared.startTranscodeDecision(hlsURL: url, headers: headers)
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -3649,6 +3672,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         player = nil
         _playerForCleanup = nil
         hlsManifestEnricher = nil
+        hlsRelay = nil
 
         // Stop the Plex transcode session so the server frees resources immediately.
         // Without this, switching between DV files can timeout waiting for the init segment

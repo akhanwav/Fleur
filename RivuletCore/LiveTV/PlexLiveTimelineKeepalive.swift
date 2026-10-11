@@ -185,7 +185,7 @@ final class PlexLiveTimelineKeepalive {
     static func send(_ request: URLRequest) async {
         let path = request.url?.path ?? ""
         do {
-            let (_, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await PlexCertificateDelegate.session.data(for: request)
             guard let status = (response as? HTTPURLResponse)?.statusCode, status != 200 else { return }
             // A 404 on the stop means the job had already ended: done either way.
             if status == 404, path == transcodeStopPath { return }

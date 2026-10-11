@@ -149,6 +149,12 @@ struct WhatsNewView: View {
     // MARK: - Changelog Data
 
     static let changelogs: [(version: String, features: [String])] = [
+        ("1.0.7 (96)", [
+            "New Skip Back Length setting, separate from Skip Forward.",
+            "Fixed videos failing to play on some secure server connections.",
+            "Plex Live TV channel names no longer repeat the channel number.",
+            "Music Now Playing buttons stay visible when focused.",
+        ]),
         ("1.0.7 (95)", [
             "Cast page improvements.",
             "Subtitles turn on briefly when you skip back.",

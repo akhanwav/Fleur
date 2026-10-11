@@ -1003,6 +1003,10 @@ extension PlexAuthManager {
 
 /// URLSession delegate that trusts self-signed certificates for Plex servers
 nonisolated final class PlexCertificateDelegate: NSObject, URLSessionDelegate {
+    /// For Plex server requests made outside `PlexNetworkManager`.
+    static let session = URLSession(
+        configuration: .default, delegate: PlexCertificateDelegate(), delegateQueue: nil)
+
     /// Origins whose certificate is accepted without system trust: IPv4 literals,
     /// plex.direct names, and the default Plex port. Playback asks the same
     /// question, so a URL that browses also plays (#314, #337).
