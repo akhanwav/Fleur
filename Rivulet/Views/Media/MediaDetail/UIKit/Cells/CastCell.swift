@@ -126,9 +126,9 @@ final class CastCell: UIView {
 
         imageToken &+= 1
         let token = imageToken
-        imageView.image = nil
-        fallbackIcon.isHidden = false
-        guard let imageURL else { return }
+        imageView.image = imageURL.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
+        fallbackIcon.isHidden = imageView.image != nil
+        guard let imageURL, imageView.image == nil else { return }
         Task { [weak self] in
             let image = await ImageCacheManager.shared.image(for: imageURL)
             await MainActor.run {

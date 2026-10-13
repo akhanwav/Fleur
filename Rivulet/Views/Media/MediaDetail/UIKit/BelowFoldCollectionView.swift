@@ -117,6 +117,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// watch-state refresh can re-run the episode fetch without the host
     /// having to re-plumb the item (issue #228).
     private var configuredItem: MediaItem?
+    /// True while `configureEpisodesOnly` is fetching; `onEpisodesApplied`
+    /// fires once when its snapshot is in, so the host's fade waits for content.
+    private(set) var isLoadingEpisodes = false
+    var onEpisodesApplied: (() -> Void)?
 
     private var episodesByID: [String: MediaItem] = [:]
     private var trailersByID: [String: BelowFoldTrailer] = [:]
@@ -562,6 +566,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         loadToken &+= 1
         let token = loadToken
         configuredItem = item
+        isLoadingEpisodes = false
         Task { [weak self] in
             guard let self else { return }
             let content = await self.loader.load(for: item, detail: detail)
@@ -598,7 +603,11 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     func configureEpisodesOnly(item: MediaItem) {
         loadToken &+= 1
         let token = loadToken
+        // A different item: empty the rail now, so the previous show's
+        // episodes never sit under this card while the fetch runs.
+        let itemChanged = configuredItem?.ref != item.ref
         configuredItem = item
+        isLoadingEpisodes = false
         let showRef: MediaItemRef?
         switch item.kind {
         case .show: showRef = item.ref
@@ -608,6 +617,9 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
             ingestEpisodesOnly([]); applySnapshot(); return
         }
+        if itemChanged { ingestEpisodesOnly([]); applySnapshot() }
+        // A movie fetches nothing here, so its fade does not wait.
+        isLoadingEpisodes = showRef != nil || item.kind == .season
         Task { [weak self] in
             guard let self else { return }
             let eps: [MediaItem]
@@ -622,6 +634,12 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.ingestEpisodesOnly(eps)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
+            self.isLoadingEpisodes = false
+            // Realize the cells now, so the fade starts over a built rail.
+            self.collectionView.layoutIfNeeded()
+            let applied = self.onEpisodesApplied
+            self.onEpisodesApplied = nil
+            applied?()
         }
     }
 

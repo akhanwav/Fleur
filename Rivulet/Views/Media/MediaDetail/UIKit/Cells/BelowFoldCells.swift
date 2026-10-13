@@ -203,8 +203,8 @@ final class TrailerCollectionCell: UICollectionViewCell {
 
         imageToken &+= 1
         let token = imageToken
-        imageView.image = nil
-        guard let url = trailer.artworkURL else { return }
+        imageView.image = trailer.artworkURL.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
+        guard let url = trailer.artworkURL, imageView.image == nil else { return }
         Task { [weak self] in
             let image = await ImageCacheManager.shared.image(for: url)
             await MainActor.run {

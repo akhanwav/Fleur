@@ -504,6 +504,7 @@ final class ExpandedDetailContainerView: UIView {
     func revealBelowFoldCollection() {
         guard let item else { return }
         setBelowFoldScrollActive(false)
+        belowFoldCollection.onEpisodesApplied = nil
         belowFoldCollection.alpha = 1
         // Installed BEFORE configure, which is what fires it: the loader's own
         // season fetch now feeds the pills, where
@@ -617,6 +618,7 @@ final class ExpandedDetailContainerView: UIView {
         cascadeToken &+= 1
         let token = cascadeToken
         belowFoldCollection.layer.removeAllAnimations()
+        belowFoldCollection.onEpisodesApplied = nil
 
         if !current {
             belowFoldCollection.alpha = 0
@@ -627,9 +629,18 @@ final class ExpandedDetailContainerView: UIView {
             return
         }
         belowFoldCollection.alpha = 0
-        UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) { [weak self] in
+        let fadeIn = { [weak self] in
             guard let self, self.cascadeToken == token else { return }
-            self.belowFoldCollection.alpha = 1
+            UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+                self.belowFoldCollection.alpha = 1
+            }
+        }
+        // Episodes still loading: hold at 0 and fade once they are applied, so
+        // the rail arrives as one piece instead of fading in empty.
+        if belowFoldCollection.isLoadingEpisodes {
+            belowFoldCollection.onEpisodesApplied = fadeIn
+        } else {
+            fadeIn()
         }
     }
 

@@ -436,8 +436,10 @@ final class EpisodeCell: UIView {
         // Thumbnail (async)
         imageToken &+= 1
         let token = imageToken
-        thumbnailImageView.image = nil
-        if let url = episode.artwork.thumbnail ?? episode.artwork.poster {
+        // A memory hit paints in this pass (no pop after the rail's fade).
+        let url = episode.artwork.thumbnail ?? episode.artwork.poster
+        thumbnailImageView.image = url.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
+        if let url, thumbnailImageView.image == nil {
             Task { [weak self] in
                 let image = await ImageCacheManager.shared.image(for: url)
                 await MainActor.run {
@@ -480,8 +482,9 @@ final class EpisodeCell: UIView {
 
         imageToken &+= 1
         let token = imageToken
-        thumbnailImageView.image = nil
-        if let url = trailer.artworkURL {
+        let url = trailer.artworkURL
+        thumbnailImageView.image = url.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
+        if let url, thumbnailImageView.image == nil {
             Task { [weak self] in
                 let image = await ImageCacheManager.shared.image(for: url)
                 await MainActor.run {
