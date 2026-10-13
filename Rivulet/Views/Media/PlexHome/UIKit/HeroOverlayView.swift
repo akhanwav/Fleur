@@ -123,6 +123,14 @@ final class HeroOverlayView: UIView {
         ])
     }
 
+    /// The frame the logo, metadata row, tagline and buttons can fill in a
+    /// hero of `bounds`: the tallest stack, which the backdrop's scrim measures.
+    static func textRegion(in bounds: CGRect) -> CGRect {
+        let bottom = bounds.maxY - 94
+        let top = bottom - HeroPillButton.buttonHeight - 28 - HeroSlideView.maxHeight
+        return CGRect(x: bounds.minX + MediaRowMetrics.rowLeading, y: top, width: HeroSlideView.maxTaglineWidth, height: bottom - top)
+    }
+
     // MARK: - Configure
 
     func configure(items: [PlexMetadata],
@@ -767,12 +775,13 @@ private final class MediaItemSlideView: UIView {
         fallbackTitleLabel.shadowOffset = CGSize(width: 0, height: 3)
         fallbackTitleLabel.isHidden = true
 
-        metadataLabel.font = .systemFont(ofSize: 20, weight: .medium)
-        metadataLabel.textColor = UIColor.white.withAlphaComponent(0.9)
+        // Apple's genres row: Caption1 (25) medium at full white, 6 pt to the badge.
+        metadataLabel.font = .systemFont(ofSize: 25, weight: .medium)
+        metadataLabel.textColor = .white
         metadataLabel.numberOfLines = 1
 
         metadataRow.axis = .horizontal
-        metadataRow.spacing = 12
+        metadataRow.spacing = 6
         metadataRow.alignment = .center
         metadataRow.addArrangedSubview(sourceBadge)
         metadataRow.addArrangedSubview(metadataLabel)
@@ -785,13 +794,12 @@ private final class MediaItemSlideView: UIView {
 
         stack.axis = .vertical
         stack.alignment = .leading
-        stack.spacing = 14
+        stack.spacing = 18
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(logoImageView)
         stack.addArrangedSubview(fallbackTitleLabel)
         stack.addArrangedSubview(metadataRow)
         stack.addArrangedSubview(taglineLabel)
-        stack.setCustomSpacing(18, after: metadataRow)
 
         addSubview(stack)
         NSLayoutConstraint.activate([

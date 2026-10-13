@@ -29,6 +29,14 @@ final class HeroSlideView: UIView {
     private let taglineLabel = UILabel()
     private let stack = UIStackView()
 
+    static let maxLogoHeight: CGFloat = 180, maxTaglineWidth: CGFloat = 720, rowSpacing: CGFloat = 18
+    private static let metadataFont = UIFont.systemFont(ofSize: 25, weight: .medium)
+    private static let taglineFont = UIFont.systemFont(ofSize: 22, weight: .regular)
+    /// The stack at its tallest: a full-height logo, the metadata row, two tagline lines.
+    static var maxHeight: CGFloat {
+        maxLogoHeight + rowSpacing + ceil(metadataFont.lineHeight) + rowSpacing + 2 * ceil(taglineFont.lineHeight)
+    }
+
     // MARK: - Image loading state
 
     private var currentLogoURL: URL?
@@ -68,37 +76,34 @@ final class HeroSlideView: UIView {
         fallbackTitleLabel.isHidden = true
 
         // Metadata text (type · genre)
-        metadataLabel.font = .systemFont(ofSize: 20, weight: .medium)
-        metadataLabel.textColor = UIColor.white.withAlphaComponent(0.9)
+        // Apple's genres row: Caption1 (25) medium at full white, 6 pt to the badge.
+        metadataLabel.font = Self.metadataFont
+        metadataLabel.textColor = .white
         metadataLabel.numberOfLines = 1
 
         // Metadata row container (text + rating badge inline)
         metadataRow.axis = .horizontal
-        metadataRow.spacing = 12
+        metadataRow.spacing = 6
         metadataRow.alignment = .center
         metadataRow.addArrangedSubview(metadataLabel)
         metadataRow.addArrangedSubview(ratingBadge)
         ratingBadge.isHidden = true
 
         // Tagline
-        taglineLabel.font = .systemFont(ofSize: 22, weight: .regular)
+        taglineLabel.font = Self.taglineFont
         taglineLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         taglineLabel.numberOfLines = 2
 
-        // Stack the rows. SwiftUI HeroSlideContent uses VStack(spacing: 14)
-        // and only the tagline gets an extra `.padding(.top, 4)`. We
-        // replicate that by adding a 4pt custom spacing right above the
-        // tagline (so visual gap between metadata row and tagline = 14 + 4
-        // = 18pt). All other gaps stay at 14pt.
+        // 18 pt between rows, Apple's banner margin for the genres row and
+        // the description.
         stack.axis = .vertical
         stack.alignment = .leading
-        stack.spacing = 14
+        stack.spacing = Self.rowSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(logoImageView)
         stack.addArrangedSubview(fallbackTitleLabel)
         stack.addArrangedSubview(metadataRow)
         stack.addArrangedSubview(taglineLabel)
-        stack.setCustomSpacing(18, after: metadataRow)
 
         addSubview(stack)
         NSLayoutConstraint.activate([
@@ -107,10 +112,10 @@ final class HeroSlideView: UIView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            logoImageView.heightAnchor.constraint(lessThanOrEqualToConstant: 180),
+            logoImageView.heightAnchor.constraint(lessThanOrEqualToConstant: Self.maxLogoHeight),
             logoImageView.widthAnchor.constraint(lessThanOrEqualToConstant: 520),
 
-            taglineLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 720)
+            taglineLabel.widthAnchor.constraint(lessThanOrEqualToConstant: Self.maxTaglineWidth)
         ])
     }
 
@@ -277,7 +282,7 @@ final class HeroSlideView: UIView {
     }
 }
 
-/// Small content-rating badge: rounded outline, sized to its text.
+/// Content-rating badge: rounded outline, 22 pt tall in total (Apple's badge cap).
 @MainActor
 final class HeroRatingBadgeView: UIView {
     private let label = UILabel()
@@ -293,20 +298,20 @@ final class HeroRatingBadgeView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        layer.borderWidth = 1.5
-        layer.borderColor = UIColor.white.withAlphaComponent(0.5).cgColor
+        layer.borderWidth = 1
+        layer.borderColor = UIColor.white.withAlphaComponent(0.7).cgColor
         layer.cornerRadius = 4
         layer.cornerCurve = .continuous
 
-        label.font = .systemFont(ofSize: 16, weight: .semibold)
-        label.textColor = UIColor.white.withAlphaComponent(0.9)
+        label.font = .systemFont(ofSize: 15, weight: .bold)
+        label.textColor = .white
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 3),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -3)
+            heightAnchor.constraint(equalToConstant: 22),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
     }
 

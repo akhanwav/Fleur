@@ -27,6 +27,9 @@ final class HeroBackdropView: UIView {
     private let horizontalScrim = CAGradientLayer()
     private let verticalScrim = CAGradientLayer()
     private let placeholderLayer = CAGradientLayer()
+    /// Extra darkening behind the hero's text, shown only over artwork that
+    /// is bright or busy there. Alpha is `HeroScrim` strength minus one.
+    private let boostScrim = BoostScrimView()
 
     private var currentURL: URL?
     private var loadTask: Task<Void, Never>?
@@ -100,6 +103,15 @@ final class HeroBackdropView: UIView {
         verticalScrim.startPoint = CGPoint(x: 0.5, y: 0)
         verticalScrim.endPoint = CGPoint(x: 0.5, y: 1)
         layer.addSublayer(verticalScrim)
+
+        boostScrim.alpha = 0
+        addSubview(boostScrim)
+    }
+
+    /// Where the hero's text can sit, in this view. The hero section is the
+    /// screen less 200 pt (`PlexHomeViewController.makeHeroSectionLayout`).
+    private var textRegion: CGRect {
+        HeroOverlayView.textRegion(in: CGRect(x: 0, y: 0, width: bounds.width, height: max(400, bounds.height - 200)))
     }
 
     override func layoutSubviews() {
@@ -111,6 +123,9 @@ final class HeroBackdropView: UIView {
         horizontalScrim.frame = bounds
         verticalScrim.frame = bounds
         CATransaction.commit()
+        let region = textRegion, radii = HeroScrim.boostRadii(for: region.size)
+        boostScrim.frame = CGRect(x: region.midX - radii.width, y: region.midY - radii.height,
+                                  width: 2 * radii.width, height: 2 * radii.height)
     }
 
     // MARK: - API
@@ -129,24 +144,28 @@ final class HeroBackdropView: UIView {
             previousImageView.image = nil
             currentImageView.alpha = 0
             previousImageView.alpha = 0
+            boostScrim.alpha = 0
             return
         }
-
         let oldImage = currentImageView.image
         currentURL = url
 
         loadTask = Task { [weak self] in
             let image = await ImageCacheManager.shared.imageFullSize(for: url)
+            // The scrim is read off the same image, so both arrive together.
+            let luma = await Task.detached(priority: .userInitiated) { image?.cgImage.flatMap(HeroScrim.luma) }.value
             guard !Task.isCancelled, let self else { return }
             await MainActor.run {
                 guard self.currentURL == url else { return }
                 guard let image else { return }
-                self.applyImage(image, replacing: oldImage)
+                let strength = HeroScrim.strength(
+                    under: HeroScrim.unitRect(self.textRegion, in: self.bounds, imageSize: image.size), luma: luma)
+                self.applyImage(image, boost: CGFloat(strength - 1), replacing: oldImage)
             }
         }
     }
 
-    private func applyImage(_ image: UIImage, replacing oldImage: UIImage?) {
+    private func applyImage(_ image: UIImage, boost: CGFloat, replacing oldImage: UIImage?) {
         if let oldImage {
             previousImageView.image = oldImage
             previousImageView.alpha = 1
@@ -158,6 +177,7 @@ final class HeroBackdropView: UIView {
         currentImageView.alpha = oldImage == nil ? 1 : 0
 
         if oldImage == nil {
+            boostScrim.alpha = boost
             fireFirstImageLoadedIfNeeded()
             return  // No previous image — current is shown immediately.
         }
@@ -165,6 +185,7 @@ final class HeroBackdropView: UIView {
         UIView.animate(withDuration: crossfadeDuration, delay: 0, options: [.curveEaseInOut]) {
             self.currentImageView.alpha = 1
             self.previousImageView.alpha = 0
+            self.boostScrim.alpha = boost
         } completion: { _ in
             self.fireFirstImageLoadedIfNeeded()
             // Defer clearing the previous image slightly so the layer composition
@@ -194,5 +215,21 @@ final class HeroBackdropView: UIView {
         let clamped = max(0, offset)
         let translation = -clamped * 1.4
         transform = CGAffineTransform(translationX: 0, y: translation)
+    }
+
+    /// A radial black gradient filling its bounds (`HeroScrim`'s shape).
+    private final class BoostScrimView: UIView {
+        override class var layerClass: AnyClass { CAGradientLayer.self }
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            let gradient = layer as! CAGradientLayer
+            gradient.type = .radial
+            gradient.colors = HeroScrim.boostAlphas.map { UIColor.black.withAlphaComponent($0).cgColor }
+            gradient.locations = HeroScrim.boostLocations.map { NSNumber(value: $0) }
+            gradient.startPoint = CGPoint(x: 0.5, y: 0.5)
+            gradient.endPoint = CGPoint(x: 1, y: 1)
+        }
+        required init?(coder: NSCoder) { fatalError() }
     }
 }
