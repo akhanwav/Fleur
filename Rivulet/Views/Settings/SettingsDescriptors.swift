@@ -362,7 +362,7 @@ enum SettingsDescriptorStore {
         // MARK: Content Filtering
         "cat_contentFilter": SettingDescriptor(
             icon: "hand.raised.fill",
-            description: "Mute strong language and skip scenes during playback, without ever changing the file. Language is found in the title's subtitles, even with subtitles turned off; scene skips come from an imported filter list."
+            description: "Mute strong language and skip scenes during playback, without ever changing the file. Language is found in the title's English subtitles, even with subtitles turned off. Scene skips come from an imported filter list."
         ),
         "cf_master": SettingDescriptor(
             icon: "hand.raised.fill",

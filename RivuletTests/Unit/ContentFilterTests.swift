@@ -13,6 +13,7 @@
 //  are cleaned up in tearDown.
 //
 
+import os
 import XCTest
 @testable import Rivulet
 
@@ -446,7 +447,7 @@ final class ContentFilterTranscriptTests: XCTestCase {
         XCTAssertEqual(ContentFilterSources.transcriptStream(in: [list[0]])?.id, 1)
     }
 
-    func testLanguageWindowsFromSRT() {
+    func testLanguageWindowsFromSRT() throws {
         let srt = """
         1
         00:00:01,000 --> 00:00:03,000
@@ -460,20 +461,182 @@ final class ContentFilterTranscriptTests: XCTestCase {
         00:00:07,000 --> 00:00:08,000
         Oh my God.
         """
-        let windows = ContentFilterSources.languageWindows(content: srt, format: "srt")
+        let windows = try XCTUnwrap(ContentFilterSources.languageWindows(content: srt, format: "srt"))
+        // A body with no cues (an error page served with 200) is unreadable, not "no hits".
+        XCTAssertNil(ContentFilterSources.languageWindows(content: "<html>503</html>", format: "srt"))
         XCTAssertEqual(windows.map(\.start), [4, 7])
         XCTAssertEqual(windows[0].end, 6.5, accuracy: 0.001)
         XCTAssertTrue(windows[0].hits.categories.contains(.profanity))
         XCTAssertTrue(windows[1].hits.categories.contains(.blasphemy))
     }
 
-    func testLanguageWindowsSniffUnknownFormat() {
+    // The reported title's subtitle streams: two embedded bitmap tracks.
+    func testImageOnlyTitleHasNoSubtitleFile() throws {
+        let list = try streams("""
+        [{"id":1,"streamType":2,"codec":"aac","languageCode":"eng","selected":true},
+         {"id":2,"streamType":3,"codec":"pgs","languageCode":"eng","languageTag":"en","language":"English"},
+         {"id":3,"streamType":3,"codec":"pgs","languageCode":"eng","languageTag":"en","language":"English"}]
+        """)
+        XCTAssertNil(ContentFilterSources.transcriptStream(in: list))
+        let tracks = list.filter(\.isSubtitle).map { MediaTrack(from: $0) }
+        // No file to fetch, so the first image track is read on the device, unseen.
+        XCTAssertEqual(ContentFilterSources.silentTrack(in: tracks, shownTrackId: nil, hasLanguageSource: false)?.id, 2)
+        XCTAssertNil(ContentFilterSources.languageNotice(hasLanguageSource: false, shown: nil, tracks: tracks))
+    }
+
+    func testLanguageNotice() {
+        for codec in ["pgs", "hdmv_pgs_subtitle", "vobsub", "dvd_subtitle", "dvbsub"] {
+            XCTAssertFalse(ContentFilterSources.isTextSubtitle(codec: codec), codec)
+        }
+        for codec in ["srt", "subrip", "ass", "mov_text", "webvtt", nil] {
+            XCTAssertTrue(ContentFilterSources.isTextSubtitle(codec: codec), codec ?? "nil")
+        }
+        // Only a track in the dictionary's language (or unlabeled) can be matched, text or image.
+        XCTAssertTrue(ContentFilterSources.isReadable(MediaTrack(id: 1, name: "", languageCode: "eng", codec: "srt")))
+        XCTAssertTrue(ContentFilterSources.isReadable(MediaTrack(id: 1, name: "", codec: "srt")))
+        XCTAssertFalse(ContentFilterSources.isReadable(MediaTrack(id: 1, name: "", languageCode: "spa", codec: "srt")))
+        XCTAssertTrue(ContentFilterSources.isReadable(MediaTrack(id: 1, name: "", languageCode: "eng", codec: "pgs")))
+        XCTAssertFalse(ContentFilterSources.isReadable(MediaTrack(id: 1, name: "", languageCode: "fra", codec: "pgs")))
+    }
+
+    func testSilentTrackAndNotice() {
+        func track(_ id: Int, _ lang: String?, _ codec: String, forced: Bool = false, sdh: Bool = false) -> MediaTrack {
+            MediaTrack(id: id, name: "", languageCode: lang, codec: codec, isForced: forced, isHearingImpaired: sdh)
+        }
+        func silent(_ tracks: [MediaTrack], shown: Int? = nil, source: Bool = false) -> Int? {
+            ContentFilterSources.silentTrack(in: tracks, shownTrackId: shown, hasLanguageSource: source)?.id
+        }
+        func notice(_ tracks: [MediaTrack], shown: Int? = nil, source: Bool = false) -> String? {
+            ContentFilterSources.languageNotice(
+                hasLanguageSource: source, shown: tracks.first { $0.id == shown }, tracks: tracks)
+        }
+        let srt = [track(3, "eng", "srt")]
+        // Embedded English text, subtitles off: read unseen, nothing to say.
+        XCTAssertEqual(silent(srt), 3)
+        XCTAssertNil(notice(srt))
+        // A subtitle file or list already covers it.
+        XCTAssertNil(silent(srt, source: true))
+        XCTAssertNil(notice(srt, source: true))
+        // The user's own track holds the engine's selection.
+        XCTAssertNil(silent(srt, shown: 3))
+        XCTAssertNil(notice(srt, shown: 3))
+        let mixed = [track(1, "eng", "pgs"), track(2, "spa", "srt"), track(3, "eng", "srt")]
+        XCTAssertEqual(silent(mixed), 3)
+        XCTAssertNil(silent(mixed, shown: 2))
+        XCTAssertEqual(notice(mixed, shown: 2), "Use English Subtitles")
+        // An English image track on screen is read too.
+        XCTAssertNil(notice(mixed, shown: 1))
+        // Image-only English: read unseen, like text.
+        XCTAssertEqual(silent([track(1, "spa", "pgs"), track(2, "eng", "pgs")]), 2)
+        XCTAssertNil(notice([track(2, "eng", "pgs")]))
+        XCTAssertEqual(silent([track(1, nil, "dvd_subtitle"), track(2, "eng", "pgs", sdh: true)]), 2)
+        // Text before image, but a full image track before forced-only text.
+        XCTAssertEqual(silent([track(1, "eng", "pgs"), track(2, nil, "srt")]), 2)
+        XCTAssertEqual(silent([track(1, "eng", "srt", forced: true), track(2, "eng", "pgs")]), 2)
+        // Nothing readable: another language of either kind, or the hls route's empty list.
+        for tracks in [[track(1, "spa", "pgs")], [track(2, "spa", "srt")], []] {
+            XCTAssertNil(silent(tracks))
+            XCTAssertEqual(notice(tracks), "No Readable Subtitles")
+        }
+        // Full before forced, English before unlabeled, plain before SDH.
+        XCTAssertEqual(silent([track(1, "eng", "srt", forced: true), track(2, nil, "ass"), track(3, "eng", "srt", sdh: true), track(4, "eng", "srt")]), 4)
+        XCTAssertEqual(silent([track(1, "eng", "srt", forced: true), track(2, nil, "ass")]), 2)
+        XCTAssertEqual(silent([track(1, "eng", "srt", forced: true)]), 1)
+    }
+
+    // MARK: Image subtitles
+
+    /// White text with a dark outline on clear, like a PGS cue.
+    private func cueImage(_ text: String) -> CGImage {
+        let lines = NSAttributedString(string: text, attributes: [
+            .font: UIFont.systemFont(ofSize: 48), .foregroundColor: UIColor.white,
+            .strokeColor: UIColor.black, .strokeWidth: -4])
+        let size = lines.size()
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: size.width + 8, height: size.height + 8), format: format)
+            .image { _ in lines.draw(at: CGPoint(x: 4, y: 4)) }.cgImage!
+    }
+
+    func testRecognisesCueImages() throws {
+        let first = SubtitleImageReader.recognize(cueImage("What the fuck is that?"))
+        try XCTSkipIf(first.isEmpty, "Vision text recognition is unavailable in this test host")
+        XCTAssertEqual(first, "What the fuck is that?")
+        // Two rows come back top row first.
+        let rows = SubtitleImageReader.recognize(cueImage("- Sit the hell down.\n- What is this shit?"))
+            .components(separatedBy: "\n")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertTrue(rows.first?.contains("hell") ?? false, rows.first ?? "")
+        XCTAssertTrue(rows.last?.contains("shit") ?? false, rows.last ?? "")
+        // A blank cue reads as no text.
+        XCTAssertEqual(SubtitleImageReader.recognize(cueImage(" ")), "")
+    }
+
+    @MainActor
+    func testImageReaderKeepsOnlyWantedCues() async {
+        let (a, b, c) = (cueImage("a"), cueImage("b"), cueImage("c"))
+        let gate = DispatchSemaphore(value: 0)
+        let reader = SubtitleImageReader { image in
+            gate.wait()
+            return image === a ? "A" : image === b ? "B" : "C"
+        }
+        var reads = 0
+        reader.onRead = { reads += 1 }
+        func settle() async { try? await Task.sleep(for: .milliseconds(100)) }
+
+        reader.read([a, b])
+        XCTAssertNil(reader.text(for: a))
+        // The cue ends while it is being read: its late result is dropped.
+        reader.read([b, c])
+        gate.signal()
+        await settle()
+        XCTAssertNil(reader.text(for: a))
+        XCTAssertEqual(reads, 0)
+        gate.signal()
+        gate.signal()
+        await settle()
+        XCTAssertEqual(reader.text(for: b), "B")
+        XCTAssertEqual(reader.text(for: c), "C")
+        XCTAssertEqual(reads, 2)
+        // Asking again reads nothing twice; a cue no longer wanted is forgotten.
+        reader.read([c])
+        await settle()
+        XCTAssertEqual(reads, 2)
+        XCTAssertNil(reader.text(for: b))
+        XCTAssertEqual(reader.text(for: c), "C")
+    }
+
+    @MainActor
+    func testImageReaderStopsReadingWhenEmptied() async {
+        let (a, b) = (cueImage("a"), cueImage("b"))
+        let gate = DispatchSemaphore(value: 0)
+        let count = OSAllocatedUnfairLock(initialState: 0)
+        let reader = SubtitleImageReader { _ in
+            count.withLock { $0 += 1 }
+            gate.wait()
+            return "x"
+        }
+        var reads = 0
+        reader.onRead = { reads += 1 }
+
+        reader.read([a, b])
+        // Playback stops mid-read: the read in flight is dropped and the rest never start.
+        reader.read([])
+        gate.signal()
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(count.withLock { $0 }, 1)
+        XCTAssertEqual(reads, 0)
+        XCTAssertNil(reader.text(for: a))
+        gate.signal()
+    }
+
+    func testLanguageWindowsSniffUnknownFormat() throws {
         let ass = """
         [Events]
         Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\\i1}Shit{\\i0}, we're late
         """
-        let windows = ContentFilterSources.languageWindows(content: ass, format: "")
+        let windows = try XCTUnwrap(ContentFilterSources.languageWindows(content: ass, format: ""))
         XCTAssertEqual(windows.map(\.start), [2])
     }
 }
@@ -639,6 +802,16 @@ final class ContentFilterManagerTests: XCTestCase {
 
     private func window(_ start: Double, _ end: Double, _ text: String) -> LanguageWindow {
         LanguageWindow(start: start, end: end, hits: ProfanityDictionary.hits(in: text))
+    }
+
+    func testOnlyLanguageCategoriesReadSubtitleText() {
+        XCTAssertTrue(manager.readsSubtitleText)
+        // Scene categories alone (plus `.other`) have nothing to match in text.
+        FilterCategory.allCases.forEach {
+            UserDefaults.standard.set(!$0.isTextDetectable, forKey: $0.enabledDefaultsKey)
+        }
+        manager.refreshSettings()
+        XCTAssertFalse(manager.readsSubtitleText)
     }
 
     func testSkipTriggersOnceAndRearmsOnRewind() {
@@ -814,5 +987,52 @@ final class ContentFilterManagerTests: XCTestCase {
         manager.setPaused(true)
         manager.beginItem(ContentFilterItem(ratingKey: "1"))
         XCTAssertFalse(manager.isPaused)
+    }
+
+    func testLanguageSourceFollowsWhatLoaded() {
+        XCTAssertFalse(manager.hasLanguageSource)
+        // Scene skips alone give no language to mute.
+        manager.applyList(regions([(10, 20, .violence, .skip)]))
+        XCTAssertFalse(manager.hasLanguageSource)
+        XCTAssertTrue(manager.hasSceneSkips)
+        manager.applyList(regions([(10, 20, .profanity, .mute)]))
+        XCTAssertTrue(manager.hasLanguageSource)
+        manager.applyList(.empty)
+        XCTAssertFalse(manager.hasLanguageSource)
+        XCTAssertFalse(manager.hasSceneSkips)
+        // A subtitle file with no hits was still read.
+        manager.applyTranscript([])
+        XCTAssertTrue(manager.hasLanguageSource)
+        manager.reset()
+        XCTAssertFalse(manager.hasLanguageSource)
+    }
+
+    func testUnreadableSubtitleFileIsNotASource() async {
+        let missing = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).srt")
+        manager.beginItem(ContentFilterItem(
+            ratingKey: "1",
+            transcript: .init(url: missing, format: "srt", streamKey: "/library/streams/1")))
+        XCTAssertTrue(manager.hasLanguageSource)
+        await manager.transcriptTask?.value
+        XCTAssertFalse(manager.hasLanguageSource)
+        _ = manager.timeDidUpdate(5)
+        XCTAssertFalse(manager.isFilterMuting)
+    }
+
+    func testSubtitleFileLoadsThroughTheManager() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).srt")
+        try Data("1\n00:00:04,000 --> 00:00:06,000\nWhat the fuck?\n".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        manager.beginItem(ContentFilterItem(
+            ratingKey: "1",
+            transcript: .init(url: url, format: "srt", streamKey: "/library/streams/1")))
+        await manager.transcriptTask?.value
+        XCTAssertTrue(manager.hasLanguageSource)
+        _ = manager.timeDidUpdate(3.9)
+        XCTAssertFalse(manager.isFilterMuting)
+        _ = manager.timeDidUpdate(4)
+        XCTAssertTrue(manager.isFilterMuting)
+        _ = manager.timeDidUpdate(6)
+        XCTAssertFalse(manager.isFilterMuting)
     }
 }

@@ -198,7 +198,7 @@ final class PlayerRailView: UIView {
     }
 
     /// Reflect whether the content filter is acting in the toggle glyph
-    /// (filled = filtering, outline = paused for this title).
+    /// (filled = filtering, outline = paused or nothing to act on).
     func setFilterActive(_ active: Bool) {
         filterButton.setIcon(UIImage(systemName: active ? "hand.raised.fill" : "hand.raised"))
     }

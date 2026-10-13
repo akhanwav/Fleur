@@ -1277,6 +1277,12 @@ class PlayerContainerViewController: UIViewController {
             .sink { [weak self] track in self?.captionOverlay?.assTrack = track }
             .store(in: &cancellables)
 
+        // A track the content filter reads unseen draws nothing: subtitles are Off.
+        vm.$silentSubtitleTrackId
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] id in self?.captionOverlay?.isHidden = id != nil }
+            .store(in: &cancellables)
+
         NotificationCenter.default
             .publisher(for: CaptionAppearance.changedNotification)
             .receive(on: DispatchQueue.main)
@@ -1489,12 +1495,13 @@ class PlayerContainerViewController: UIViewController {
         // Content filter: present only while filtering is on in Settings, so
         // nobody who doesn't use it pays a rail slot for it. Its menu pauses it
         // for this title (the next one is filtered again); the glyph is filled
-        // while filtering and outlined while paused.
+        // while filtering and outlined while paused or with nothing to act on.
         rail.onFilter = { [weak self] in
-            guard let self, let filter = self.viewModel?.contentFilter else { return }
+            guard let self, let vm = self.viewModel else { return }
+            let filter = vm.contentFilter
             self.presentRailPanel(
                 content: CardTrackListView(header: "Content Filter", rows: [
-                    .init(title: "Filtering On", subtitle: nil, trackId: 0, isSelected: !filter.isPaused),
+                    .init(title: "Filtering On", subtitle: vm.contentFilterNotice, trackId: 0, isSelected: !filter.isPaused),
                     .init(title: "Pause for This Title", subtitle: nil, trackId: 1, isSelected: filter.isPaused),
                 ], onSelect: { [weak self, weak filter] choice in
                     filter?.setPaused(choice == 1)
@@ -1523,11 +1530,11 @@ class PlayerContainerViewController: UIViewController {
                 width: CardTrackListView.menuWidth, from: rail.qualityButton)
         }
         vm.contentFilter.$isEnabled
-            .combineLatest(vm.contentFilter.$isPaused)
+            .combineLatest(vm.contentFilter.$isPaused, vm.$contentFilterNotice, vm.contentFilter.$hasSceneSkips)
             .receive(on: DispatchQueue.main)
-            .sink { [weak rail] enabled, paused in
+            .sink { [weak rail] enabled, paused, notice, skips in
                 rail?.setFilterAvailable(enabled)
-                rail?.setFilterActive(!paused)
+                rail?.setFilterActive(!paused && (notice == nil || skips))
             }
             .store(in: &cancellables)
     }

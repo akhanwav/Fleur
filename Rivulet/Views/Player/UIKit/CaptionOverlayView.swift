@@ -318,7 +318,16 @@ final class CaptionOverlayView: UIView {
     }
 
     private func syncASS() {
-        assView.track = libassAllowed ? assTrack : nil
+        assView.track = libassAllowed && !isHidden ? assTrack : nil
+    }
+
+    /// Hidden, libass stops too (the content filter reading a track unseen).
+    override var isHidden: Bool {
+        didSet {
+            guard isHidden != oldValue else { return }
+            syncASS()
+            rebuildCueViews()
+        }
     }
 
     /// Whether libass is drawing the ASS track right now. Reads the renderer,
@@ -340,7 +349,7 @@ final class CaptionOverlayView: UIView {
         textCues.removeAll()
         bitmapCues.removeAll()
 
-        for cue in cues {
+        for cue in isHidden ? [] : cues {
             switch cue.body {
             case .image(let cgImage, let position):
                 let iv = UIImageView(image: UIImage(cgImage: cgImage))

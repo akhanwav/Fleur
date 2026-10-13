@@ -178,8 +178,8 @@ nonisolated enum ContentFilterSources {
     /// The external subtitle file to read for language muting: a text sidecar
     /// in English (the dictionary's language) that isn't forced-only,
     /// preferring the one Plex has selected, then plain over SDH. Embedded
-    /// tracks have no `key` and can't be fetched on their own; those titles
-    /// rely on the subtitles on screen.
+    /// tracks have no `key` and can't be fetched on their own; those are read
+    /// from the engine's cues, shown or not (`silentTrack`).
     static func transcriptStream(in streams: [PlexStream]) -> PlexStream? {
         streams
             .filter { stream in
@@ -200,12 +200,48 @@ nonisolated enum ContentFilterSources {
 
     /// 0 = English, 1 = unlabeled (worth reading), nil = another language.
     private static func languageRank(_ stream: PlexStream) -> Int? {
-        let labels = [stream.languageCode, stream.languageTag, stream.language]
+        languageRank(labels: [stream.languageCode, stream.languageTag, stream.language])
+    }
+
+    private static func languageRank(labels: [String?]) -> Int? {
+        let labels = labels
             .compactMap { $0?.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty && $0 != "unknown" && $0 != "und" }
         guard !labels.isEmpty else { return 1 }
         let isEnglish = labels.contains { $0 == "eng" || $0 == "en" || $0.hasPrefix("en-") || $0 == "english" }
         return isEnglish ? 0 : nil
+    }
+
+    /// Image subtitles (PGS, VobSub, DVB) are pictures of words: read by `SubtitleImageReader`.
+    static func isTextSubtitle(codec: String?) -> Bool {
+        !["pgs", "dvdsub", "dvbsub", "dvb_subtitle", "xsub"].contains(MediaTrack.normalizedSubtitleCodec(codec))
+    }
+
+    /// A track in the dictionary's language (or unlabeled): one whose cues can be matched.
+    static func isReadable(_ track: MediaTrack) -> Bool {
+        languageRank(labels: [track.languageCode, track.language]) != nil
+    }
+
+    /// The track to read without showing it: with subtitles off and no other
+    /// language source, the best readable track. Text ranks before image,
+    /// and forced-only last: it carries almost none of the dialogue.
+    static func silentTrack(in tracks: [MediaTrack], shownTrackId: Int?, hasLanguageSource: Bool) -> MediaTrack? {
+        guard shownTrackId == nil, !hasLanguageSource else { return nil }
+        func rank(_ track: MediaTrack) -> Int {
+            (track.isForced ? 16 : 0) + (isTextSubtitle(codec: track.codec) ? 0 : 8)
+                + (languageRank(labels: [track.languageCode, track.language]) ?? 2) * 2
+                + (track.isHearingImpaired ? 1 : 0)
+        }
+        return tracks.filter(isReadable).min { rank($0) < rank($1) }
+    }
+
+    /// What the rail says while filtering is on with no language to work
+    /// from; nil when it has some. `tracks` is empty on the hls route.
+    static func languageNotice(hasLanguageSource: Bool, shown: MediaTrack?, tracks: [MediaTrack]) -> String? {
+        if hasLanguageSource || shown.map(isReadable) ?? false { return nil }
+        guard tracks.contains(where: isReadable) else { return "No Readable Subtitles" }
+        // Off, a track is read unseen; only another track on screen blocks that.
+        return shown == nil ? nil : "Use English Subtitles"
     }
 
     /// Fetch and scan a title's subtitle file. nil when it can't be read.
@@ -219,9 +255,9 @@ nonisolated enum ContentFilterSources {
         }.value
     }
 
-    /// Every cue in a subtitle file that contains filterable language.
-    static func languageWindows(content: String, format: String) -> [LanguageWindow] {
-        guard let track = parseSubtitles(content, format: format) else { return [] }
+    /// Every cue in a subtitle file that contains filterable language; nil when no cue could be read.
+    static func languageWindows(content: String, format: String) -> [LanguageWindow]? {
+        guard let track = parseSubtitles(content, format: format), !track.cues.isEmpty else { return nil }
         return track.cues.compactMap { cue in
             guard cue.endTime > cue.startTime else { return nil }
             let hits = ProfanityDictionary.hits(in: cue.text)
@@ -257,7 +293,8 @@ nonisolated enum ContentFilterSources {
     static func fetchText(_ url: URL) async -> FetchResult {
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return .failed }
+        // The subtitle file is a Plex server request: same trust rule as the API (#314).
+        guard let (data, response) = try? await PlexCertificateDelegate.session.data(for: request) else { return .failed }
         if let http = response as? HTTPURLResponse {
             if [403, 404, 410].contains(http.statusCode) { return .missing }
             guard (200..<300).contains(http.statusCode) else { return .failed }

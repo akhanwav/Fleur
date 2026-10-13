@@ -24,6 +24,7 @@
 
 import Foundation
 import Combine
+import Sentry
 
 @MainActor
 final class ContentFilterManager: ObservableObject {
@@ -41,6 +42,13 @@ final class ContentFilterManager: ObservableObject {
     /// on the next item, so a pause never outlives the title it was made on.
     @Published private(set) var isPaused = false
 
+    /// Whether this title has language to mute from with subtitles off: its
+    /// subtitle file, or an imported list with mute windows.
+    @Published private(set) var hasLanguageSource = false
+
+    /// Whether the imported list has scene skips that apply under the current settings.
+    @Published private(set) var hasSceneSkips = false
+
     // MARK: - Settings snapshot
 
     private var enabledCategories: Set<FilterCategory> = []
@@ -56,18 +64,23 @@ final class ContentFilterManager: ObservableObject {
     /// Which Plex stream those windows came from, and the subtitle delay to
     /// apply to them (see `displayedSubtitleDidChange`).
     private var transcriptStreamKey: String?
+    /// The title has a subtitle file to read; cleared if it can't be read.
+    private var hasTranscript = false
     private var transcriptDelay: TimeInterval = 0
     private var skippedRegionIDs: Set<Int> = []
     private var currentTime: TimeInterval = 0
     private var subtitleMatched = false
     private var lastSubtitleTexts: [String] = []
     private var listTask: Task<Void, Never>?
-    private var transcriptTask: Task<Void, Never>?
+    private(set) var transcriptTask: Task<Void, Never>?
 
     /// Seek a hair past a skip window so the next tick doesn't re-enter it.
     private let skipEpsilon: TimeInterval = 0.25
 
     private var isActive: Bool { isEnabled && !isPaused }
+
+    /// Whether any enabled category can be matched from subtitle text.
+    var readsSubtitleText: Bool { enabledCategories.contains(where: \.isTextDetectable) }
 
     // MARK: - Lifecycle
 
@@ -110,6 +123,8 @@ final class ContentFilterManager: ObservableObject {
         refreshSettings()
         guard isEnabled else { return }
         transcriptStreamKey = item.transcript?.streamKey
+        hasTranscript = item.transcript != nil
+        refreshLanguageSource()
         loadList(for: item)
         loadTranscript(for: item)
     }
@@ -123,6 +138,9 @@ final class ContentFilterManager: ObservableObject {
         regions = []
         transcriptWindows = []
         transcriptStreamKey = nil
+        hasTranscript = false
+        if hasLanguageSource { hasLanguageSource = false }
+        if hasSceneSkips { hasSceneSkips = false }
         transcriptDelay = 0
         skippedRegionIDs = []
         subtitleMatched = false
@@ -240,13 +258,23 @@ final class ContentFilterManager: ObservableObject {
     func applyList(_ list: ContentFilterList) {
         regions = list.regions
         skippedRegionIDs = []
+        refreshLanguageSource()
         recomputeMute()
     }
 
     /// Install the language windows read from the title's subtitle file.
     func applyTranscript(_ windows: [LanguageWindow]) {
         transcriptWindows = windows
+        hasTranscript = true
+        refreshLanguageSource()
         recomputeMute()
+    }
+
+    private func refreshLanguageSource() {
+        let has = hasTranscript || regions.contains { $0.action == .mute }
+        if has != hasLanguageSource { hasLanguageSource = has }
+        let skips = regions.contains { $0.action == .skip && acts(on: $0) }
+        if skips != hasSceneSkips { hasSceneSkips = skips }
     }
 
     // MARK: - Decisions
@@ -311,9 +339,16 @@ final class ContentFilterManager: ObservableObject {
     private func loadTranscript(for item: ContentFilterItem) {
         guard let source = item.transcript else { return }
         transcriptTask = Task { [weak self] in
-            guard let windows = await ContentFilterSources.loadTranscript(source),
-                  !Task.isCancelled else { return }
-            self?.applyTranscript(windows)
+            let windows = await ContentFilterSources.loadTranscript(source)
+            guard !Task.isCancelled, let self else { return }
+            guard let windows else {
+                // The rail says so; the URL carries a token and is never logged.
+                self.hasTranscript = false
+                self.refreshLanguageSource()
+                SentryBridge.log(.warn, "Content filter: subtitle file unavailable")
+                return
+            }
+            self.applyTranscript(windows)
         }
     }
 }

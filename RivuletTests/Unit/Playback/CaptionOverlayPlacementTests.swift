@@ -102,6 +102,19 @@ final class CaptionOverlayPlacementTests: XCTestCase {
         XCTAssertEqual(frame.maxY, 940, accuracy: 0.5)
     }
 
+    // A track the content filter reads unseen: cues keep arriving, nothing is drawn.
+    func testHiddenOverlayDrawsNoCaptions() {
+        let model = SubtitleModel()
+        let overlay = CaptionOverlayView(model: model, controlsVisible: false, videoSize: canvas)
+        overlay.frame = CGRect(origin: .zero, size: canvas)
+        overlay.isHidden = true
+        model.update(cues: [AetherSubtitleCue(id: 1, startTime: 0, endTime: 10, body: .text("Caption"), placement: nil)])
+        XCTAssertEqual(model.activeCues.count, 1)
+        XCTAssertTrue(overlay.subviews.allSatisfy { $0 is ASSOverlayView })
+        overlay.isHidden = false
+        XCTAssertEqual(overlay.subviews.filter { !($0 is ASSOverlayView) }.count, 1)
+    }
+
     // MARK: Helper
 
     private func captionFrame(

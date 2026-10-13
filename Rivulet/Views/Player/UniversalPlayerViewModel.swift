@@ -339,6 +339,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// MCF/EDL lists. VOD only. Fed time + active cue text from the observers
     /// below; its `isFilterMuting` output is mirrored onto the active player.
     let contentFilter = ContentFilterManager()
+    /// Why the filter can't mute language on this title right now; nil when it can.
+    @Published private(set) var contentFilterNotice: String?
+    /// The subtitle track the filter is reading without showing it; the user's subtitles are off.
+    @Published private(set) var silentSubtitleTrackId: Int?
+    /// Reads image subtitle cues (PGS, VobSub) for the content filter.
+    private let subtitleImageReader = SubtitleImageReader()
+    /// False until the engine's load returns: its default-subtitle pick runs last and must not be pre-empted.
+    private var aetherLoadReturned = false
 
     // MARK: - Subtitle delay (OSD stepper, sticky per item)
 
@@ -753,6 +761,19 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // An image cue's words arrive after the tick that asked for them.
+        subtitleImageReader.onRead = { [weak self] in
+            guard let self else { return }
+            self.contentFilter.activeSubtitlesDidChange(texts: self.activeSubtitleTextForFilter())
+        }
+
+        // Pausing, Settings, or a list or file arriving all change whether a track is read unseen.
+        contentFilter.$isEnabled
+            .combineLatest(contentFilter.$isPaused, contentFilter.$hasLanguageSource)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.syncSilentSubtitleRead() }
+            .store(in: &cancellables)
+
         // A fresh player instance (e.g. the HLS fallback mid-item) starts
         // unmuted; re-assert the filter's current decision when either player
         // slot changes so a mute window survives the swap.
@@ -783,6 +804,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // HLS route has no app-side cue source, so it contributes nothing here;
         // there, language muting comes from the subtitle file the filter reads
         // itself (see `contentFilterItem()`).
+        readSubtitleImages(at: time)
         contentFilter.activeSubtitlesDidChange(texts: activeSubtitleTextForFilter())
         // The delay stepper only moves what's on screen on the aether route.
         contentFilter.displayedSubtitleDidChange(
@@ -790,6 +812,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 ? nil
                 : subtitleTracks.first(where: { $0.id == currentSubtitleTrackId })?.subtitleKey,
             delay: aetherSubtitleModel.delaySeconds)
+        syncSilentSubtitleRead()
+        // Only the aether route gives the filter cues to read.
+        let tracks = aetherPlayer == nil ? [] : subtitleTracks
+        let notice = !contentFilter.isEnabled ? nil : ContentFilterSources.languageNotice(
+            hasLanguageSource: contentFilter.hasLanguageSource,
+            shown: tracks.first(where: { $0.id == currentSubtitleTrackId }),
+            tracks: tracks)
+        if notice != contentFilterNotice { contentFilterNotice = notice }
 
         guard let skipTarget = contentFilter.timeDidUpdate(time, allowSkip: !isScrubbing) else { return }
         // A window that runs to (or past) the end of the item would otherwise
@@ -798,6 +828,37 @@ final class UniversalPlayerViewModel: ObservableObject {
         Task { [weak self] in
             await self?.seek(to: target, revealsControls: false)
         }
+    }
+
+    /// Start, move or end the filter's unseen read of an embedded subtitle track.
+    /// Never saves a preference: the user's subtitles stay Off.
+    private func syncSilentSubtitleRead() {
+        guard aetherLoadReturned || aetherPlayer == nil else { return }
+        let wanted = !contentFilter.isEnabled || contentFilter.isPaused || !contentFilter.readsSubtitleText
+            ? nil : ContentFilterSources.silentTrack(
+                in: aetherPlayer == nil ? [] : subtitleTracks,
+                shownTrackId: currentSubtitleTrackId,
+                hasLanguageSource: contentFilter.hasLanguageSource)?.id
+        guard wanted != silentSubtitleTrackId else { return }
+        silentSubtitleTrackId = wanted
+        // A track the user has on already holds the engine's one selection.
+        if currentSubtitleTrackId == nil { aetherPlayer?.selectSubtitleTrack(id: wanted) }
+    }
+
+    /// Have the image cues around the playhead read (PGS, VobSub), ahead of
+    /// time so a line's words are known before it is spoken.
+    private func readSubtitleImages(at time: TimeInterval) {
+        let trackId = currentSubtitleTrackId ?? silentSubtitleTrackId
+        guard contentFilter.isEnabled, !contentFilter.isPaused, !contentFilter.hasLanguageSource,
+              contentFilter.readsSubtitleText,
+              let track = subtitleTracks.first(where: { $0.id == trackId }),
+              ContentFilterSources.isReadable(track), !ContentFilterSources.isTextSubtitle(codec: track.codec)
+        else { return subtitleImageReader.read([]) }
+        let now = time - aetherSubtitleModel.delaySeconds
+        subtitleImageReader.read(aetherSubtitleModel.cues.compactMap { cue in
+            guard cue.endTime >= now, cue.startTime <= now + 30, case .image(let image, _) = cue.body else { return nil }
+            return image
+        })
     }
 
     /// What the content filter needs to know about the current item. The
@@ -853,7 +914,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             switch cue.body {
             case .text(let string): return string
             case .styledText(let runs): return runs.map(\.text).joined()
-            case .image: return nil
+            case .image(let image, _): return subtitleImageReader.text(for: image)
             case .assEvents(let lines):
                 // Words only: the Style, Name and Effect fields and the tag
                 // names would otherwise reach the profanity matcher as words.
@@ -1895,6 +1956,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             do {
                 let ap = aetherPlayer ?? AetherPlayer()
                 aetherPlayer = ap
+                // A load drops the engine's selection; the unseen read is chosen again from its tracks.
+                aetherSubtitleModel.update(cues: [])
+                silentSubtitleTrackId = nil
+                aetherLoadReturned = false
                 bindAetherPublishers(ap)
                 // Feed title/artwork/description to Aether's internal AVPlayerItem
                 // (it makes its own item, so our native-path externalMetadata never
@@ -1916,6 +1981,11 @@ final class UniversalPlayerViewModel: ObservableObject {
                     headers: aetherHeaders,
                     startTime: startTime
                 )
+                aetherLoadReturned = true
+                // An item with no subtitles publishes nothing to replace the last item's list.
+                if ap.subtitleTracks.isEmpty { subtitleTracks = [] }
+                // Adopts the engine's own selection, then starts the unseen read if there is none.
+                updateTrackLists()
             } catch {
                 // Ordinary cancellation (the user left the player or switched
                 // items while the load was in flight) is not a playback
@@ -2248,7 +2318,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // bitmap) and publishes them; the host renders via
         // CaptionOverlayView driven by this model. sourceTime shares
         // the engine clock tick so cue lookup can't drift from playback.
+        // A reused player replays the last item's cues on subscribe.
         player.$subtitleCues
+            .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] cues in
                 self?.aetherSubtitleModel.update(cues: cues)
@@ -2295,7 +2367,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         // merges them with Plex's streams into ONE list per type (engine index
         // as the id, Plex's forced/SDH/commentary labels folded on). Either
         // side can arrive first, so the merge re-runs on each.
+        // A reused player replays the outgoing item's value; the load publishes this item's.
         player.$audioTracks
+            .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tracks in
                 guard let self, !tracks.isEmpty else { return }
@@ -2304,6 +2378,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             .store(in: &aetherCancellables)
 
         player.$subtitleTracks
+            .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] tracks in
                 guard let self, !tracks.isEmpty else { return }
@@ -2320,6 +2395,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             .store(in: &aetherCancellables)
 
         player.$activeSubtitleTrackId
+            .dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] id in
                 // Ignore engine-originated nil, exactly as the audio sink above
@@ -2330,7 +2406,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // rendering. A genuine user turn-off sets currentSubtitleTrackId
                 // directly via selectSubtitleTrackWithoutSaving, not through this
                 // mirror sink, so dropping nil here doesn't miss real off events.
-                guard let self, let id else { return }
+                // A track read unseen for the content filter is not the user's pick.
+                guard let self, let id, self.silentSubtitleTrackId == nil else { return }
                 // Track ids ARE engine indices on this route (see TrackMerge) —
                 // the engine's active index needs no translation.
                 self.currentSubtitleTrackId = id
@@ -3650,6 +3727,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         titleLogoResolveTask = nil
         clearReplayWindow()
         contentFilter.reset()
+        subtitleImageReader.read([])
         releaseThumbnailCache()
         cancelEngineThumbnail()
 
@@ -4362,7 +4440,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // picker's checkmark and the rail's label would point at the wrong
             // row. The engine's active index is authoritative and always in the
             // current numbering.
-            if let active = ap.activeSubtitleTrackId {
+            if silentSubtitleTrackId == nil, let active = ap.activeSubtitleTrackId {
                 currentSubtitleTrackId = active
             }
             if let active = ap.activeAudioTrackId {
@@ -4400,6 +4478,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             hasAppliedSubtitlePreference = true
             applySubtitlePreference()
         }
+        syncSilentSubtitleRead()
     }
 
     /// Apply saved audio preference. Selection priority is:
@@ -4537,6 +4616,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         aetherPlayer?.selectSubtitleTrack(id: id)
         let changed = id != currentSubtitleTrackId
         currentSubtitleTrackId = id
+        syncSilentSubtitleRead()
         if changed, reloadsTranscode, aetherPlayer == nil { reloadTranscodeForTrackChange() }
     }
 
