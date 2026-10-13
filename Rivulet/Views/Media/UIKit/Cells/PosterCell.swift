@@ -250,6 +250,7 @@ final class PosterCell: UICollectionViewCell {
         let longSide = max(artSize.width, artSize.height)
         let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1
         coordinator.addCoordinatedAnimations({
+            self.progressInfoBar.setFocused(nowFocused)
             self.overlayContainer.transform = nowFocused
                 ? CGAffineTransform(scaleX: scale, y: scale)
                 : .identity

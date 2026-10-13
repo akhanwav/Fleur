@@ -5,20 +5,14 @@
 //  ContinueWatchingCell.swift
 //  Rivulet
 //
-//  Landscape Continue Watching tile (360x280, ~1.29:1). Began as a 1:1 clone of
-//  SwiftUI `ContinueWatchingCard` (392x280, 1.4:1); per design direction the
-//  aspect was tightened to ~1.28:1 landscape. Composition is otherwise the same:
+//  Continue Watching tile, a clone of the Apple TV app's Up Next card
+//  (Docs/atv_ref/rea_findings/tv-continue-watching.md), sized by MediaRowMetrics:
 //
-//    ZStack {
-//      artwork (scaleAspectFill, .clipped())
-//      (no bottom gradient — removed 2026-06-10, the darkness read badly)
-//      centered title logo (Plex clearLogo, falls back to centered title)
-//      bottom info bar (play icon + capsule progress + "S1, E2 • 35m")
-//    }
-//    .frame(360, 280)
-//    .clipShape(RoundedRectangle(cornerRadius: 16, .continuous))
-//    .hoverEffect(.highlight)
-//    (no resting drop shadow — ATV+ ref: cards float clean over the background)
+//    one bitmap from `ContinueWatchingCardCompositor`: the 16:9 still, then
+//      its mirrored, blurred continuation in the bottom 48pt
+//    title logo on the edge and at the height the still's analysis picks
+//      (`ContinueWatchingCardPlacement`; text fallback)
+//    status row 14pt from the bottom-left (play glyph + progress + "S1, E2 · 35m")
 //
 //  Wrapped in `TVCardView` for native tvOS focus motion (parallax, glow).
 //
@@ -36,14 +30,14 @@ final class ContinueWatchingCell: UICollectionViewCell {
     private let placeholderIcon = UIImageView()
     private let titleLogoView = ContinueWatchingTitleLogoView()
     private let infoBar = MediaProgressInfoBar()
-    /// ATV+ legibility band: bottom-quarter blur so the logo/info read over
-    /// any artwork. Always visible (the CW card always shows its info bar).
-    private let bottomInfoBlur = BottomInfoBlurView()
 
     private var artworkLoadTask: Task<Void, Never>?
     private var currentArtworkURL: URL?
 
-    private let cornerRadius: CGFloat = 16
+    private let cornerRadius: CGFloat = 24
+
+    fileprivate static let geometry = ContinueWatchingCardCompositor.Geometry(
+        cardWidth: MediaRowMetrics.continueWatching.art.width)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -70,10 +64,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
         // No resting drop shadow (ATV+ reference: cards float clean over the
         // page background; see Docs/atv_ref/below_home_hero_ref.md).
 
-        // Placeholder underlay (dark grey) — visible until the artwork
-        // resolves. SwiftUI .empty branch uses `Color(white: 0.15)`.
+        // Placeholder underlay, visible until the artwork resolves.
         placeholderView.translatesAutoresizingMaskIntoConstraints = false
-        placeholderView.backgroundColor = UIColor(white: 0.15, alpha: 1.0)
+        placeholderView.backgroundColor = UIColor(white: 1, alpha: 0.1)
         card.contentView.addSubview(placeholderView)
 
         // SwiftUI failure branch: dark gradient + film/play.rectangle icon.
@@ -85,18 +78,13 @@ final class ContinueWatchingCell: UICollectionViewCell {
         placeholderIcon.isHidden = true
         placeholderView.addSubview(placeholderIcon)
 
-        // Artwork. scaleAspectFill + clipsToBounds matches SwiftUI's
-        // `.aspectRatio(contentMode: .fill)` + `.clipped()`.
+        // Artwork: the compositor's bitmap, already the card's size.
         artworkImageView.translatesAutoresizingMaskIntoConstraints = false
         artworkImageView.contentMode = .scaleAspectFill
         artworkImageView.clipsToBounds = true
         card.contentView.addSubview(artworkImageView)
 
-        // ATV+ legibility band over the artwork, under the logo/info bar.
-        bottomInfoBlur.translatesAutoresizingMaskIntoConstraints = false
-        card.contentView.addSubview(bottomInfoBlur)
-
-        // Centered title logo (Plex clearLogo fallback to centered title).
+        // Title logo (Plex clearLogo, falling back to the title).
         titleLogoView.translatesAutoresizingMaskIntoConstraints = false
         card.contentView.addSubview(titleLogoView)
 
@@ -104,6 +92,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         infoBar.translatesAutoresizingMaskIntoConstraints = false
         card.contentView.addSubview(infoBar)
 
+        let pad = ContinueWatchingCardCompositor.padding
         NSLayoutConstraint.activate([
             placeholderView.topAnchor.constraint(equalTo: card.contentView.topAnchor),
             placeholderView.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor),
@@ -126,19 +115,20 @@ final class ContinueWatchingCell: UICollectionViewCell {
             titleLogoView.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
             titleLogoView.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
 
-            // Bottom-quarter blur band (ATV+ ref) under the logo/info bar.
-            bottomInfoBlur.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
-            bottomInfoBlur.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
-            bottomInfoBlur.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor),
-            bottomInfoBlur.heightAnchor.constraint(equalTo: card.contentView.heightAnchor, multiplier: 0.25),
-
-            // Info bar insets: 16 leading / 15 bottom — slightly lower than
-            // the old 20pt (ATV+ sits closer to the corner) and IDENTICAL to
-            // PosterCell's in-progress bar so the two surfaces read the same.
-            infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: 16).withPriority(999),
-            infoBar.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -16).withPriority(999),
-            infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -15)
+            // Apple's status row: 14pt from the card's edges.
+            infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad).withPriority(999),
+            infoBar.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad).withPriority(999),
+            infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad)
         ])
+    }
+
+    /// The status row's glyph, label and bar fill follow focus, on the focus clock.
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let nowFocused = context.nextFocusedView === self
+                      || context.nextFocusedView?.isDescendant(of: self) == true
+        coordinator.addCoordinatedAnimations({ self.infoBar.setFocused(nowFocused) }, completion: nil)
     }
 
     override func layoutSubviews() {
@@ -148,21 +138,24 @@ final class ContinueWatchingCell: UICollectionViewCell {
         card.contentView.layer.cornerRadius = cornerRadius
         card.contentView.layer.cornerCurve = .continuous
         card.contentView.clipsToBounds = true
+        // The rim Apple's floating view draws at rest (its highlightStyle is private).
+        card.contentView.layer.borderWidth = 1
+        card.contentView.layer.borderColor = UIColor(white: 1, alpha: 0.05).cgColor
         CATransaction.commit()
-
     }
 
     // MARK: - Configure
 
     func configure(item: PlexMetadata) {
         // Title-logo view fetches the clearLogo asynchronously (with a
-        // text fallback while the fetch is in flight or if it fails).
-        titleLogoView.configure(item: item)
+        // text fallback if there is none).
+        let url = artworkURL(for: item)
+        titleLogoView.configure(item: item, artworkURL: url)
 
         // Info bar: play icon + (optional) progress capsule + info text.
         infoBar.configure(item: item)
 
-        loadArtwork(for: item)
+        loadArtwork(from: url, failureIcon: failurePlaceholderImage(for: item))
     }
 
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
@@ -170,14 +163,14 @@ final class ContinueWatchingCell: UICollectionViewCell {
         // Episodes/shows: prefer the grandparent (show) logo; fall back to
         // the item's own logo. The URL is already resolved — no async fetch.
         let logoURL = item.grandparentArtwork?.logo ?? item.artwork.logo
-        titleLogoView.configure(logoURL: logoURL, fallbackTitle: item.title)
-
-        infoBar.configure(item: item)
-
         // Backdrop > thumbnail in landscape orientation.
         let url = item.grandparentArtwork?.backdrop
             ?? item.artwork.backdrop
             ?? item.artwork.thumbnail
+        titleLogoView.configure(logoURL: logoURL, fallbackTitle: item.title, artworkURL: url)
+
+        infoBar.configure(item: item)
+
         loadArtwork(from: url, failureKind: item.kind)
     }
 
@@ -194,12 +187,6 @@ final class ContinueWatchingCell: UICollectionViewCell {
     }
 
     // MARK: - Artwork
-
-    /// PlexMetadata path: resolves failure icon then delegates to the shared loader.
-    private func loadArtwork(for item: PlexMetadata) {
-        loadArtwork(from: artworkURL(for: item),
-                    failureIcon: failurePlaceholderImage(for: item))
-    }
 
     /// MediaItem path: resolves failure icon via MediaKind then delegates.
     private func loadArtwork(from url: URL?, failureKind: MediaKind) {
@@ -221,12 +208,19 @@ final class ContinueWatchingCell: UICollectionViewCell {
             return
         }
         currentArtworkURL = url
+        let geometry = Self.geometry, scale = traitCollection.displayScale
+        if let built = ContinueWatchingCardCompositor.cached(.card, for: url, geometry: geometry, scale: scale) {
+            artworkImageView.image = built
+            placeholderView.isHidden = true
+            return
+        }
+        artworkImageView.image = nil
         placeholderView.isHidden = false
         placeholderIcon.isHidden = true  // hidden during loading
         let key = url.absoluteString as AnyHashable
         artworkLoadTask = Task { [weak self] in
             let image: UIImage? = await Perf.interval(.imageDecode, key: key) {
-                await ImageCacheManager.shared.image(for: url)
+                await ContinueWatchingCardCompositor.image(.card, for: url, geometry: geometry, scale: scale)
             }
             await MainActor.run {
                 guard let self, self.currentArtworkURL == url else { return }
@@ -281,138 +275,108 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
 // MARK: - Title Logo (Plex clearLogo fetch)
 
-/// One-for-one port of SwiftUI `ContinueWatchingTitleLogo`. Fetches the
-/// item's clearLogo (or the grandparent show's, for episodes) and renders
-/// it centered. Falls back to a styled centered title label while loading
-/// or on failure.
+/// The item's clearLogo (the show's, for episodes) in the slot the still's
+/// analysis picks: either edge, any height. Falls back to the title as text.
+/// Nothing shows until the slot is known, so the title never moves.
 @MainActor
 private final class ContinueWatchingTitleLogoView: UIView {
+    private typealias Compositor = ContinueWatchingCardCompositor
+
     private let imageView = UIImageView()
     private let titleLabel = UILabel()
-    private var widthConstraint: NSLayoutConstraint!
-    private var heightConstraint: NSLayoutConstraint!
+    private var imageTop: NSLayoutConstraint!
+    private var labelCenterY: NSLayoutConstraint!
 
     private var fetchTask: Task<Void, Never>?
     private var currentItemKey: String?
-
-    /// Logo target area = 18000 pt² (matches SwiftUI `targetArea`).
-    private let targetArea: CGFloat = 18000
-    /// Max bounds clamp — 75% card width / 45% card height.
-    private let cardWidth: CGFloat = MediaRowMetrics.cwWidth
-    private let cardHeight: CGFloat = MediaRowMetrics.cwHeight
-    private var maxLogoWidth: CGFloat { cardWidth * 0.75 }
-    private var maxLogoHeight: CGFloat { cardHeight * 0.45 }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = .clear
 
-        // Fallback title — centered, 30pt bold, white, soft drop shadow.
-        // Matches SwiftUI `textFallback`.
+        // Fallback title: 30pt bold, white, soft drop shadow.
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = .systemFont(ofSize: 30, weight: .bold)
         titleLabel.textColor = .white
-        titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 1
-        titleLabel.shadowColor = UIColor.black.withAlphaComponent(0.5)
         titleLabel.shadowOffset = CGSize(width: 0, height: 2)
+        titleLabel.alpha = 0
         addSubview(titleLabel)
 
         imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.contentMode = .scaleAspectFit
         imageView.alpha = 0
-        imageView.layer.shadowColor = UIColor.black.withAlphaComponent(0.6).cgColor
-        imageView.layer.shadowOpacity = 1
-        imageView.layer.shadowRadius = 4
-        imageView.layer.shadowOffset = CGSize(width: 0, height: 2)
         addSubview(imageView)
 
-        widthConstraint = imageView.widthAnchor.constraint(equalToConstant: 0)
-        heightConstraint = imageView.heightAnchor.constraint(equalToConstant: 0)
-        widthConstraint.priority = .defaultHigh
-        heightConstraint.priority = .defaultHigh
-
+        // The compositor's title bitmap: the title box plus room for its shadow.
+        let geometry = ContinueWatchingCell.geometry
+        let box = geometry.titleBox.insetBy(dx: -Compositor.titleShadowPad, dy: -Compositor.titleShadowPad)
+        imageTop = imageView.topAnchor.constraint(equalTo: topAnchor, constant: box.minY)
+        labelCenterY = titleLabel.centerYAnchor.constraint(equalTo: topAnchor, constant: geometry.titleBox.midY)
         NSLayoutConstraint.activate([
             // 999s: tolerate TVCardView's transient zero-width layout pass.
-            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor).withPriority(999),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 20).withPriority(999),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20).withPriority(999),
+            // Left and right, not leading and trailing: the slot is scored on the artwork's pixels.
+            titleLabel.leftAnchor.constraint(equalTo: leftAnchor, constant: geometry.titleBox.minX),
+            labelCenterY,
+            titleLabel.rightAnchor.constraint(equalTo: rightAnchor, constant: -geometry.titleBox.minX).withPriority(999),
 
-            imageView.centerXAnchor.constraint(equalTo: centerXAnchor),
-            imageView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            widthConstraint,
-            heightConstraint
+            imageView.leftAnchor.constraint(equalTo: leftAnchor, constant: box.minX),
+            imageTop,
+            imageView.widthAnchor.constraint(equalToConstant: box.width).withPriority(999),
+            imageView.heightAnchor.constraint(equalToConstant: box.height)
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(item: PlexMetadata) {
-        let key = item.ratingKey ?? ""
-        // Reset state when the item changes (covers cell reuse).
-        if key != currentItemKey {
-            fetchTask?.cancel()
-            imageView.image = nil
-            imageView.alpha = 0
-            currentItemKey = key
-        }
-        titleLabel.text = displayTitle(for: item)
-        // Make text visible until the logo loads (matches SwiftUI's
-        // `opacity(loadedLogo == nil ? 1 : 0)`).
-        titleLabel.alpha = imageView.image == nil ? 1 : 0
-
-        if imageView.image == nil {
-            fetchTask?.cancel()
-            fetchTask = Task { [weak self] in
-                await self?.fetchLogo(for: item, key: key)
-            }
+    func configure(item: PlexMetadata, artworkURL: URL?) {
+        configure(key: "\(item.ratingKey ?? "")|\(artworkURL?.absoluteString ?? "")",
+                  title: displayTitle(for: item), artworkURL: artworkURL) {
+            await Self.resolveLogoURL(for: item)
         }
     }
 
-    /// MediaItem path. The logo URL is already resolved — no async fetch
-    /// needed. Loads the image via the cache and renders it with the same
-    /// size / fade logic as the Plex async path.
-    func configure(logoURL: URL?, fallbackTitle: String) {
-        // Always update the title text. Setting .text is cheap and does not
-        // animate, so a recycled cell shows the correct title for every item
-        // regardless of whether a logo fetch is in flight.
-        titleLabel.text = fallbackTitle
+    /// MediaItem path. The logo URL is already resolved.
+    func configure(logoURL: URL?, fallbackTitle: String, artworkURL: URL?) {
+        configure(key: "\(logoURL?.absoluteString ?? fallbackTitle)|\(artworkURL?.absoluteString ?? "")",
+                  title: fallbackTitle, artworkURL: artworkURL) { logoURL }
+    }
 
-        guard let url = logoURL else {
-            // No logo: cancel any in-flight fetch, clear the image state, and
-            // show the title at full opacity. Do NOT update currentItemKey —
-            // it is keyed to logo URLs only, and nil is not a distinct key
-            // (two different logo-less items would alias to the same key and
-            // suppress each other's title updates).
-            fetchTask?.cancel()
-            fetchTask = nil
-            imageView.image = nil
-            imageView.alpha = 0
-            titleLabel.alpha = 1
-            return
-        }
+    /// Loads the logo and the still's analysis side by side, then shows the
+    /// logo (or the title) once, in the slot they pick.
+    private func configure(key: String, title: String, artworkURL: URL?, logoURL: @escaping () async -> URL?) {
+        titleLabel.text = title
+        // Same item: shown already, or on its way.
+        guard key != currentItemKey else { return }
+        fetchTask?.cancel()
+        imageView.image = nil
+        imageView.alpha = 0
+        titleLabel.alpha = 0
+        currentItemKey = key
 
-        // For a non-nil URL, dedup only around the image fetch and fade-in.
-        let key = url.absoluteString
-        if key != currentItemKey {
-            fetchTask?.cancel()
-            imageView.image = nil
-            imageView.alpha = 0
-            currentItemKey = key
-        }
-        // Show title while the logo is absent; hide once it is loaded.
-        titleLabel.alpha = imageView.image == nil ? 1 : 0
-
-        guard imageView.image == nil else { return }
+        let geometry = ContinueWatchingCell.geometry, scale = traitCollection.displayScale
+        let textSize = titleLabel.intrinsicContentSize
         fetchTask = Task { [weak self] in
-            guard let self else { return }
-            let image = await ImageCacheManager.shared.image(for: url)
-            guard !Task.isCancelled, let image else { return }
-            guard self.currentItemKey == key else { return }
-            self.renderLogo(image)
+            async let analysed = Self.signals(for: artworkURL)
+            var logo: (url: URL, size: CGSize)?
+            if let url = await logoURL(), let size = await ImageCacheManager.shared.image(for: url)?.size {
+                logo = (url, size)
+            }
+            let placement = Compositor.placement(signals: await analysed, logoSize: logo?.size,
+                                                 textSize: textSize, geometry: geometry)
+            var image: UIImage?
+            if let logo {
+                image = await Compositor.image(placement.strongShadow ? .titleStrong : .title, for: logo.url,
+                                               geometry: geometry, scale: scale)
+            }
+            guard !Task.isCancelled, let self, self.currentItemKey == key else { return }
+            self.show(image, logoSize: logo?.size, placement: placement)
         }
+    }
+
+    private static func signals(for artworkURL: URL?) async -> Compositor.Signals {
+        guard let artworkURL else { return .none }
+        return await Compositor.signals(for: artworkURL)
     }
 
     func prepareForReuse() {
@@ -421,6 +385,7 @@ private final class ContinueWatchingTitleLogoView: UIView {
         currentItemKey = nil
         imageView.image = nil
         imageView.alpha = 0
+        titleLabel.alpha = 0
         titleLabel.text = nil
     }
 
@@ -431,39 +396,32 @@ private final class ContinueWatchingTitleLogoView: UIView {
         return item.title ?? "Unknown"
     }
 
-    @MainActor
-    private func fetchLogo(for item: PlexMetadata, key: String) async {
-        guard let url = await resolveLogoURL(for: item) else { return }
-        let image = await ImageCacheManager.shared.image(for: url)
-        guard !Task.isCancelled, let image else { return }
-        guard self.currentItemKey == key else { return }
-        renderLogo(image)
-    }
-
-    /// Shared renderer used by both the Plex async-fetch path and the
-    /// MediaItem already-resolved-URL path. Sizes the image to the
-    /// target-area budget and fades it in, fading the title label out.
-    private func renderLogo(_ image: UIImage) {
-        // Compute logo size from target-area + aspect ratio.
-        let ratio = image.size.height > 0 ? image.size.width / image.size.height : 2.0
-        let rawW = sqrt(targetArea * ratio)
-        let rawH = sqrt(targetArea / ratio)
-        let w = min(rawW, maxLogoWidth)
-        let h = min(rawH, maxLogoHeight)
-        widthConstraint.constant = w
-        heightConstraint.constant = h
-
+    /// Both configure paths end here: move to the slot, then fade in.
+    private func show(_ image: UIImage?, logoSize: CGSize?, placement: Compositor.Placement) {
+        let geometry = ContinueWatchingCell.geometry
+        let box = geometry.titleBox.offsetBy(dx: 0, dy: placement.offset)
+        imageTop.constant = box.minY - Compositor.titleShadowPad
+        labelCenterY.constant = box.midY
+        titleLabel.textAlignment = placement.side == .leading ? .left : .right
+        titleLabel.shadowColor = UIColor.black.withAlphaComponent(placement.strongShadow ? 0.8 : 0.5)
         imageView.image = image
+        // The bitmap holds the logo on the box's leading edge: carry it to its
+        // slot, so a smaller or trailing logo keeps the edge it sits on.
+        let resting = geometry.titleFootprint(logoSize: logoSize)
+        let slot = geometry.titleRect(resting, side: placement.side, scale: placement.scale)
+        imageView.transform = CGAffineTransform(
+            translationX: slot.midX - box.midX - (resting.midX - box.midX) * placement.scale, y: 0)
+            .scaledBy(x: placement.scale, y: placement.scale)
+        layoutIfNeeded()
         UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut]) {
-            self.imageView.alpha = 1
-            self.titleLabel.alpha = 0
+            (image == nil ? self.titleLabel : self.imageView).alpha = 1
         }
     }
 
     /// Resolve the clearLogo URL — for episodes/shows, fetch the
     /// grandparent metadata (hub items don't carry the Image array).
     /// Caches the full-metadata response via PlexDataStore for reuse.
-    private func resolveLogoURL(for item: PlexMetadata) async -> URL? {
+    private static func resolveLogoURL(for item: PlexMetadata) async -> URL? {
         guard let serverURL = PlexAuthManager.shared.selectedServerURL,
               let token = PlexAuthManager.shared.selectedServerToken else {
             return nil

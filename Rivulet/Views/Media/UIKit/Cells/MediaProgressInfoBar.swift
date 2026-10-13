@@ -9,14 +9,15 @@
 //  in-progress tiles in `PosterCell`. Mirrors SwiftUI
 //  `ContinueWatchingCard.bottomInfoBar` (`ContinueWatchingCard.swift:105`):
 //
-//    [▶︎]  [▓▓▓░░ progress 44pt]  S1, E2 • 35m
+//    [▶︎]  [▓▓▓░░ progress 34pt]  S1, E2 · 35m
 //
-//  Components:
-//   - play.fill icon (18pt semibold)
-//   - 44pt-wide capsule progress (white core on white-0.3 backing),
-//     hidden when not in progress
-//   - info text (20pt medium, white-0.6): "S{n}, E{n}" for episodes
-//     plus remaining-or-duration ("1h 7m" / "35m left")
+//  Sizes, gaps and colours are the Apple TV app's Up Next status row
+//  (Docs/atv_ref/rea_findings/tv-continue-watching.md):
+//   - play.fill glyph (20pt regular, small scale)
+//   - 34 x 6 progress pill, hidden when not in progress
+//   - info text (20pt medium): "S{n}, E{n}" for episodes plus
+//     remaining-or-duration ("1h 7m" / "35m")
+//  All three are white at half alpha, and full white on the focused card.
 //
 //  The play icon and the progress capsule both render ONLY when the item
 //  has real play progress (0 < fraction < 1); an "up next" episode with no
@@ -44,32 +45,32 @@ final class MediaProgressInfoBar: UIView {
         backgroundColor = .clear
 
         playIcon.translatesAutoresizingMaskIntoConstraints = false
+        // Apple's Up Next row: label colours resolved dark, whatever the app's style.
+        overrideUserInterfaceStyle = .dark
         playIcon.image = UIImage(systemName: "play.fill")?
-            .withConfiguration(UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold))
-        playIcon.tintColor = UIColor.white.withAlphaComponent(0.85)
-        playIcon.contentMode = .scaleAspectFit
+            .withConfiguration(UIImage.SymbolConfiguration(pointSize: 20, weight: .regular, scale: .small))
+        playIcon.contentMode = .center
+        playIcon.setContentHuggingPriority(.required, for: .horizontal)
 
         progressContainer.translatesAutoresizingMaskIntoConstraints = false
         progressBackground.translatesAutoresizingMaskIntoConstraints = false
-        progressBackground.backgroundColor = UIColor.white.withAlphaComponent(0.3)
-        progressBackground.layer.cornerRadius = 2
+        progressBackground.backgroundColor = .quaternaryLabel
+        progressBackground.layer.cornerRadius = Self.barSize.height / 2
         progressBackground.layer.cornerCurve = .continuous
         progressBackground.clipsToBounds = true
         progressContainer.addSubview(progressBackground)
 
         progressFill.translatesAutoresizingMaskIntoConstraints = false
-        progressFill.backgroundColor = .white
-        progressFill.layer.cornerRadius = 2
-        progressFill.layer.cornerCurve = .continuous
+        // Square trailing end: only the track's clip rounds the fill.
         progressBackground.addSubview(progressFill)
 
         infoLabel.translatesAutoresizingMaskIntoConstraints = false
         infoLabel.font = .systemFont(ofSize: 20, weight: .medium)
-        infoLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         infoLabel.numberOfLines = 1
+        setFocused(false)
 
         stack.axis = .horizontal
-        stack.spacing = 10
+        stack.spacing = 8
         stack.alignment = .center
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(playIcon)
@@ -85,13 +86,10 @@ final class MediaProgressInfoBar: UIView {
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            // Widths at 999: TVCardView lays its content host out at width 0
-            // on the first pass; required widths there spam constraint breaks.
-            playIcon.widthAnchor.constraint(equalToConstant: 22).withPriority(999),
-            playIcon.heightAnchor.constraint(equalToConstant: 22),
-
-            progressContainer.widthAnchor.constraint(equalToConstant: 44).withPriority(999),
-            progressContainer.heightAnchor.constraint(equalToConstant: 4),
+            // Width at 999: TVCardView lays its content host out at width 0
+            // on the first pass; a required width there spams constraint breaks.
+            progressContainer.widthAnchor.constraint(equalToConstant: Self.barSize.width).withPriority(999),
+            progressContainer.heightAnchor.constraint(equalToConstant: Self.barSize.height),
             progressBackground.topAnchor.constraint(equalTo: progressContainer.topAnchor),
             progressBackground.bottomAnchor.constraint(equalTo: progressContainer.bottomAnchor),
             progressBackground.leadingAnchor.constraint(equalTo: progressContainer.leadingAnchor),
@@ -105,6 +103,17 @@ final class MediaProgressInfoBar: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private static let barSize = CGSize(width: 34, height: 6)
+
+    /// Glyph, label and bar fill go full white on the focused card. Call it
+    /// inside the focus animation coordinator.
+    func setFocused(_ focused: Bool) {
+        let text = UIColor.white.withAlphaComponent(focused ? 1 : 0.5)
+        playIcon.tintColor = text
+        infoLabel.textColor = text
+        progressFill.backgroundColor = focused ? .white : .tertiaryLabel
+    }
 
     func configure(item: PlexMetadata) {
         // Show progress capsule only when 0 < watchProgress < 1
@@ -122,7 +131,7 @@ final class MediaProgressInfoBar: UIView {
             parts.append(duration)
         }
         apply(progressFraction: p > 0 && p < 1 ? p : nil,
-              infoText: parts.joined(separator: " \u{2022} "))
+              infoText: parts.joined(separator: " \u{00B7} "))
     }
 
     /// MediaItem path. `runtime` and `viewOffset` are both in seconds.
@@ -156,7 +165,7 @@ final class MediaProgressInfoBar: UIView {
             }
         }
         apply(progressFraction: fraction > 0 && fraction < 1 ? fraction : nil,
-              infoText: parts.joined(separator: " \u{2022} "))
+              infoText: parts.joined(separator: " \u{00B7} "))
     }
 
     func reset() {
@@ -164,6 +173,7 @@ final class MediaProgressInfoBar: UIView {
         progressContainer.isHidden = true
         progressFillWidthConstraint.constant = 0
         infoLabel.text = nil
+        setFocused(false)
     }
 
     // MARK: - Shared renderer
@@ -176,7 +186,8 @@ final class MediaProgressInfoBar: UIView {
         if let p = progressFraction {
             playIcon.isHidden = false
             progressContainer.isHidden = false
-            progressFillWidthConstraint.constant = 44 * CGFloat(p)
+            // Apple draws any progress as at least 2 percent.
+            progressFillWidthConstraint.constant = Self.barSize.width * CGFloat(max(p, 0.02))
         } else {
             playIcon.isHidden = true
             progressContainer.isHidden = true
