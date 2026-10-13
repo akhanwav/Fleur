@@ -116,11 +116,12 @@ final class PlayerRailView: UIView {
             label.layer.shadowOffset = .zero
         }
 
-        // Custom tools sit left of Subtitles/Audio, as AVKit places them.
+        // Up from the video lands on the leftmost tool, so the rarely used ones
+        // (Content Filter, then Quality) sit right of Subtitles/Audio.
         toolRow.axis = .horizontal
         toolRow.spacing = Metrics.toolGap
         toolRow.alignment = .center
-        [multiviewButton, recordButton, goLiveButton, filterButton, qualityButton, subtitlesButton, audioButton].forEach {
+        [multiviewButton, recordButton, goLiveButton, subtitlesButton, audioButton, filterButton, qualityButton].forEach {
             toolRow.addArrangedSubview($0)
         }
 
