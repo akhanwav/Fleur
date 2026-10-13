@@ -140,7 +140,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         card.contentView.clipsToBounds = true
         // The rim Apple's floating view draws at rest (its highlightStyle is private).
         card.contentView.layer.borderWidth = 1
-        card.contentView.layer.borderColor = UIColor(white: 1, alpha: 0.05).cgColor
+        card.contentView.layer.borderColor = UIColor(white: 1, alpha: 0.03).cgColor
         CATransaction.commit()
     }
 
