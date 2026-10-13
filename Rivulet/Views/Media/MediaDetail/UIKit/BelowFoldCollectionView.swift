@@ -56,14 +56,17 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     /// How much of the episode thumbnails peeks at rest (matches the placeholder peek).
     private static let episodePeek: CGFloat = 40
-    /// Shared left margin for the WHOLE detail: the season pills, every
-    /// below-fold row, AND the expanded hero metadata all align to this edge
-    /// (single source of truth = the hero's chrome inset).
-    private static let rowLeading: CGFloat = PreviewCarouselGeometry.expandedChromeInset
-    // 0 = content (rails + full-width cards) runs to the right screen edge. The
-    // left margin is intentional (rowLeading); the right should not mirror it.
-    private static let rowTrailing: CGFloat = 0
+    /// Where every row's content rests in the untransformed collection: under
+    /// the collapsed card's metadata. The host pulls the collection left on
+    /// expand, which lands it on the expanded margin. Sections measure from
+    /// the collection's edges, not its safe area, which changes with the state.
+    static let rowLeading: CGFloat = PreviewCarouselGeometry.collapsedChromeInset
+    /// The collection is wider than the screen by that pull, so this ends a
+    /// row's content on the expanded margin; rails still scroll past it.
+    private static let rowTrailing: CGFloat = PreviewCarouselGeometry.expandedChromeInset
     private static let episodeWidth: CGFloat = EpisodeCell.cardWidth
+    /// Spacing between episode cards (and season dividers).
+    static let episodeGap: CGFloat = MediaRowMetrics.tileGap
     private static let episodeHeight: CGFloat = 435
     private static let trailerWidth: CGFloat = EpisodeCell.cardWidth
     // Same episode card, minus the episode-number / summary / footer rows — so the
@@ -226,8 +229,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             let isPrimary = (index == 0)
             let peek = max(0, self.bounds.height - Self.episodePeek - Self.detailsTopY)
             switch self.sectionKinds[index] {
-            // Episodes: LEFT-aligned (ATV+), first card at the metadata inset
-            // (leading 128). The collection's small contentInset.top (= detailsTopY)
+            // Episodes: LEFT-aligned (ATV+), first card at the metadata inset.
+            // The collection's small contentInset.top (= detailsTopY)
             // lets the focus engine land them at ~detailsTopY in details.
             case .episodes:
                 return self.episodesRailSection(
@@ -238,8 +241,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                 return self.shelfSection(
                     itemW: Self.trailerWidth,
                     itemH: Self.trailerHeight,
-                    leading: Self.rowLeading,
-                    gap: 36,
+                    gap: MediaRowMetrics.tileGap,
                     header: !isPrimary,
                     topInset: isPrimary ? peek : 0,
                     headerTopInset: 8,
@@ -250,8 +252,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                 return self.shelfSection(
                     itemW: Self.trailerWidth,
                     itemH: Self.trailerHeight,
-                    leading: Self.rowLeading,
-                    gap: 36,
+                    gap: MediaRowMetrics.tileGap,
                     header: !isPrimary,
                     topInset: isPrimary ? peek : 0,
                     headerTopInset: 8,
@@ -262,7 +263,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                 // The collection row shares this: on a movie with no trailers
                 // or extras it is the primary peek row, so it needs the same lift.
                 // Home-identical shelf: one full-width ShelfRowCell hosting
-                // the posters (margin 40, symmetric peeks, pitch landings).
+                // the posters (margin, peek, pitch landings).
                 // As the primary row, lift the section by its own header (+ the
                 // section's 8pt pad) so the 40pt peek strip is POSTER, like the
                 // episodes row — the "Related" title rides just above it.
@@ -275,8 +276,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                 return self.shelfSection(
                     itemW: Self.castWidth,
                     itemH: 355,
-                    leading: Self.rowLeading,
-                    gap: 40,   // circle-to-circle = castWidth(263) + gap → ~6 across + 7th peeking
+                    gap: MediaRowMetrics.tileGap,   // six across on the grid, the seventh peeking
                     header: true
                 )
             case .about: return self.fullWidthSection(height: 370)
@@ -303,6 +303,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         let item = NSCollectionLayoutItem(layoutSize: itemSize)
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: itemSize, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
+        section.contentInsetsReference = .none
         section.contentInsets = .init(
             top: 8 + topInset,
             leading: 0,
@@ -321,7 +322,9 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(height)),
             subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
-        section.contentInsets = .init(top: 24, leading: Self.rowLeading, bottom: 56, trailing: Self.rowTrailing)
+        section.contentInsetsReference = .none
+        section.contentInsets = .init(top: 24, leading: Self.rowLeading, bottom: 56,
+                                      trailing: Self.rowTrailing)
         if band {
             // Full-width darkened band behind the section (spans the section rect,
             // edge to edge — the columns stay inset via contentInsets).
@@ -338,7 +341,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// season scroll, pill alignment, initial-episode landing — stay exact,
     /// which estimated self-sizing would not guarantee.
     private func episodesRailSection(topInset: CGFloat, sectionBottomInset: CGFloat) -> NSCollectionLayoutSection {
-        let gap: CGFloat = 16
+        let gap = Self.episodeGap
         var frames: [CGRect] = []
         var x: CGFloat = 0
         for railItem in cachedEpisodes {
@@ -355,6 +358,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         }
         let section = NSCollectionLayoutSection(group: group)
         section.orthogonalScrollingBehavior = .continuous
+        section.contentInsetsReference = .none
         section.contentInsets = .init(
             top: topInset,
             leading: Self.rowLeading,
@@ -367,7 +371,6 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     private func shelfSection(
         itemW: CGFloat,
         itemH: CGFloat,
-        leading: CGFloat,
         gap: CGFloat,
         header: Bool,
         topInset: CGFloat = 0,
@@ -383,9 +386,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         let section = NSCollectionLayoutSection(group: group)
         section.orthogonalScrollingBehavior = .continuous
         section.interGroupSpacing = gap
+        section.contentInsetsReference = .none
         section.contentInsets = .init(
             top: (header ? headerTopInset : 0) + topInset,
-            leading: leading,
+            leading: Self.rowLeading,
             bottom: sectionBottomInset,
             trailing: Self.rowTrailing
         )
@@ -528,17 +532,15 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         cell.onWillDisplayItem = nil
         cell.onLongPressItem = nil
         cell.onOffsetChanged = { [weak self] offset in self?.shelfOffsets[section] = offset }
-        // Self-align to the screen's rowLeading (robust to the
-        // below-fold's state-dependent translation), and draw the
-        // header in-cell so it aligns with the tiles.
-        cell.screenAlignsLeading = true
+        // Rests under the collapsed metadata; the expand pull lands it on the margin.
         cell.headerTitle = title
         cell.configure(
             kind: .poster,
             realCount: tiles.count,
             hasSkeleton: false,
             contentToken: hasher.finalize(),
-            initialOffset: shelfOffsets[section] ?? 0
+            initialOffset: shelfOffsets[section] ?? 0,
+            panelOvershoot: (left: Self.rowLeading - MediaRowMetrics.rowLeading, right: 0)
         )
     }
 
@@ -934,8 +936,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             // a fixed pitch any more: the rail mixes episode cards with slimmer
             // season dividers, so sum the actual widths up to the target.
             delta = cachedEpisodes.prefix(itemIdx).reduce(CGFloat(0)) { acc, railItem in
-                if case .seasonDivider = railItem { return acc + SeasonDividerCell.cardWidth + 16 }
-                return acc + Self.episodeWidth + 16
+                if case .seasonDivider = railItem { return acc + SeasonDividerCell.cardWidth + Self.episodeGap }
+                return acc + Self.episodeWidth + Self.episodeGap
             }
         }
         let maxX = max(base, scroller.contentSize.width - scroller.bounds.width + scroller.contentInset.right)

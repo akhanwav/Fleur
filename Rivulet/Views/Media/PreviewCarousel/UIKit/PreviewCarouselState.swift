@@ -44,6 +44,8 @@ enum PreviewCarouselGeometry {
     /// left-aligns with the first of the 4 centered episode thumbs. Expanded
     /// mode 140pt (refined with the expanded episode layout in Step 3).
     static let carouselChromeInset: CGFloat = 40
+    /// That edge in screen space: the collapsed card's content margin.
+    static var collapsedChromeInset: CGFloat { centeredHorizontalInset + carouselChromeInset }
     /// Expanded-state content margin — the single app-wide content-left edge.
     /// Everything in the fullscreen detail aligns here: the chrome (logo /
     /// metadata / action row), the seasons header, every below-fold row, the

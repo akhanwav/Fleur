@@ -72,7 +72,7 @@ final class LiveBrowseViewController: UIViewController {
         /// The Browse page's margin: Apple's live-row margin, which its rows
         /// use too (see `MediaRowMetrics.liveLeading`).
         static let side: CGFloat = MediaRowMetrics.liveLeading
-        static let top: CGFloat = MediaRowMetrics.rowLeading
+        static let top: CGFloat = 52
         /// The clock's line at the top right, above the corner player.
         static let clockBand: CGFloat = 48
         /// The corner player: a card's size, rounded to exact 16:9 (a card's

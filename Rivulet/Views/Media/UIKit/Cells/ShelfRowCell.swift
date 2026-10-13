@@ -21,12 +21,11 @@
 //  FocusScrollControlledCollectionView, applied horizontally). Every resting
 //  position is exact:
 //
-//      contentOffset.x = firstVisibleColumn × (tileWidth + gap)
+//      contentOffset.x = firstVisibleColumn × pitch
 //
-//  which, with the shelf equation in MediaRowMetrics
-//  (1920 = 2·rowLeading + N·tile + (N−1)·gap), shows N full tiles with equal
-//  slivers peeking in from BOTH screen edges, and tile k+1 landing exactly
-//  where tile k was.
+//  which, on the grid in MediaRowMetrics (1920 = 2·margin + N·art + (N−1)·gap),
+//  rests N tiles on the grid with the margin intact, a sliver of the next tile
+//  on the right, and tile k+1 landing exactly where tile k was.
 //
 
 import UIKit
@@ -40,29 +39,21 @@ final class ShelfRowCell: UICollectionViewCell {
         case music   // 1:1 square (same width as poster)
         case live    // Live TV Browse card (16:9, four across)
 
-        var tileWidth: CGFloat {
+        /// The cell: the lockup's frame, not its resting artwork.
+        var tileWidth: CGFloat { tile?.frame.width ?? MediaRowMetrics.liveWidth }
+        var tileHeight: CGFloat { tile?.frame.height ?? MediaRowMetrics.liveHeight }
+        /// The grid tile behind the kind; nil for Live TV, which has frame
+        /// numbers of its own.
+        private var tile: MediaRowMetrics.Tile? {
             switch self {
-            case .continueWatching: return MediaRowMetrics.cwWidth
-            case .poster:           return MediaRowMetrics.posterWidth
-            case .music:            return MediaRowMetrics.musicWidth
-            case .live:             return MediaRowMetrics.liveWidth
+            case .continueWatching: return MediaRowMetrics.continueWatching
+            case .poster:           return MediaRowMetrics.poster
+            case .music:            return MediaRowMetrics.music
+            case .live:             return nil
             }
         }
-        var tileHeight: CGFloat {
-            switch self {
-            case .continueWatching: return MediaRowMetrics.cwHeight
-            case .poster:           return MediaRowMetrics.posterHeight
-            case .music:            return MediaRowMetrics.musicHeight
-            case .live:             return MediaRowMetrics.liveHeight
-            }
-        }
-        var gap: CGFloat {
-            switch self {
-            case .continueWatching: return MediaRowMetrics.cwGap
-            case .poster, .music:   return MediaRowMetrics.posterGap
-            case .live:             return MediaRowMetrics.liveGap
-            }
-        }
+        /// Spacing between cell frames.
+        var gap: CGFloat { tile?.gap ?? MediaRowMetrics.liveGap }
         var fullCount: Int {
             switch self {
             case .continueWatching: return MediaRowMetrics.cwFullCount
@@ -71,8 +62,10 @@ final class ShelfRowCell: UICollectionViewCell {
             }
         }
         var pitch: CGFloat { tileWidth + gap }
-        /// The row's margin: the app's `rowLeading`, except Live TV's wider one.
-        var leading: CGFloat { self == .live ? MediaRowMetrics.liveLeading : MediaRowMetrics.rowLeading }
+        /// Inset of the first cell frame: it rests the artwork on the margin.
+        var leading: CGFloat { tile?.leading ?? MediaRowMetrics.liveLeading }
+        /// The row's margin, where its header and its artwork rest.
+        var margin: CGFloat { self == .live ? MediaRowMetrics.liveLeading : MediaRowMetrics.rowLeading }
     }
 
     // MARK: Callbacks to the owning controller (reset on every configure)
@@ -125,18 +118,6 @@ final class ShelfRowCell: UICollectionViewCell {
     /// overshoot is simply added to the inner content insets so tiles, peeks
     /// and landings line up with the panel exactly like the home rows.
     private var panelOvershoot: (left: CGFloat, right: CGFloat) = (0, 0)
-
-    /// When true, the leading inset (row AND header) is computed every layout
-    /// pass from the cell's ACTUAL on-screen x, so the first tile lands at
-    /// `MediaRowMetrics.rowLeading` in SCREEN space regardless of any container
-    /// translation. The expanded detail's below-fold is translated by a
-    /// state-dependent amount (different for the in-carousel expand vs the
-    /// standalone expand), so a fixed overshoot constant can't be right for
-    /// both — self-measuring is. Home rows leave this false (cell already at
-    /// screen x = 0, so the static inset already lands at rowLeading).
-    var screenAlignsLeading = false {
-        didSet { setNeedsLayout() }
-    }
 
     /// Optional in-cell header title (the below-fold Related row draws its
     /// "Related" header here so it self-aligns with the tiles; the home rows
@@ -272,25 +253,8 @@ final class ShelfRowCell: UICollectionViewCell {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Default: inner collection spans the cell (home behavior).
-        var targetWidth = bounds.width
-        if screenAlignsLeading, let window {
-            // Cell origin in screen space — negative when the container is
-            // translated left past the screen edge.
-            let screenMinX = convert(CGPoint.zero, to: window).x
-            let targetInset = tileKind.leading - screenMinX
-            if abs(flow.sectionInset.left - targetInset) > 0.5 {
-                flow.sectionInset.left = targetInset
-                flow.invalidateLayout()
-            }
-            if abs(headerLeadingConstraint.constant - targetInset) > 0.5 {
-                headerLeadingConstraint.constant = targetInset
-            }
-            // Reach the screen's right edge + one pitch of buffer so the
-            // right-peek tile always has a realized cell.
-            let screenWidth = window.bounds.width
-            targetWidth = (screenWidth - screenMinX) + tileKind.pitch
-        }
+        // The inner collection spans the cell.
+        let targetWidth = bounds.width
         if abs(rowWidthConstraint.constant - targetWidth) > 0.5 {
             rowWidthConstraint.constant = targetWidth
         }
@@ -546,7 +510,7 @@ final class ShelfRowCell: UICollectionViewCell {
             right: kind.leading + panelOvershoot.right
         )
         // Nil during init (metrics apply before the header is built).
-        headerLeadingConstraint?.constant = kind.leading
+        headerLeadingConstraint?.constant = kind.margin + panelOvershoot.left
     }
 
     // MARK: Offset math
@@ -636,7 +600,13 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
         if hasSkeleton, indexPath.item >= realCount {
             let cell = collectionView.dequeueReusableCell(
                 withReuseIdentifier: PosterSkeletonCell.reuseID, for: indexPath) as! PosterSkeletonCell
-            cell.configure(layout: tileKind == .continueWatching ? .continueWatching : .poster)
+            let layout: PosterSkeletonCell.Layout
+            switch tileKind {
+            case .continueWatching: layout = .continueWatching
+            case .music: layout = .music
+            case .poster, .live: layout = .poster
+            }
+            cell.configure(layout: layout)
             return cell
         }
         return cellProvider?(collectionView, indexPath)

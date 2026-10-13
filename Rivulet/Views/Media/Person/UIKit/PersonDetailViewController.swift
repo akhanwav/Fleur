@@ -308,7 +308,7 @@ final class PersonDetailViewController: UIViewController {
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: size, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
         // Full-bleed: ShelfRowCell owns the leading margin + peeking slivers
-        // internally (its inner collection's section inset = rowLeading).
+        // internally.
         section.contentInsetsReference = .none
         section.contentInsets = NSDirectionalEdgeInsets(
             top: MediaRowMetrics.rowTopInset,

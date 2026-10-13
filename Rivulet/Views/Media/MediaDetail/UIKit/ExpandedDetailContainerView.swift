@@ -73,13 +73,13 @@ final class ExpandedDetailContainerView: UIView {
     /// Episode-peek horizontal insets. Carousel-stable aligns to the inset card
     /// (left with the metadata, right clipped at the card edge); expanded goes
     /// near-full-bleed. The inset animates on expand (driven by the VC, Step 3).
-    /// Carousel-stable: clip spans the card width (card edge = 88) so the 4
-    /// thumbs center within the card.
+    /// Carousel-stable: clip spans the card width so the 4 thumbs center
+    /// within the card.
     /// Vertical slack inside the season-pill scroller so a focused pill's 1.05
     /// scale isn't clipped by the scroller's bounds.
     private static let seasonPillFocusPad: CGFloat = 8
-    private static let peekLeadingCarousel: CGFloat = 88
-    private static let peekTrailingCarousel: CGFloat = 88
+    private static let peekLeadingCarousel = PreviewCarouselGeometry.centeredHorizontalInset
+    private static let peekTrailingCarousel = PreviewCarouselGeometry.centeredHorizontalInset
     private static let peekLeadingExpanded: CGFloat = 0
     private static let peekTrailingExpanded: CGFloat = 0
 
@@ -223,10 +223,10 @@ final class ExpandedDetailContainerView: UIView {
     /// rail's leading lines up with the expanded metadata. That shift would pull
     /// the right edge IN by the same amount, so the collection is made `pull`
     /// wider on the right to compensate — content then reaches the screen edge.
+    /// The rail rests untransformed under the collapsed metadata, so the
+    /// carousel state needs no shift of its own.
     private static var belowFoldExpandPull: CGFloat {
-        PreviewCarouselGeometry.centeredHorizontalInset
-            + PreviewCarouselGeometry.carouselChromeInset
-            - PreviewCarouselGeometry.expandedChromeInset
+        BelowFoldCollectionView.rowLeading - PreviewCarouselGeometry.expandedChromeInset
     }
 
     private var spacerHeightConstraint: NSLayoutConstraint!
@@ -566,13 +566,12 @@ final class ExpandedDetailContainerView: UIView {
     /// its animator + layoutIfNeeded so it rides the one clock.
     func setExpanded(_ expanded: Bool) {
         // The episode rail tracks the metadata pull on expand: shift left so its
-        // leading (128 = card 88 + chrome inset 40) lines up with the expanded
+        // leading (card inset + carousel chrome inset) lines up with the expanded
         // metadata (expandedChromeInset). Rides the morph animator (the morph
         // controller calls this inside its UIViewPropertyAnimator), so it's a
         // smooth coordinated pull — not a jump.
         belowFoldCollection.transform = expanded
-            ? CGAffineTransform(translationX: -Self.belowFoldExpandPull, y: 0)
-            : .identity
+            ? CGAffineTransform(translationX: -Self.belowFoldExpandPull, y: 0) : .identity
 
         // Widen the card-width clip to full-screen, revealing the edge episodes.
         // The morph controller calls this inside its animator + layoutIfNeeded,
@@ -778,7 +777,7 @@ final class ExpandedDetailContainerView: UIView {
         // Episode peek: 6 16:9 thumbs, NO title. The row is centered in the
         // card-width clip; with gap 75 only the MIDDLE 4 (thumbs 2–5) fall
         // inside the clip — thumbs 1 and 6 sit fully outside. So carousel shows
-        // 4 centered (first visible thumb at screen-x ~128, the metadata aligns
+        // 4 centered (first visible thumb near the metadata's left edge, which aligns
         // there). On expand the clip widens to full-bleed and thumbs 1/6 peek
         // in as n-1/n+1.
         episodesRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -910,7 +909,7 @@ final class ExpandedDetailContainerView: UIView {
         let lo = max(0, index - 1)
         let hi = min(seasonPills.count - 1, index + 1)
         // Ask for the content margin alongside the pills, so a landing at either
-        // end of the row leaves the same `rowLeading` gutter the shelf rows rest
+        // end of the row leaves the same content margin the shelf rows rest
         // on instead of putting the pill flush against the screen edge (where
         // its 1.05 focus scale gets shaved).
         let rect = seasonPillScroll.convert(

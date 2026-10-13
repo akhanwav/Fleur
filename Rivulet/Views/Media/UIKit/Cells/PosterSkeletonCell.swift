@@ -6,8 +6,8 @@
 //  Rivulet
 //
 //  Loading-placeholder cell for the end of a paginating hub row, in both
-//  poster (260x390 portrait + title placeholder rows) and Continue
-//  Watching (392x280 landscape) variants.
+//  poster (portrait + title placeholder rows) and Continue Watching
+//  (landscape) variants. The placeholder rests where the tile's artwork does.
 //
 //  Two sizing modes are supported via `configure(isContinueWatching:)`:
 //   - false: portrait poster + two title placeholder rows
@@ -22,6 +22,7 @@ final class PosterSkeletonCell: UICollectionViewCell {
 
     enum Layout {
         case poster
+        case music
         case continueWatching
     }
 
@@ -32,6 +33,8 @@ final class PosterSkeletonCell: UICollectionViewCell {
 
     private var posterWidthConstraint: NSLayoutConstraint!
     private var posterHeightConstraint: NSLayoutConstraint!
+    private var stackTopConstraint: NSLayoutConstraint!
+    private var stackLeadingConstraint: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -73,13 +76,14 @@ final class PosterSkeletonCell: UICollectionViewCell {
 
         contentView.addSubview(stack)
 
-        posterWidthConstraint = posterPlaceholder.widthAnchor.constraint(equalToConstant: MediaRowMetrics.posterWidth)
-        posterHeightConstraint = posterPlaceholder.heightAnchor.constraint(equalToConstant: MediaRowMetrics.posterHeight)
+        posterWidthConstraint = posterPlaceholder.widthAnchor.constraint(equalToConstant: 0)
+        posterHeightConstraint = posterPlaceholder.heightAnchor.constraint(equalToConstant: 0)
+        stackTopConstraint = stack.topAnchor.constraint(equalTo: contentView.topAnchor)
+        stackLeadingConstraint = stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
+            stackTopConstraint,
+            stackLeadingConstraint,
 
             posterWidthConstraint,
             posterHeightConstraint,
@@ -92,17 +96,17 @@ final class PosterSkeletonCell: UICollectionViewCell {
     }
 
     func configure(layout: Layout) {
+        let tile: MediaRowMetrics.Tile
         switch layout {
-        case .poster:
-            posterWidthConstraint.constant = 220
-            posterHeightConstraint.constant = 330
-            titleRow1.isHidden = false
-            titleRow2.isHidden = false
-        case .continueWatching:
-            posterWidthConstraint.constant = MediaRowMetrics.cwWidth
-            posterHeightConstraint.constant = MediaRowMetrics.cwHeight
-            titleRow1.isHidden = true
-            titleRow2.isHidden = true
+        case .poster: tile = MediaRowMetrics.poster
+        case .music: tile = MediaRowMetrics.music
+        case .continueWatching: tile = MediaRowMetrics.continueWatching
         }
+        posterWidthConstraint.constant = tile.art.width
+        posterHeightConstraint.constant = tile.art.height
+        stackLeadingConstraint.constant = (tile.frame.width - tile.art.width) / 2
+        stackTopConstraint.constant = (tile.frame.height - tile.art.height) / 2
+        titleRow1.isHidden = layout == .continueWatching
+        titleRow2.isHidden = layout == .continueWatching
     }
 }

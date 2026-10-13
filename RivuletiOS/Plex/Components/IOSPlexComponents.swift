@@ -246,7 +246,7 @@ struct IOSPlexPosterCard: View {
 /// logo centred, and a play icon, progress and "S2, E5 · 12 min left" along
 /// the bottom over a soft blur band.
 struct IOSPlexContinueCard: View {
-    /// tvOS `MediaRowMetrics` cwWidth / cwHeight (357 x 277).
+    /// The tvOS Continue Watching card's ratio (`MediaRowMetrics`).
     static let aspectRatio: CGFloat = 357 / 277
 
     let item: PlexMetadata

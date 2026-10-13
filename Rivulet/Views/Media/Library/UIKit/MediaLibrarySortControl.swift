@@ -225,7 +225,7 @@ final class MediaLibrarySortControl: UICollectionViewCell {
     private lazy var sortBesideSwitch: NSLayoutConstraint = sortButton.trailingAnchor.constraint(
         equalTo: viewButton.leadingAnchor, constant: -16)
     private lazy var sortAtEdge: NSLayoutConstraint = sortButton.trailingAnchor.constraint(
-        equalTo: contentView.trailingAnchor, constant: -32)
+        equalTo: contentView.trailingAnchor)
 
     // MARK: - Public API
 
@@ -262,7 +262,7 @@ final class MediaLibrarySortControl: UICollectionViewCell {
 
         NSLayoutConstraint.activate([
             // Title: left-aligned, vertically centered on the top text cluster.
-            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 32),
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 20),
 
             // Count: just below the title, same left edge.
@@ -271,7 +271,7 @@ final class MediaLibrarySortControl: UICollectionViewCell {
 
             // Switch: pinned to the right edge, so it never moves under focus
             // when the sort button hides.
-            viewButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -32),
+            viewButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             viewButton.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             viewButton.heightAnchor.constraint(equalToConstant: 44),
             viewButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),

@@ -19,7 +19,7 @@ import UIKit
 final class BelowFoldRailScrollTests: XCTestCase {
 
     private let screen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-    private let railGap: CGFloat = 16
+    private let railGap = BelowFoldCollectionView.episodeGap
     /// Enough episodes that season 2's first card can sit at the leading edge
     /// without the scroller clamping at the end of the rail.
     private let episodesPerSeason = 8

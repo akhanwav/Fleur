@@ -2884,20 +2884,23 @@ final class PlexHomeViewController: UIViewController {
         let item = NSCollectionLayoutItem(layoutSize: itemSize)
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: itemSize, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
-        section.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 24, trailing: 0)
+        // On the content margin from the PANEL edge, like the grid below it.
+        section.contentInsetsReference = .none
+        section.contentInsets = NSDirectionalEdgeInsets(
+            top: 0, leading: MediaRowMetrics.rowLeading, bottom: 24, trailing: MediaRowMetrics.rowTrailing)
         return section
     }
 
     /// Multi-column poster grid (library + search modes). Derived ENTIRELY
     /// from MediaRowMetrics so grid columns land exactly where the shelf
-    /// rows' at-rest tiles sit: rowLeading margins, posterGap between
-    /// columns, posterFullCount across. With the shelf equation satisfied
-    /// (2*52 + 6*296 + 5*8 = 1920) the computed column width IS posterWidth.
+    /// rows' at-rest tiles sit: the tile's frame inset and spacing,
+    /// posterFullCount across, which makes the computed column width the
+    /// tile's frame width and rests its artwork on the grid.
     /// Search-mode group grids add a row-style header when titled.
     private func makeGridSectionLayout(section data: HomeSectionData) -> NSCollectionLayoutSection {
         // Music libraries render 1:1 square tiles; everything else 2:3.
-        let tileHeight = data.isMusic ? MediaRowMetrics.musicHeight : MediaRowMetrics.posterHeight
-        let groupHeight = tileHeight + MediaRowMetrics.focusGrowthPadding
+        let tile = data.isMusic ? MediaRowMetrics.music : MediaRowMetrics.poster
+        let groupHeight = tile.frame.height + MediaRowMetrics.focusGrowthPadding
 
         let itemSize = NSCollectionLayoutSize(
             widthDimension: .fractionalWidth(1.0 / CGFloat(MediaRowMetrics.posterFullCount)),
@@ -2914,7 +2917,7 @@ final class PlexHomeViewController: UIViewController {
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: groupSize,
                                                        repeatingSubitem: item,
                                                        count: MediaRowMetrics.posterFullCount)
-        group.interItemSpacing = .fixed(MediaRowMetrics.posterGap)
+        group.interItemSpacing = .fixed(tile.gap)
 
         let section = NSCollectionLayoutSection(group: group)
         // Margins from the PANEL edge to match the shelves (not the safe area).
@@ -2922,9 +2925,9 @@ final class PlexHomeViewController: UIViewController {
         section.interGroupSpacing = 24
         section.contentInsets = NSDirectionalEdgeInsets(
             top: 24,
-            leading: MediaRowMetrics.rowLeading,
+            leading: tile.leading,
             bottom: 48,
-            trailing: MediaRowMetrics.rowTrailing
+            trailing: tile.leading
         )
 
         if data.title != nil {
@@ -2937,9 +2940,9 @@ final class PlexHomeViewController: UIViewController {
                 elementKind: UICollectionView.elementKindSectionHeader,
                 alignment: .top
             )
-            // The section's own insets (rowLeading) already position the
-            // header via supplementariesFollowContentInsets (default true),
-            // so it aligns with the first grid column like shelf headers do.
+            // The header follows the section's insets (the frame inset), so
+            // add the rest of the margin to rest it on the artwork's edge.
+            header.contentInsets.leading = MediaRowMetrics.rowLeading - tile.leading
             section.boundarySupplementaryItems = [header]
         }
         return section
@@ -3017,7 +3020,7 @@ final class PlexHomeViewController: UIViewController {
 
         let layoutSection = NSCollectionLayoutSection(group: group)
         // Full-bleed row from the PANEL edge (not the safe area): the
-        // ShelfRowCell carries the rowLeading margin and the peeking slivers
+        // ShelfRowCell carries the margin and the peeking sliver
         // internally.
         layoutSection.contentInsetsReference = .none
         // top: header-to-first-card gap (row title sits close to its cards).
@@ -3951,18 +3954,13 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// The focused tile's VISUAL frame in window coordinates — the menu
-    /// anchor. The cell frame doesn't include the lockup's focus float
-    /// (TVPosterView scales its content internally, not the view), so the
-    /// frame is grown by the focus scale to match what's on screen.
+    /// The focused tile's frame in window coordinates, the menu anchor.
+    /// The cell is the lockup frame, which the focused artwork fills.
     private func focusedTileFrame() -> CGRect? {
         var view = UIFocusSystem.focusSystem(for: self.view)?.focusedItem as? UIView
         while let current = view, !(current is UICollectionViewCell) { view = current.superview }
         guard let cell = view as? UICollectionViewCell else { return nil }
-        let frame = cell.convert(cell.bounds, to: nil)
-        let focusScale: CGFloat = 1.1
-        return frame.insetBy(dx: -frame.width * (focusScale - 1) / 2,
-                             dy: -frame.height * (focusScale - 1) / 2)
+        return cell.convert(cell.bounds, to: nil)
     }
 
     // MARK: - Play/Pause button (physical remote)

@@ -18,7 +18,7 @@ import UIKit
 
 final class CastCell: UIView {
 
-    static let circleSize: CGFloat = 263
+    static let circleSize: CGFloat = MediaRowMetrics.gridWidth(columns: 6)
 
     /// Scale host for the focus enlarge.
     private let glowView = UIView()

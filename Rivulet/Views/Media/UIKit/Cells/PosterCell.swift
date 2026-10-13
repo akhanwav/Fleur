@@ -17,8 +17,8 @@
 //
 //  Overlay subviews (watched badge, in-progress info bar, failure icon)
 //  live in a sibling `overlayContainer` view that:
-//    * matches the poster's 260x390 frame
-//    * applies its own 16pt corner mask so the watched corner-tag clips
+//    * matches the poster's image surface
+//    * applies its own 20pt corner mask so the watched corner-tag clips
 //      to the same rounded edge as the poster image
 //    * tracks the cell's focus state and applies the same scale
 //      transform `TVPosterView` uses for the image (so overlays grow
@@ -96,13 +96,22 @@ final class PosterCell: UICollectionViewCell {
 
     private var imageLoadTask: Task<Void, Never>?
     private var currentURL: URL?
+    /// True once real artwork is showing. `posterView.image` is never nil
+    /// (see `blankArtwork`), so it cannot answer this.
+    private var hasArtwork = false
 
-    private let cornerRadius: CGFloat = 16
+    /// Stand-in for missing artwork. TVPosterView drops its focus-growth
+    /// inset with a nil image, which made a loading tile larger than a loaded one.
+    static let blankArtwork = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+
+    /// The system image corner on tvOS 26.
+    private let cornerRadius: CGFloat = 20
     private let posterWidth: CGFloat = MediaRowMetrics.posterWidth
     private let posterHeight: CGFloat = MediaRowMetrics.posterHeight
 
-    /// Swappable so music tiles render 1:1 square (height == width) instead of
-    /// the 2:3 poster ratio. Set per item in `configure(...)`.
+    /// Swappable so music tiles render the 1:1 square lockup instead of the
+    /// 2:3 poster one. Set per item in `configure(...)`.
+    private var posterWidthConstraint: NSLayoutConstraint!
     private var posterHeightConstraint: NSLayoutConstraint!
 
     override init(frame: CGRect) {
@@ -124,6 +133,7 @@ final class PosterCell: UICollectionViewCell {
         // background — focus chrome is image-bound, no dark halo.
 
         posterView.translatesAutoresizingMaskIntoConstraints = false
+        posterView.image = Self.blankArtwork
         contentView.addSubview(posterView)
 
         // Overlay container clipped to the same rounded rect as the poster.
@@ -179,18 +189,17 @@ final class PosterCell: UICollectionViewCell {
         watchedGlyph.isHidden = true
         overlayContainer.addSubview(watchedGlyph)
 
+        posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: posterWidth)
         posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: posterHeight)
         NSLayoutConstraint.activate([
             posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            posterView.widthAnchor.constraint(equalToConstant: posterWidth),
+            posterWidthConstraint,
             posterHeightConstraint,
 
-            // Pin to TVPosterView's IMAGE surface, not its outer frame:
-            // TVPosterView can reserve a footer strip below the picture (the
-            // on-focus caption area), so a bottom-pinned overlay on the outer
-            // frame hangs below the visible poster — the in-progress blur
-            // band made this obvious ("blur coming off the poster").
+            // Pin to TVPosterView's IMAGE surface, not its outer frame: the
+            // frame reserves room for focus growth, so the resting picture is
+            // smaller and an overlay on the outer frame hangs off it.
             overlayContainer.topAnchor.constraint(equalTo: posterView.imageView.topAnchor),
             overlayContainer.bottomAnchor.constraint(equalTo: posterView.imageView.bottomAnchor),
             overlayContainer.leadingAnchor.constraint(equalTo: posterView.imageView.leadingAnchor),
@@ -230,20 +239,19 @@ final class PosterCell: UICollectionViewCell {
 
     // MARK: - Focus zoom sync
 
-    /// `TVPosterView` applies its own focus scale transform to the image
-    /// (via `focusSizeIncrease`) that doesn't propagate to our sibling
-    /// `overlayContainer`. We mirror it here so overlays grow with the
-    /// poster instead of staying static. The 1.1 scale is the published
-    /// default for `TVPosterView` at standard contentSize (260x390); it's
-    /// close enough that the visual offset is imperceptible.
+    /// The focused image grows by `focusGrowth` on its longer side, and that
+    /// growth doesn't reach our sibling `overlayContainer`, so mirror it here.
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
+        let artSize = posterView.imageView.bounds.size
+        let longSide = max(artSize.width, artSize.height)
+        let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1
         coordinator.addCoordinatedAnimations({
             self.overlayContainer.transform = nowFocused
-                ? CGAffineTransform(scaleX: 1.1, y: 1.1)
+                ? CGAffineTransform(scaleX: scale, y: scale)
                 : .identity
         }, completion: { [weak self] in
             guard let self, !nowFocused else { return }
@@ -311,6 +319,7 @@ final class PosterCell: UICollectionViewCell {
     private func setSquare(_ square: Bool) {
         let height = square ? MediaRowMetrics.musicHeight : posterHeight
         if posterHeightConstraint.constant != height {
+            posterWidthConstraint.constant = square ? MediaRowMetrics.musicWidth : posterWidth
             posterHeightConstraint.constant = height
         }
     }
@@ -336,7 +345,7 @@ final class PosterCell: UICollectionViewCell {
         loadingSpinner.stopAnimating()
         placeholderPanel.isHidden = true
         currentURL = nil
-        posterView.image = nil
+        clearArtwork()
         progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
         progressInfoBar.reset()
         watchedBadge.isHidden = true
@@ -365,12 +374,12 @@ final class PosterCell: UICollectionViewCell {
     private func loadImage(from url: URL?, failureIcon: UIImage?) {
         imageLoadTask?.cancel()
         guard let url else {
-            posterView.image = nil
+            clearArtwork()
             currentURL = nil
             showPlaceholderFailure(failureIcon)
             return
         }
-        if currentURL == url, posterView.image != nil {
+        if currentURL == url, hasArtwork {
             hidePlaceholder()
             return
         }
@@ -388,13 +397,19 @@ final class PosterCell: UICollectionViewCell {
                 guard let self, self.currentURL == url else { return }
                 if let image {
                     self.posterView.image = image
+                    self.hasArtwork = true
                     self.hidePlaceholder()
                 } else {
-                    self.posterView.image = nil
+                    self.clearArtwork()
                     self.showPlaceholderFailure(failureIcon)
                 }
             }
         }
+    }
+
+    private func clearArtwork() {
+        posterView.image = Self.blankArtwork
+        hasArtwork = false
     }
 
     /// Glass panel + (delayed) spinner while the artwork loads/retries.
@@ -406,7 +421,7 @@ final class PosterCell: UICollectionViewCell {
         spinnerDelayTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             guard let self, !Task.isCancelled else { return }
-            if !self.placeholderPanel.isHidden, self.posterView.image == nil {
+            if !self.placeholderPanel.isHidden, !self.hasArtwork {
                 self.loadingSpinner.startAnimating()
             }
         }

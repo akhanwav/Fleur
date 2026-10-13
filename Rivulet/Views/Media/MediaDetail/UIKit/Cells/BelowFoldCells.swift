@@ -306,7 +306,9 @@ final class BelowFoldSectionHeader: UICollectionReusableView {
 /// the rail's focus order is unchanged.
 final class SeasonDividerCell: UICollectionViewCell {
     static let reuseID = "SeasonDividerCell"
-    static let cardWidth: CGFloat = 100
+    /// Wide enough that the chip is fully off screen when the next season's
+    /// first episode rests on the 80 pt margin.
+    static let cardWidth: CGFloat = 140
 
     private let topLine = UIView()
     private let bottomLine = UIView()

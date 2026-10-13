@@ -36,9 +36,9 @@ final class SearchRecentsCell: UICollectionViewCell {
     /// MEASURED off the Apple TV app's own Recently Searched row (screenshots
     /// on #292, scaled from its 1400px capture at 0.668 px/pt).
     private enum Metrics {
-        static let cardWidth: CGFloat = 560
+        static let cardWidth: CGFloat = MediaRowMetrics.gridWidth(columns: 3)
         static let cardHeight: CGFloat = 164
-        static let cardSpacing: CGFloat = 40
+        static let cardSpacing: CGFloat = MediaRowMetrics.tileGap
         /// Poster inset inside the card. The poster is the card's full height
         /// minus this top and bottom, at the 2:3 poster ratio.
         static let posterInset: CGFloat = 17
@@ -89,6 +89,8 @@ final class SearchRecentsCell: UICollectionViewCell {
         // clipsToBounds off so the focused card's scale is not cut off at the
         // scroller's edges.
         cardScroll.showsHorizontalScrollIndicator = false
+        // The stack carries the margin; the safe area would add 80 more.
+        cardScroll.contentInsetAdjustmentBehavior = .never
         cardScroll.clipsToBounds = false
         cardScroll.addSubview(cardStack)
         cardScroll.translatesAutoresizingMaskIntoConstraints = false

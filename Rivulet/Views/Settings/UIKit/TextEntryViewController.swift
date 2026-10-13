@@ -162,7 +162,7 @@ final class TextEntryViewController: UIViewController {
         stack.translatesAutoresizingMaskIntoConstraints = false
         blur.contentView.addSubview(stack)
 
-        let pad: CGFloat = PreviewCarouselGeometry.expandedChromeInset
+        let pad: CGFloat = 52
         NSLayoutConstraint.activate([
             card.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             card.centerYAnchor.constraint(equalTo: view.centerYAnchor),

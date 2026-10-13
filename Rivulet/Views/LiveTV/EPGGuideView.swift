@@ -46,9 +46,9 @@ enum EPGTheme {
     static let timelineHeight: CGFloat = 54
     /// Height of the slim rounded boxes inside the timeline / date row.
     static let timelineBoxHeight: CGFloat = 34
-    /// The app's page margin (Home rows, detail chrome). The guide ignores the
-    /// safe area and sits this far in from the leading, trailing and top edges.
-    static let pageMargin: CGFloat = MediaRowMetrics.rowLeading
+    /// The guide's own page margin. It ignores the safe area and sits this
+    /// far in from the leading, trailing and top edges.
+    static let pageMargin: CGFloat = 52
     /// The corner player after Back: 16:9 in 16pt width steps, top-right at
     /// the page margin. The info bar's poster shares its height.
     static let miniPlayerSize = CGSize(width: 528, height: 297)
