@@ -79,9 +79,14 @@ class LiveTVDataStore: ObservableObject {
 
     // MARK: - Private Properties
 
-    private var providers: [String: any LiveTVProvider] = [:]
-    private var channelLoadTask: Task<Void, Never>?
-    private var epgLoadTask: Task<Void, Never>?
+    private var providers: [String: any LiveTVProvider] = [:] {
+        didSet { providersGeneration += 1 }
+    }
+    /// Bumped when the source set changes. A load started for an older set is
+    /// cancelled; one for the current set is waited on (see `loadChannels`).
+    private var providersGeneration = 0
+    private var channelLoad: (task: Task<Void, Never>, generation: Int)?
+    private var epgLoad: (task: Task<Void, Never>, generation: Int, channelCount: Int, window: DateInterval)?
     private var backgroundPreloadTask: Task<Void, Never>?
 
     // MARK: - Freshness tracking
@@ -221,7 +226,7 @@ class LiveTVDataStore: ObservableObject {
     ///
     /// Concurrent callers share one refresh: the tab's `.task` and the
     /// foreground notification routinely fire together, and two overlapping
-    /// EPG fetches would cancel each other through `epgLoadTask` and leave
+    /// EPG fetches would cancel each other through `epgLoad` and leave
     /// the grid empty — the very failure this is meant to fix.
     func refreshIfStale(maxAge: TimeInterval = defaultMaxAge) async {
         guard !providers.isEmpty else { return }
@@ -617,8 +622,15 @@ class LiveTVDataStore: ObservableObject {
             return
         }
 
-        // Cancel existing task if any
-        channelLoadTask?.cancel()
+        // Arriving on Live TV calls this from several places at once. They share
+        // one load: PMS keeps working on a request the client abandons, and
+        // that work slows the next one (#338).
+        if let loading = channelLoad, loading.generation == providersGeneration {
+            await loading.task.value
+            if channelLoad?.task == loading.task { channelLoad = nil }
+            return
+        }
+        channelLoad?.task.cancel()
 
         isLoadingChannels = true
         channelsError = nil
@@ -632,7 +644,7 @@ class LiveTVDataStore: ObservableObject {
         // on the main thread while the home screen is still loading. Priority
         // does not change isolation, so `Task(priority:)` is not a substitute.
         // The MainActor.run below is the only main hop.
-        channelLoadTask = Task.detached { [providerEntries] in
+        let task = Task.detached { [providerEntries] in
             let merged = await Self.fetchAndMergeChannels(from: providerEntries, refreshing: false)
 
             // A cancelled (superseded) task must NOT publish: its partial
@@ -655,8 +667,10 @@ class LiveTVDataStore: ObservableObject {
 
             await self.updateSourceInfo()
         }
+        channelLoad = (task, providersGeneration)
 
-        await channelLoadTask?.value
+        await task.value
+        if channelLoad?.task == task { channelLoad = nil }
     }
 
     /// Refresh channels from all sources
@@ -690,12 +704,22 @@ class LiveTVDataStore: ObservableObject {
             return
         }
 
-        epgLoadTask?.cancel()
+        let endDate = Calendar.current.date(byAdding: .hour, value: hours, to: startDate) ?? startDate
+        let window = DateInterval(start: startDate, end: max(startDate, endDate))
+
+        // Same reason as loadChannels: a load in flight is waited out, never
+        // abandoned, and answers this call when it covers the same window.
+        while let loading = epgLoad, loading.generation == providersGeneration {
+            let answers = loading.channelCount == channels.count
+                && Self.epgWindow(loading.window, covers: window)
+            await loading.task.value
+            if epgLoad?.task == loading.task { epgLoad = nil }
+            if answers { return }
+        }
+        epgLoad?.task.cancel()
 
         isLoadingEPG = true
         epgIssues = []
-
-        let endDate = Calendar.current.date(byAdding: .hour, value: hours, to: startDate) ?? startDate
 
         // Snapshot provider display names up-front so the task group doesn't
         // need to touch the @MainActor-bound providers dictionary after
@@ -716,7 +740,7 @@ class LiveTVDataStore: ObservableObject {
 
         // Detached for the same reason as loadChannels: `Task {}` would inherit
         // MainActor and put the EPG merge on the main thread.
-        epgLoadTask = Task.detached { [channelsBySource, providersById, providerList, sourceNames] in
+        let task = Task.detached { [channelsBySource, providersById, providerList, sourceNames] in
             var allEPG: [String: [UnifiedProgram]] = [:]
             var issues: [EPGFetchIssue] = []
 
@@ -793,7 +817,18 @@ class LiveTVDataStore: ObservableObject {
             }
         }
 
-        await epgLoadTask?.value
+        epgLoad = (task, providersGeneration, channels.count, window)
+
+        await task.value
+        if epgLoad?.task == task { epgLoad = nil }
+    }
+
+    /// Whether a guide load for `loading` answers a request for `requested`.
+    /// An hour of slack: callers arriving together read "now" at different
+    /// moments, and the guide rounds its start down to the half hour.
+    nonisolated static func epgWindow(_ loading: DateInterval, covers requested: DateInterval) -> Bool {
+        loading.start <= requested.start.addingTimeInterval(3600)
+            && loading.end >= requested.end.addingTimeInterval(-3600)
     }
 
     /// Extend the loaded EPG window forward by `hours`, MERGING the new grid

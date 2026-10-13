@@ -77,6 +77,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// finishes it anyway and holds the grab with nobody to release it.
     static let liveTuneTimeout: TimeInterval = 300
 
+    /// A slow PMS takes 23 to 30s to answer one six-hour grid, and twice that
+    /// for twelve hours, so the default 30s failed about half the time (#338).
+    static let guideTimeout: TimeInterval = 120
+
     // Not private: callers inject a manager (see PlexProvider.init), so tests
     // subclass this to stub responses. App code still uses `.shared`.
     override init() {
@@ -116,12 +120,13 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         _ url: URL,
         method: String = "GET",
         headers: [String: String] = [:],
-        body: Data? = nil
+        body: Data? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> T {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.httpBody = body
-        request.timeoutInterval = defaultTimeout
+        request.timeoutInterval = timeout ?? defaultTimeout
 
         // Default headers
         request.addValue("application/json", forHTTPHeaderField: "Accept")
@@ -140,7 +145,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await (timeout == nil ? session : longHoldSession).data(for: request)
         } catch {
             // Transport-level failures (timeout -1001, connection lost -1005,
             // cannot-connect -1004) previously escaped this function completely
@@ -2080,13 +2085,12 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         serverURL: String,
         authToken: String
     ) async throws -> [PlexLiveTVChannel] {
-        // The grid endpoint returns ALL channels with their info
-        return try await fetchChannelsFromGrid(serverURL: serverURL, authToken: authToken)
+        try await fetchDVRChannels(serverURL: serverURL, authToken: authToken)
     }
 
-    /// Fetch channels from grid endpoint using DVR lineup
-    /// The grid returns programs with channel info embedded in each program's Media array
-    private func fetchChannelsFromGrid(
+    /// Every DVR's channels, from its lineup. The grid carries the same fields
+    /// inside each programme's Media array and is the fallback.
+    private func fetchDVRChannels(
         serverURL: String,
         authToken: String
     ) async throws -> [PlexLiveTVChannel] {
@@ -2148,14 +2152,30 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             let channelVcn: String?  // Visual channel number
         }
 
-        // One grid request per DVR, fired together: each is a six-hour grid
-        // payload, and awaiting them one after another made cold guide load
-        // scale with the number of tuners.
+        // The lineup lists a DVR's channels in a few KB. The grid buries them in
+        // six hours of programmes, which a slow PMS takes 25s to produce (#338).
+        nonisolated struct LineupContainer: Codable {
+            let MediaContainer: LineupMediaContainer
+        }
+        nonisolated struct LineupMediaContainer: Codable {
+            let Channel: [LineupChannel]?
+        }
+        nonisolated struct LineupChannel: Codable {
+            let id: String?
+            let title: String?
+            let callSign: String?
+            let vcn: String?
+            let thumb: String?
+        }
+
+        // One request per DVR, fired together, so a cold load does not scale
+        // with the number of tuners.
         struct DVRGridRequest {
             let dvrKey: String
             let providerPath: String
             let tunerName: String?
             let url: URL
+            let lineupURL: URL
         }
         let requests: [DVRGridRequest] = dvrs.compactMap { dvr in
             guard let lineup = dvr.lineup, let dvrKey = dvr.key else { return nil }
@@ -2171,33 +2191,62 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 URLQueryItem(name: "beginsAt<=", value: "\(sixHoursLater)"),
                 URLQueryItem(name: "endsAt>=", value: "\(now)")
             ]
-            guard let url = components.url else { return nil }
+            guard let url = components.url,
+                  let lineupURL = URL(string: "\(serverURL)/\(providerPath)/lineups/dvr/channels") else { return nil }
             // Named only when there is something to tell apart. One tuner means
             // its tab would list exactly what All Channels already does, so the
             // grouping stays off and the bar is just Favorites + All Channels.
             let tunerName = dvrs.count > 1 ? dvr.guideGroupName : nil
-            return DVRGridRequest(dvrKey: dvrKey, providerPath: providerPath, tunerName: tunerName, url: url)
+            return DVRGridRequest(dvrKey: dvrKey, providerPath: providerPath, tunerName: tunerName,
+                                  url: url, lineupURL: lineupURL)
         }
-        let containers: [GridContainer?] = await fetchConcurrently(
-            requests.map(\.url),
-            headers: plexHeaders(authToken: authToken)
+        let headers = plexHeaders(authToken: authToken)
+        let lineups: [LineupContainer?] = await fetchConcurrently(
+            requests.map(\.lineupURL),
+            headers: headers
         ).map { try? $0.get() }
+        var listings: [[GridMedia]?] = lineups.map { lineup in
+            guard let lineupChannels = lineup?.MediaContainer.Channel, !lineupChannels.isEmpty else { return nil }
+            return lineupChannels.map { channel in
+                GridMedia(
+                    channelCallSign: channel.callSign,
+                    channelIdentifier: channel.id,
+                    channelThumb: channel.thumb,
+                    // The grid's channelTitle is "<number> <name>". Same form
+                    // here, so displayName strips the same thing from either.
+                    channelTitle: channel.title.map { [channel.vcn, $0].compactMap { $0 }.joined(separator: " ") },
+                    channelVcn: channel.vcn
+                )
+            }
+        }
 
-        // Extract unique channels from all programs' Media arrays, across every
-        // DVR. Dedupe is by channel identifier and FIRST WINS: a channel two
-        // tuners both carry is attributed to whichever DVR the server listed
+        // The grid, for any DVR whose lineup gave nothing.
+        let missing = listings.indices.filter { listings[$0] == nil }
+        if !missing.isEmpty {
+            let grids: [GridContainer?] = await fetchConcurrently(
+                missing.map { requests[$0].url },
+                headers: headers,
+                timeout: Self.guideTimeout
+            ).map { try? $0.get() }
+            for (index, grid) in zip(missing, grids) {
+                listings[index] = grid.map { ($0.MediaContainer.Metadata ?? []).flatMap { $0.Media ?? [] } }
+            }
+        }
+
+        // Unique channels across every DVR. Dedupe is by channel identifier and
+        // FIRST WINS: a channel two tuners both carry is attributed to whichever DVR the server listed
         // first, rather than appearing twice under two groups. Results come
         // back in DVR order, so the concurrency does not change who wins.
         var seenChannels = Set<String>()
         var channels: [PlexLiveTVChannel] = []
 
-        for (request, container) in zip(requests, containers) {
+        for (request, listing) in zip(requests, listings) {
             // One unreachable DVR must not cost the user every other tuner's
             // channels, so a failure is logged and skipped rather than thrown.
             // Only a total wipeout surfaces, as an empty list.
-            guard let container else {
+            guard let listing else {
                 let breadcrumb = Breadcrumb(level: .warning, category: "plex_livetv")
-                breadcrumb.message = "Grid fetch failed for one DVR; continuing with the rest"
+                breadcrumb.message = "Channel fetch failed for one DVR; continuing with the rest"
                 breadcrumb.data = [
                     "dvr_key": request.dvrKey,
                     "tuner_name": request.tunerName ?? "unnamed",
@@ -2208,51 +2257,49 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
                 continue
             }
 
-            for program in container.MediaContainer.Metadata ?? [] {
-                for media in program.Media ?? [] {
-                    guard let channelId = media.channelIdentifier,
-                          !seenChannels.contains(channelId) else {
-                        continue
-                    }
-
-                    seenChannels.insert(channelId)
-
-                    let channelTitle = media.channelTitle ?? "Channel \(channelId)"
-                    let channelNumber = media.channelVcn ?? channelId
-
-                    let channel = PlexLiveTVChannel(
-                        ratingKey: channelId,
-                        // Use the DVR's ACTUAL EPG provider (extracted from its
-                        // lineup, e.g. tv.plex.providers.epg.cloud:157). The
-                        // provider was previously hardcoded as epg.xmltv, which
-                        // 400s the transcode start on DVRs using Plex's cloud EPG
-                        // — the tune path pointed at a provider that doesn't exist
-                        // on the server. The DVR key rides inside this path, which
-                        // is how the tune finds the right DVR for the channel.
-                        key: "/\(request.providerPath)/metadata/\(channelId)",
-                        guid: nil,
-                        type: "channel",
-                        title: channelTitle,
-                        summary: nil,
-                        thumb: media.channelThumb,
-                        art: nil,
-                        year: nil,
-                        channelCallSign: media.channelCallSign,
-                        channelIdentifier: channelId,
-                        channelShortTitle: nil,
-                        channelThumb: media.channelThumb,
-                        channelTitle: channelTitle,
-                        channelNumber: channelNumber,
-                        // No direct tuner handoff — all Plex Live TV plays through
-                        // the server (tune → /livetv/sessions).
-                        streamURL: nil,
-                        // Groups the guide by tuner. Assigned here because this is
-                        // the only point that knows which DVR served the lineup.
-                        tunerName: request.tunerName
-                    )
-
-                    channels.append(channel)
+            for media in listing {
+                guard let channelId = media.channelIdentifier,
+                      !seenChannels.contains(channelId) else {
+                    continue
                 }
+
+                seenChannels.insert(channelId)
+
+                let channelTitle = media.channelTitle ?? "Channel \(channelId)"
+                let channelNumber = media.channelVcn ?? channelId
+
+                let channel = PlexLiveTVChannel(
+                    ratingKey: channelId,
+                    // Use the DVR's ACTUAL EPG provider (extracted from its
+                    // lineup, e.g. tv.plex.providers.epg.cloud:157). The
+                    // provider was previously hardcoded as epg.xmltv, which
+                    // 400s the transcode start on DVRs using Plex's cloud EPG
+                    // — the tune path pointed at a provider that doesn't exist
+                    // on the server. The DVR key rides inside this path, which
+                    // is how the tune finds the right DVR for the channel.
+                    key: "/\(request.providerPath)/metadata/\(channelId)",
+                    guid: nil,
+                    type: "channel",
+                    title: channelTitle,
+                    summary: nil,
+                    thumb: media.channelThumb,
+                    art: nil,
+                    year: nil,
+                    channelCallSign: media.channelCallSign,
+                    channelIdentifier: channelId,
+                    channelShortTitle: nil,
+                    channelThumb: media.channelThumb,
+                    channelTitle: channelTitle,
+                    channelNumber: channelNumber,
+                    // No direct tuner handoff — all Plex Live TV plays through
+                    // the server (tune → /livetv/sessions).
+                    streamURL: nil,
+                    // Groups the guide by tuner. Assigned here because this is
+                    // the only point that knows which DVR served the lineup.
+                    tunerName: request.tunerName
+                )
+
+                channels.append(channel)
             }
         }
 
@@ -2274,13 +2321,14 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     /// read as a cancellation, which the guide and Sentry both drop.
     private func fetchConcurrently<T: Decodable & Sendable>(
         _ urls: [URL],
-        headers: [String: String]
+        headers: [String: String],
+        timeout: TimeInterval? = nil
     ) async -> [Result<T, Error>] {
         await withTaskGroup(of: (Int, Result<T, Error>).self) { group in
             for (index, url) in urls.enumerated() {
                 group.addTask {
                     do {
-                        let value: T = try await self.request(url, headers: headers)
+                        let value: T = try await self.request(url, headers: headers, timeout: timeout)
                         return (index, .success(value))
                     } catch {
                         return (index, .failure(error))
@@ -2726,7 +2774,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
         let results: [Result<GridEPGContainer, Error>] = await fetchConcurrently(
             gridURLs,
-            headers: plexHeaders(authToken: authToken)
+            headers: plexHeaders(authToken: authToken),
+            timeout: Self.guideTimeout
         )
         let containers = results.compactMap { try? $0.get() }
         // Every DVR failing is a failure; some failing is a partial guide.

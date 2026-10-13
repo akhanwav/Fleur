@@ -153,6 +153,7 @@ struct WhatsNewView: View {
             "New Skip Back Length setting, separate from Skip Forward.",
             "Fixed videos failing to play on some secure server connections.",
             "Plex Live TV channel names no longer repeat the channel number.",
+            "Fixed the Plex Live TV guide failing to load on slower servers.",
             "Music Now Playing buttons stay visible when focused.",
         ]),
         ("1.0.7 (95)", [
