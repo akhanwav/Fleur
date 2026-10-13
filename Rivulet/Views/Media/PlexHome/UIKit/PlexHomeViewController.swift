@@ -991,7 +991,7 @@ final class PlexHomeViewController: UIViewController {
 
     // MARK: - Search mode
 
-    // Straight port of PlexSearchView's search machinery: 350ms debounce,
+    // Straight port of PlexSearchView's search machinery: a short debounce,
     // token-based race protection, min 2-char query, visible-library result
     // filtering, and recent searches persisted in UserDefaults under the SAME
     // key the SwiftUI page used (recents carry over).
@@ -1010,7 +1010,8 @@ final class PlexHomeViewController: UIViewController {
     private var searchGroupMetas: [HomeSectionID: [PlexMetadata]] = [:]
 
     private static let searchMinQueryLength = 2
-    private static let searchDebounceNs: UInt64 = 350_000_000
+    /// The Apple TV app has none; this spares a remote server a request per key.
+    private static let searchDebounceNs: UInt64 = 100_000_000
     private static let maxRecentSearches = 10
     private static let recentSearchItemsKey = "recentSearchItems"
 
@@ -1043,6 +1044,13 @@ final class PlexHomeViewController: UIViewController {
             (try? JSONEncoder().encode(items)) ?? Data(), forKey: Self.recentSearchItemsKey)
     }
 
+    private func removeRecentSearchItem(_ item: MediaItem) {
+        let items = recentSearchItems.filter { $0.ref != item.ref }
+        UserDefaults.standard.set(
+            (try? JSONEncoder().encode(items)) ?? Data(), forKey: Self.recentSearchItemsKey)
+        reconfigureVisibleSearchCells()
+    }
+
     /// Query updates from `SearchContainerViewController`. Debounced search,
     /// identical to PlexSearchView.scheduleSearch.
     func updateSearchQuery(_ rawQuery: String) {
@@ -1071,7 +1079,7 @@ final class PlexHomeViewController: UIViewController {
         searchTask?.cancel()
         searchToken += 1
         let currentToken = searchToken
-        // Re-render now so the inline "Searching" state appears while debouncing.
+        // Re-render now: "Searching" shows only when there are no results to keep.
         applySnapshot(animated: false)
         searchTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.searchDebounceNs)
@@ -1200,7 +1208,9 @@ final class PlexHomeViewController: UIViewController {
         if trimmedSearchQuery.count < Self.searchMinQueryLength {
             return [.searchPrompt()]
         }
-        if isAwaitingSearchResults || searchError != nil {
+        // A request in flight keeps the previous results on screen, as the
+        // Apple TV app does; the state cell shows only with nothing to keep.
+        if searchError != nil {
             return [.searchState()]
         }
 
@@ -6360,6 +6370,16 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             return
         }
         let section = sectionsSnapshot[indexPath.section]
+        if case .searchPrompt = section.kind {
+            guard presentedViewController == nil,
+                  let recent = (collectionView.cellForItem(at: indexPath) as? SearchRecentsCell)?.focusedRecent
+            else { return }
+            let remove = TileMenuAction(title: "Remove from Recently Searched", systemImage: "xmark") { [weak self] in
+                self?.removeRecentSearchItem(recent.item)
+            }
+            present(TileMenuPopupViewController(sections: [[remove]], sourceFrame: recent.frame), animated: false)
+            return
+        }
         // Watchlist tiles are Discover entries, not library items: they get the
         // row's own menu (More Info + Remove from Watchlist), because the
         // library menu's actions all need a server ratingKey.

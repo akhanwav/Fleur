@@ -33,20 +33,20 @@ final class SearchRecentsCell: UICollectionViewCell {
 
     var onRecentSelected: ((MediaItem) -> Void)?
 
-    /// MEASURED off the Apple TV app's own Recently Searched row (screenshots
-    /// on #292, scaled from its 1400px capture at 0.668 px/pt).
+    /// The Apple TV app's SearchEntityCardCell, read from VideosUI
+    /// (Docs/atv_ref/rea_findings/tv-search.md). Card radius was not found.
     private enum Metrics {
         static let cardWidth: CGFloat = MediaRowMetrics.gridWidth(columns: 3)
-        static let cardHeight: CGFloat = 164
+        static let cardHeight: CGFloat = 160
         static let cardSpacing: CGFloat = MediaRowMetrics.tileGap
         /// Poster inset inside the card. The poster is the card's full height
         /// minus this top and bottom, at the 2:3 poster ratio.
-        static let posterInset: CGFloat = 17
+        static let posterInset: CGFloat = 20
         static let posterHeight: CGFloat = cardHeight - posterInset * 2
         static let posterWidth: CGFloat = (cardHeight - posterInset * 2) * 2 / 3
-        static let posterToText: CGFloat = 25
+        static let posterToText: CGFloat = 20
         static let cardRadius: CGFloat = 20
-        static let posterRadius: CGFloat = 8
+        static let posterRadius: CGFloat = 6
         /// Gap below the keyboard's separator line.
         ///
         /// The search controller already sizes the results view to the area
@@ -63,6 +63,15 @@ final class SearchRecentsCell: UICollectionViewCell {
     private let cardStack = UIStackView()
     /// One per visible card, cancelled on reconfigure/reuse.
     private var artworkTasks: [Task<Void, Never>] = []
+    private var recentItems: [MediaItem] = []
+
+    /// The focused card's item and window frame, for its long-press menu.
+    var focusedRecent: (item: MediaItem, frame: CGRect)? {
+        guard let index = cardStack.arrangedSubviews.firstIndex(where: \.isFocused),
+              let item = recentItems[safe: index] else { return nil }
+        let card = cardStack.arrangedSubviews[index]
+        return (item, card.convert(card.bounds, to: nil))
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -146,6 +155,7 @@ final class SearchRecentsCell: UICollectionViewCell {
 
     func configure(recentItems: [MediaItem]) {
         cancelArtwork()
+        self.recentItems = recentItems
         cardStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let hasRecents = !recentItems.isEmpty
         headerLabel.isHidden = !hasRecents
@@ -190,16 +200,16 @@ final class SearchRecentsCell: UICollectionViewCell {
 
         let title = UILabel()
         title.text = item.title
-        title.font = .systemFont(ofSize: 31, weight: .semibold)
+        title.font = .preferredFont(forTextStyle: .body)
         title.textColor = .white
-        title.numberOfLines = 1
+        title.numberOfLines = 2
         title.lineBreakMode = .byTruncatingTail
 
         let subtitle = UILabel()
         subtitle.text = subtitleText(for: item)
-        subtitle.font = .systemFont(ofSize: 24, weight: .regular)
+        subtitle.font = .preferredFont(forTextStyle: .caption1)
         subtitle.textColor = UIColor.white.withAlphaComponent(0.6)
-        subtitle.numberOfLines = 1
+        subtitle.numberOfLines = 2
         subtitle.lineBreakMode = .byTruncatingTail
 
         let text = UIStackView(arrangedSubviews: [title, subtitle])
@@ -353,15 +363,16 @@ final class SearchStateCell: UICollectionViewCell {
             titleLabel.text = "Searching"
             messageLabel.isHidden = true
             retryButton.isHidden = true
-        case .error(let message):
+        case .error:
             spinner.stopAnimating()
             spinner.isHidden = true
             iconView.isHidden = false
             iconView.image = UIImage(systemName: "exclamationmark.triangle")?
                 .withConfiguration(UIImage.SymbolConfiguration(pointSize: 48, weight: .light))
-            titleLabel.text = "Search Failed"
+            // Apple's wording (VideosUI NO_CONTENT_VIEW_ERROR_*).
+            titleLabel.text = "Search Not Available"
             messageLabel.isHidden = false
-            messageLabel.text = message
+            messageLabel.text = "This request wasn’t completed. Wait a moment and try again."
             retryButton.isHidden = false
         case .noResults:
             spinner.stopAnimating()
