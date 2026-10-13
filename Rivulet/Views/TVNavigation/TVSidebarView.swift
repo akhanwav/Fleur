@@ -39,6 +39,8 @@ struct TVSidebarView: View {
     @AppStorage("displaySize") private var displaySizeRaw = DisplaySize.normal.rawValue
     @State private var selectedTab: SidebarTab = .home
     @State private var showProfilePicker = false
+    /// A profile was entered through the picker; any other close re-presents it.
+    @State private var profileChosen = false
     @State private var showProfileSwitcher = false
     @State private var hasCheckedProfilePicker = false
     @State private var isAwaitingProfileSelection = false
@@ -199,6 +201,7 @@ struct TVSidebarView: View {
                     // rides its 15s safety timeout because hubs, and thus
                     // isHomeContentReady, are deferred until after selection).
                     profileManager.isPresentingLaunchPicker = true
+                    profileChosen = false
                     showProfilePicker = true
                     // Content will load after profile is selected
                     return
@@ -264,15 +267,17 @@ struct TVSidebarView: View {
         .onChange(of: dataStore.libraries.count) { _, _ in applyDebugLaunchTab() }
         // Profile picker overlay (launch-time "Who's Watching")
         .fullScreenCover(isPresented: $showProfilePicker) {
-            ProfilePickerOverlay(isPresented: $showProfilePicker)
+            ProfilePickerOverlay(isPresented: $showProfilePicker, onSelected: { profileChosen = true })
         }
         .onChange(of: showProfilePicker) { _, isShowing in
             if !isShowing {
-                // Menu closed the picker with content still withheld: ask again.
-                guard !profileManager.needsProfileSelection else {
+                // The picker is a hard gate: closed without a profile entered
+                // (or with content still withheld), ask again.
+                guard profileChosen, !profileManager.needsProfileSelection else {
                     showProfilePicker = true
                     return
                 }
+                profileChosen = false
                 // Profile selected, unblock content
                 isAwaitingProfileSelection = false
                 profileManager.isPresentingLaunchPicker = false
@@ -297,6 +302,8 @@ struct TVSidebarView: View {
                 MusicQueue.shared.stop()
                 Self.rootViewController()?.dismiss(animated: false)
             }
+            // Withheld content only clears when a profile is entered.
+            profileChosen = !needed
             showProfilePicker = needed
         }
         // Compact profile switcher popup (from sidebar account tab)
