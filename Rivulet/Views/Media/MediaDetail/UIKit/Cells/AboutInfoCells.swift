@@ -15,8 +15,8 @@
 //     Accessibility, the latter two derived from the item's media streams.
 //
 //  Both are single full-width cells in the below-fold compositional collection.
-//  They are focusable (a subtle lift) so the focus engine can scroll to them in
-//  the focus-driven below-fold (FocusScrollControlledCollectionView).
+//  Neither cell is focusable: each hosts focusable cards, which is what the
+//  focus-driven below-fold (FocusScrollControlledCollectionView) scrolls to.
 //
 
 import UIKit
@@ -139,14 +139,14 @@ final class AboutCollectionCell: UICollectionViewCell {
             leftCard.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 14),
             leftCard.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             leftCard.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            // Left margin (56) + synopsis + gap + advisory = 960 (half the 1920
-            // screen). 56 + 620 + 24 + 260 = 960.
-            leftCard.widthAnchor.constraint(equalToConstant: 620),
+            // On the six-column grid: the synopsis spans two columns, the
+            // advisory one.
+            leftCard.widthAnchor.constraint(equalToConstant: MediaRowMetrics.gridWidth(columns: 6, span: 2)),
 
             rightCard.topAnchor.constraint(equalTo: leftCard.topAnchor),
-            rightCard.leadingAnchor.constraint(equalTo: leftCard.trailingAnchor, constant: 24),
+            rightCard.leadingAnchor.constraint(equalTo: leftCard.trailingAnchor, constant: MediaRowMetrics.tileGap),
             rightCard.bottomAnchor.constraint(equalTo: leftCard.bottomAnchor),
-            rightCard.widthAnchor.constraint(equalToConstant: 260),
+            rightCard.widthAnchor.constraint(equalToConstant: MediaRowMetrics.gridWidth(columns: 6)),
 
             titleLabel.topAnchor.constraint(equalTo: leftCard.topAnchor, constant: 22),
             titleLabel.leadingAnchor.constraint(equalTo: leftCard.leadingAnchor, constant: 24),
@@ -223,33 +223,54 @@ final class AboutCollectionCell: UICollectionViewCell {
 final class InfoColumnsCollectionCell: UICollectionViewCell {
     static let reuseID = "InfoColumnsCollectionCell"
 
-    private let columns = InfoColumnsView()
+    private let columns = InfoColumnsView(style: .footer)
+    private var detail: MediaItemDetail?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        // The cell spans the collection edge to edge, so its own fill is the band.
+        contentView.backgroundColor = UIColor(white: 0, alpha: 0.2)
         columns.translatesAutoresizingMaskIntoConstraints = false
+        columns.onSelect = { [weak self] in self?.presentFullInfo() }
         contentView.addSubview(columns)
         NSLayoutConstraint.activate([
-            columns.topAnchor.constraint(equalTo: contentView.topAnchor),
-            columns.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            columns.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            columns.topAnchor.constraint(equalTo: contentView.topAnchor, constant: Self.topInset),
+            // The cell spans the collection, which overhangs the screen's left
+            // edge when expanded: the rows' own leading rests it on the margin.
+            columns.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: BelowFoldCollectionView.rowLeading),
+            columns.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -PreviewCarouselGeometry.expandedChromeInset),
             columns.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor),
         ])
+    }
+
+    /// 14 puts the 38 pt header's baseline 50 below the band top.
+    private static let topInset: CGFloat = 14
+    private static let bottomInset: CGFloat = 56
+
+    /// Band height that fits `detail`'s tallest column in a row `columnsWidth` wide.
+    static func height(for detail: MediaItemDetail, columnsWidth: CGFloat) -> CGFloat {
+        let sizing = InfoColumnsView(style: .footer)
+        sizing.configure(detail: detail)
+        let fitted = sizing.systemLayoutSizeFitting(
+            CGSize(width: columnsWidth, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+        return topInset + fitted.height.rounded(.up) + bottomInset
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(detail: MediaItemDetail) { columns.configure(detail: detail) }
-
-    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
-        let focused = context.nextFocusedView === self
-        coordinator.addCoordinatedAnimations { [weak self] in
-            self?.contentView.backgroundColor = UIColor(white: 1, alpha: focused ? 0.05 : 0)
-        }
+    func configure(detail: MediaItemDetail) {
+        self.detail = detail
+        columns.configure(detail: detail)
     }
-    override func prepareForReuse() {
-        super.prepareForReuse()
-        contentView.backgroundColor = .clear
+
+    /// Select on a column opens the same full-info popup as the hero Info button.
+    private func presentFullInfo() {
+        guard let detail, var top = window?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        let popup = InfoPopupViewController(content: InfoPopupContent.fullInfo(detail: detail),
+                                            width: 900, height: 900, scrollable: true)
+        top.present(popup, animated: true)
     }
 }
 
@@ -260,16 +281,23 @@ final class InfoColumnsView: UIView {
     private let languages = InfoColumnView()
     private let accessibility = InfoColumnView()
     private let row = UIStackView()
+    private let style: InfoColumnView.Style
+    /// Select on a column's card (footer style only).
+    var onSelect: (() -> Void)?
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    init(style: InfoColumnView.Style = .standard) {
+        self.style = style
+        super.init(frame: .zero)
         row.translatesAutoresizingMaskIntoConstraints = false
         row.axis = .horizontal
         row.distribution = .fillEqually
         row.alignment = .top
-        row.spacing = 48
+        row.spacing = style.columnGap
         addSubview(row)
-        [information, languages, accessibility].forEach { row.addArrangedSubview($0) }
+        [information, languages, accessibility].forEach { column in
+            column.onSelect = { [weak self] in self?.onSelect?() }
+            row.addArrangedSubview(column)
+        }
         NSLayoutConstraint.activate([
             row.topAnchor.constraint(equalTo: topAnchor),
             row.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -288,7 +316,7 @@ final class InfoColumnsView: UIView {
         if let r = detail.contentRating, !r.isEmpty { info.append(("Rated", r)) }
         if !detail.genres.isEmpty { info.append(("Genres", detail.genres.prefix(4).joined(separator: ", "))) }
         if !detail.studios.isEmpty { info.append(("Studio", detail.studios.prefix(2).joined(separator: ", "))) }
-        information.configure(title: "Information", rows: info)
+        information.configure(title: "Information", rows: info, style: style)
 
         // Languages — from the first media source's tracks.
         let source = detail.primarySource
@@ -305,7 +333,7 @@ final class InfoColumnsView: UIView {
             if !names.isEmpty { langs.append(("Subtitles", names.joined(separator: ", "))) }
         }
         if langs.isEmpty { langs.append(("Audio", "Unknown")) }
-        languages.configure(title: "Languages", rows: langs)
+        languages.configure(title: "Languages", rows: langs, style: style)
 
         // Accessibility — SDH / AD presence from the tracks.
         var access: [(String, String)] = []
@@ -316,7 +344,7 @@ final class InfoColumnsView: UIView {
         if hasSDH { access.append(("SDH", "Subtitles for the deaf and hard of hearing are available.")) }
         if hasAD { access.append(("AD", "Audio descriptions are available.")) }
         if access.isEmpty { access.append(("", "No accessibility features detected.")) }
-        accessibility.configure(title: "Accessibility", rows: access)
+        accessibility.configure(title: "Accessibility", rows: access, style: style)
     }
 
     private func uniqueOrdered(_ values: [String]) -> [String] {
@@ -341,14 +369,55 @@ final class InfoColumnsView: UIView {
 /// One labelled column (header + stacked label/value pairs). Reused by the
 /// 3-column below-fold AND the vertically-stacked Info popup.
 final class InfoColumnView: UIView {
+    /// Type and spacing for one use of the column. `standard` is the Info popup
+    /// and the episode page; `footer` is the movie/show page's bottom band.
+    nonisolated struct Style {
+        var headerFont = UIFont.systemFont(ofSize: 40, weight: .bold)
+        var headerColor = UIColor.white
+        var headerGap: CGFloat = 20
+        var labelFont = UIFont.systemFont(ofSize: 21, weight: .semibold)
+        var labelColor = UIColor.white.withAlphaComponent(0.5)
+        var valueFont = UIFont.systemFont(ofSize: 26, weight: .semibold)
+        var valueColor = UIColor.white.withAlphaComponent(0.9)
+        var valueLines = 0
+        var valueLineSpacing: CGFloat = 0
+        var pairGap: CGFloat = 2
+        var rowGap: CGFloat = 14
+        var columnGap: CGFloat = 48
+        /// Wraps the rows (not the header) in a focusable card.
+        var focusCard = false
+
+        static let standard = Style()
+        static let footer = Style(
+            headerFont: .systemFont(ofSize: 38, weight: .bold),
+            headerColor: UIColor.white.withAlphaComponent(0.7),
+            headerGap: 30,
+            labelFont: .systemFont(ofSize: 23, weight: .medium),
+            labelColor: UIColor.white.withAlphaComponent(0.3),
+            valueFont: .systemFont(ofSize: 23, weight: .medium),
+            valueColor: UIColor.white.withAlphaComponent(0.7),
+            valueLines: 5,
+            valueLineSpacing: 2,
+            pairGap: 9,
+            rowGap: 30,
+            columnGap: 50,
+            focusCard: true)
+    }
+
+    /// How far the focus card reaches past the rows on every side.
+    private static let cardOutset: CGFloat = 15
+
     private let stack = UIStackView()
+    private var stackLeading: NSLayoutConstraint!
+    private var stackTrailing: NSLayoutConstraint!
+    /// Select on the rows card (footer style only).
+    var onSelect: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.axis = .vertical
         stack.alignment = .fill
-        stack.spacing = 14
         addSubview(stack)
         // Bottom pinned with `=` at high (not required) priority so the column
         // HUGS its content when nothing else drives its height (the vertically-
@@ -356,44 +425,97 @@ final class InfoColumnView: UIView {
         // required equal-height stretch outranks this and still wins.
         let bottom = stack.bottomAnchor.constraint(equalTo: bottomAnchor)
         bottom.priority = .defaultHigh
+        stackLeading = stack.leadingAnchor.constraint(equalTo: leadingAnchor)
+        stackTrailing = stack.trailingAnchor.constraint(equalTo: trailingAnchor)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stackLeading,
+            stackTrailing,
             bottom,
         ])
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(title: String, rows: [(String, String)]) {
+    func configure(title: String, rows: [(String, String)], style: Style = .standard) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let header = UILabel()
-        header.font = .systemFont(ofSize: 40, weight: .bold)
-        header.textColor = .white
+        header.font = style.headerFont
+        header.textColor = style.headerColor
         header.text = title
-        stack.addArrangedSubview(header)
-        stack.setCustomSpacing(20, after: header)
+
+        // The card overhangs the column, so the stack does too and the header
+        // is inset back to the column edge.
+        let outset = style.focusCard ? Self.cardOutset : 0
+        stackLeading.constant = -outset
+        stackTrailing.constant = outset
+
+        let rowStack: UIStackView
+        if style.focusCard {
+            let headerBox = Self.inset(header, by: .init(top: 0, left: outset, bottom: 0, right: outset))
+            rowStack = UIStackView()
+            rowStack.axis = .vertical
+            let card = AboutCardControl()
+            card.restAlpha = 0
+            card.layer.cornerRadius = 24
+            card.onSelect = { [weak self] in self?.onSelect?() }
+            rowStack.translatesAutoresizingMaskIntoConstraints = false
+            card.addSubview(rowStack)
+            NSLayoutConstraint.activate([
+                rowStack.topAnchor.constraint(equalTo: card.topAnchor, constant: outset),
+                rowStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: outset),
+                rowStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -outset),
+                rowStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -outset),
+            ])
+            stack.addArrangedSubview(headerBox)
+            stack.setCustomSpacing(style.headerGap - outset, after: headerBox)
+            stack.addArrangedSubview(card)
+        } else {
+            rowStack = stack
+            stack.addArrangedSubview(header)
+            stack.setCustomSpacing(style.headerGap, after: header)
+        }
+        rowStack.spacing = style.rowGap
 
         for (label, value) in rows {
             let pair = UIStackView()
             pair.axis = .vertical
-            pair.spacing = 2
+            pair.spacing = style.pairGap
             if !label.isEmpty {
                 let l = UILabel()
-                l.font = .systemFont(ofSize: 21, weight: .semibold)
-                l.textColor = UIColor.white.withAlphaComponent(0.5)
+                l.font = style.labelFont
+                l.textColor = style.labelColor
                 l.text = label
                 pair.addArrangedSubview(l)
             }
             let v = UILabel()
-            v.font = .systemFont(ofSize: 26, weight: .semibold)
-            v.textColor = UIColor.white.withAlphaComponent(0.9)
-            v.numberOfLines = 0
-            v.text = value
+            v.font = style.valueFont
+            v.textColor = style.valueColor
+            v.numberOfLines = style.valueLines
+            if style.valueLineSpacing > 0 {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.lineSpacing = style.valueLineSpacing
+                paragraph.lineBreakMode = .byTruncatingTail
+                v.attributedText = NSAttributedString(string: value, attributes: [.paragraphStyle: paragraph])
+            } else {
+                v.text = value
+            }
             pair.addArrangedSubview(v)
-            stack.addArrangedSubview(pair)
+            rowStack.addArrangedSubview(pair)
         }
+    }
+
+    private static func inset(_ view: UIView, by insets: UIEdgeInsets) -> UIView {
+        let box = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(view)
+        NSLayoutConstraint.activate([
+            view.topAnchor.constraint(equalTo: box.topAnchor, constant: insets.top),
+            view.leadingAnchor.constraint(equalTo: box.leadingAnchor, constant: insets.left),
+            view.trailingAnchor.constraint(equalTo: box.trailingAnchor, constant: -insets.right),
+            view.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -insets.bottom),
+        ])
+        return box
     }
 }
 
@@ -407,19 +529,6 @@ private func sectionHeaderLabel(_ text: String) -> UILabel {
     return l
 }
 
-/// Full-width darkened band behind the Information / Languages / Accessibility
-/// area. Added as a SECTION BACKGROUND decoration so it spans edge-to-edge
-/// (the full section rect) even though the columns themselves are inset.
-final class InfoBandDecorationView: UICollectionReusableView {
-    static let kind = "infoBand"
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        backgroundColor = UIColor(white: 0, alpha: 0.28)
-    }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-}
-
 // MARK: - Focusable About card
 
 /// A focusable About card (synopsis or advisory). Selecting it opens the matching
@@ -431,10 +540,14 @@ final class AboutCardControl: UIControl {
         didSet { if selectable != oldValue { setNeedsFocusUpdate() } }
     }
     override var canBecomeFocused: Bool { selectable }
+    /// Fill alpha when not focused. 0 = no card at rest (the footer columns).
+    var restAlpha: CGFloat = 0.06 {
+        didSet { backgroundColor = UIColor(white: 1, alpha: restAlpha) }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = UIColor(white: 1, alpha: 0.06)
+        backgroundColor = UIColor(white: 1, alpha: restAlpha)
         layer.cornerRadius = 16
         layer.cornerCurve = .continuous
         addTarget(self, action: #selector(fire), for: .primaryActionTriggered)
@@ -463,7 +576,7 @@ final class AboutCardControl: UIControl {
         let focused = (context.nextFocusedView === self)
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }
-            self.backgroundColor = UIColor(white: 1, alpha: focused ? 0.14 : 0.06)
+            self.backgroundColor = UIColor(white: 1, alpha: focused ? 0.14 : self.restAlpha)
             self.transform = focused ? CGAffineTransform(scaleX: 1.02, y: 1.02) : .identity
         }
     }

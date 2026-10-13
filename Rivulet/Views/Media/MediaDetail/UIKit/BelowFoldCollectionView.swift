@@ -218,7 +218,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     }
 
     private func makeLayout() -> UICollectionViewCompositionalLayout {
-        let layout = UICollectionViewCompositionalLayout { [weak self] index, _ in
+        let layout = UICollectionViewCompositionalLayout { [weak self] index, env in
             guard let self, self.sectionKinds.indices.contains(index) else { return nil }
             // The FIRST section is the "primary peek row" — Episodes for shows,
             // Related for movies. A large TOP inset on it provides the carousel-
@@ -277,13 +277,19 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     itemW: Self.castWidth,
                     itemH: 355,
                     gap: MediaRowMetrics.tileGap,   // six across on the grid, the seventh peeking
-                    header: true
+                    header: true,
+                    // Primary on a title with no extras or related: same peek,
+                    // less the header gap, so the strip is the cast row.
+                    topInset: isPrimary ? max(0, peek - 16) : 0
                 )
-            case .about: return self.fullWidthSection(height: 370)
-            case .info:  return self.fullWidthSection(height: 460, band: true)
+            case .about: return self.fullWidthSection(height: 370, topInset: isPrimary ? peek : 0)
+            case .info:
+                // Sized to its rows, so a short title leaves no empty band below them.
+                let columnsWidth = env.container.contentSize.width - Self.rowLeading - Self.rowTrailing
+                let height = self.detail.map { InfoColumnsCollectionCell.height(for: $0, columnsWidth: columnsWidth) }
+                return self.fullWidthSection(height: height ?? 605, band: true)
             }
         }
-        layout.register(InfoBandDecorationView.self, forDecorationViewOfKind: InfoBandDecorationView.kind)
         return layout
     }
 
@@ -315,7 +321,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     /// A single full-width block (About / Info columns) — no orthogonal scroll,
     /// left/right gutters matching the rails.
-    private func fullWidthSection(height: CGFloat, band: Bool = false) -> NSCollectionLayoutSection {
+    private func fullWidthSection(height: CGFloat, band: Bool = false,
+                                  topInset: CGFloat = 0) -> NSCollectionLayoutSection {
         let item = NSCollectionLayoutItem(layoutSize: .init(
             widthDimension: .fractionalWidth(1), heightDimension: .absolute(height)))
         let group = NSCollectionLayoutGroup.horizontal(
@@ -323,12 +330,12 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
         section.contentInsetsReference = .none
-        section.contentInsets = .init(top: 24, leading: Self.rowLeading, bottom: 56,
+        section.contentInsets = .init(top: 24 + topInset, leading: Self.rowLeading, bottom: 56,
                                       trailing: Self.rowTrailing)
         if band {
-            // Full-width darkened band behind the section (spans the section rect,
-            // edge to edge — the columns stay inset via contentInsets).
-            section.decorationItems = [.background(elementKind: InfoBandDecorationView.kind)]
+            // The cell paints the band itself, so it spans the whole collection
+            // width and insets its own content.
+            section.contentInsets = .zero
         }
         return section
     }
@@ -396,7 +403,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         if header {
             let headerItem = NSCollectionLayoutBoundarySupplementaryItem(
                 layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .absolute(headerHeight)),
-                elementKind: UICollectionView.elementKindSectionHeader, alignment: .top)
+                elementKind: UICollectionView.elementKindSectionHeader, alignment: .top,
+                // The section's top inset does not move its header. Offset, the
+                // header sits above that point and reserves no height of its own.
+                absoluteOffset: CGPoint(x: 0, y: topInset))
             // Do not apply the row leading again here. The section already owns
             // the leading inset; adding it to the boundary header double-indents
             // titles away from their cards.
@@ -1126,6 +1136,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // Same answer for a different reason: the others defer to focusable
         // subviews, the divider has none and is never a focus stop at all.
         case .seasonDivider: return false
+        // The footer's three columns are the focus stops, not the cell.
+        case .info: return false
         default: return true
         }
     }
