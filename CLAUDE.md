@@ -1,6 +1,6 @@
 # Rivulet - Claude Context
 
-Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells, Music, and Live TV slots.
+Rivulet is a tvOS media client for Plex and IPTV. The primary surfaces (Home, Library, Search, Discover, Media Detail, the preview carousel, Person detail, Music, and the player chrome) are **UIKit**, as is Settings; SwiftUI remains for thin navigation shells and Live TV slots.
 
 **UIKit is the default. Do not add SwiftUI to a primary surface.** When you find SwiftUI in one, assume it is a leftover and check reachability before building on it.
 
@@ -90,15 +90,15 @@ Rivulet/                # The tvOS app — everything below.
 │   │   │               #   pills (canonical player chrome, cloned from AVKit; DEBUG AVKitScrubProbe measures it),
 │   │   │               #   Insights* views (in-player cast/trivia pane; backed by Services/Insights + TMDB)
 │   │   └── PostVideo/  # Post-playback summary overlays
-│   ├── Media/          # PreviewContext, HeroBackdropSupport, SharedMediaComponents,
-│   │                   #   FocusScrollMotion
+│   ├── Media/          # PreviewContext, HeroBackdropSupport, FocusScrollMotion
 │   │   ├── UIKit/, PlexHome/UIKit/, MediaDetail/UIKit/, Person/UIKit/, Library/UIKit/, PreviewCarousel/UIKit/
 │   │   │              #   — the canonical UIKit home/detail/library/person/carousel surfaces
 │   │   └── Hero/       # HeroPlaySession + hero support (SwiftUI HeroBackdropLayer/OverlayContent removed)
-│   ├── Music/          # MusicHomeView, MusicAlbumDetailView, MusicArtistDetailView,
-│   │                   #   MusicNowPlayingView, MusicQueueListView, MusicQueueCarousel,
-│   │                   #   MusicPlaylistView, MusicLyricsView, MusicVisualizerView
-│   │   └── Components/ # MusicProgressBar, MusicPosterCard, MusicShelfRow
+│   ├── Music/UIKit/    # MusicLibraryViewController (+ MusicLibrarySidebarView, MusicBrowseViewController),
+│   │                   #   MusicAlbumViewController (album and playlist), MusicArtistViewController,
+│   │                   #   MusicNowPlayingViewController (+ MusicQueueStripView, MusicLyricsPaneView),
+│   │                   #   MusicChrome (the shared primitives), MusicLockupCell, MusicTrackRowCell,
+│   │                   #   MusicMenus, MusicPresenter. A measured clone of Apple Music on tvOS 26.
 │   ├── Discover/       # DiscoverViewModel (SwiftUI Discover* views removed; UIKit home renders Discover)
 │   ├── LiveTV/         # EPGGuideView + GuideLayoutView (56-style guide), LiveChannelsPaneView,
 │   │                   #   LiveTVAetherPlayerViewController (UIKit live rail), LiveTVContainerView,
@@ -232,7 +232,7 @@ reach for on its own.
 
 **On the primary (UIKit) surfaces, focus is the UIKit focus engine**: `preferredFocusEnvironments`, `didUpdateFocus`, `setNeedsFocusUpdate`, and `pressesBegan` for Siri Remote input. Use the `rivulet-tvos-uikit` skill before writing or debugging any of it — the focus/press/morph traps there are already solved and are not guessable.
 
-The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Music, Live TV slots, nav shells). No custom focus scope manager; isolation comes from system mechanisms:
+The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Live TV slots, nav shells). No custom focus scope manager; isolation comes from system mechanisms:
 
 - **`fullScreenCover`** — automatic focus isolation for overlays/popups
 - **`TabView` with `sidebarAdaptable`** — system-managed sidebar/content focus
@@ -266,7 +266,8 @@ focusless AND single-transport, or when a needed hand-off is press-only.
   (`Services/Input/`). One call installs arrow-press taps, optional holds at
   `InputConfig.holdThreshold`, and `.indirect` swipe recognizers, funneled
   into one callback, so one transport cannot be adopted without the other.
-  Adopters: `LiveTVPressCatcher`, `InfoPopupViewController`.
+  Adopters: `LiveTVPressCatcher`, `InfoPopupViewController`, Music's Now
+  Playing anchor.
 - **A sometimes-focusable surface claiming swipes must gate in
   `gestureRecognizerShouldBegin`, never by bailing inside the handler.** A
   recognizer that begins has already cancelled the focus engine's move, so a
@@ -283,6 +284,16 @@ focusless AND single-transport, or when a needed hand-off is press-only.
   Live TV guide (`EPGGuideView`) and the player's content anchor. The
   player's info panes don't need it: a `UIFocusGuide` between the pills and
   the pane carries Up and Down.
+- **A focusless surface that hands some touches to another recognizer passes
+  `swipeGate`.** The focusless binding claims its swipes unconditionally
+  unless `swipeGate` is given; then each swipe asks it in
+  `gestureRecognizerShouldBegin`. Music's Now Playing anchor is the adopter:
+  over loaded lyrics with the controls hidden, vertical touches belong to one
+  indirect pan that drags the lyric column, so the Up and Down swipes decline
+  exactly when that pan may begin (one predicate, `lyricsBrowsable`).
+  `onHoldEnd` reports a hold's release so a repeat can stop. Lyric browsing
+  adds no focus item: `MusicLyricsPaneView` stays non-interactive, and showing
+  the controls ends browsing.
 - **Do not migrate an already dual-transport surface onto the binding.** It
   changes nothing at runtime and splits a tuned interaction across two
   mechanisms. Settings reorder (grab-gated press taps + swipes) stays
@@ -347,7 +358,9 @@ focusless AND single-transport, or when a needed hand-off is press-only.
 
 The canonical menu is therefore hand-built: a plain `UILongPressGestureRecognizer` (needs a simultaneous-permissive delegate, or the collection view's own press recognizers force it to fail) feeding `TileMenuPopupViewController`, with actions built as `[[TileMenuAction]]` (inner arrays = divider-separated groups). `UIAction` is useless here — its handler can't be invoked programmatically. Builders live in `PlexHomeViewController.tileMenuSections`.
 
-SwiftUI's `.contextMenu` *does* still work (verified in Music) — the tvOS 26 breakage is UIKit-only. But do not reach for it on a UIKit surface: hosting each tile to get it re-introduces the per-cell `UIHostingController` the UIKit migration removed for its measured hitch cost. Music is now its only user.
+SwiftUI's `.contextMenu` *does* still work — the tvOS 26 breakage is UIKit-only. But do not reach for it on a UIKit surface: hosting each tile to get it re-introduces the per-cell `UIHostingController` the UIKit migration removed for its measured hitch cost. Nothing in the tvOS app uses it now.
+
+**`UIButton.menu` with `showsMenuAsPrimaryAction = true` does work on tvOS 26** (verified in the tvOS 26.5 simulator, not yet on a device). Select opens the system glass menu, with checkmarks, subtitle rows and submenus, and Menu closes only the menu. Music uses it for every "..." button and for Sort and Filter (`MusicMenus.uiMenu`; Sort and Filter in `MusicBrowseViewController.refreshMenus`). Only long press needs the hand-built popup.
 
 ### Video Player Architecture
 
@@ -509,6 +522,37 @@ both **dead** (no callers / no posters), orphaned when the SwiftUI detail view
 was deleted — don't revive either, and don't reintroduce optimistic Continue
 Watching mutation from a shelf (reverted in `90bfd2b` for focus reasons).
 
+### Content margin and tile grid
+
+Every media surface (Home hero and shelves, library and watchlist grids, Search,
+Discover, Person, the expanded detail with its below-fold rows and footer) rests
+on the Apple TV app's grid, read from its binary (`Docs/atv_ref/REA_NOTES.md` Q2):
+an **80 pt** side margin, **40 pt** between tiles, and a tile width that divides
+the rest by the column count (`MediaRowMetrics.gridWidth`: 6 across = 260 for
+posters and cast, 5 = 320 for Continue Watching, 4 = 410 for episodes, 3 = 560).
+`MediaRowMetrics.rowLeading` is the one margin, and `tileGap` the one gap. Do not
+write either number anywhere else.
+
+- **The grid numbers are ARTWORK numbers; a cell is the lockup's frame.**
+  `TVPosterView` and `TVCardView` rest their artwork short of their frame and grow
+  into it on focus, so `MediaRowMetrics.Tile` derives the frame, the spacing
+  between frames and the frame inset that put the artwork on the grid. Size a
+  cell from `Tile.frame`, never from the artwork width.
+- **The collapsed carousel card is the one exception to 80**: its content sits 160
+  from the screen edge (120 card inset + 40), `PreviewCarouselGeometry.collapsedChromeInset`.
+  The below-fold collection rests there untransformed and is pulled left by the
+  difference on expand. Its sections set `contentInsetsReference = .none`: the
+  collection's safe area changes with that pull, and a section measured from it
+  moves outside the morph's clock.
+- **`ShelfRowCell` shelves land on the grid exactly; the detail's episode, cast and
+  trailer rails do not.** Those are orthogonal sections the focus engine scrolls:
+  they rest on the margin, but a mid-rail landing is the engine's (measured: the
+  focused view flush with x 1840 going right, about 80 pt past the margin coming
+  back left). Insets and in-content padding do not change that; exact landings
+  there mean hosting the rail the way `ShelfRowCell` does.
+- Music (already at 80), Live TV (`liveLeading`, `EPGTheme.pageMargin`), Settings
+  and the sidebar keep margins of their own.
+
 ### Glass UI Style
 
 All focusable rows use consistent styling (see `Docs/DESIGN_GUIDE.md`):
@@ -629,7 +673,8 @@ updates as the user moves focus between rows.
 
 ### Image Loading
 
-Always use `CachedAsyncImage` for remote images:
+UIKit surfaces load remote images through `ImageCacheManager` (Music: `MusicChrome.loadArtwork`).
+The remaining SwiftUI views use `CachedAsyncImage`:
 ```swift
 CachedAsyncImage(url: imageURL) { phase in
     switch phase {
@@ -713,6 +758,10 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 | Live TV multiview (tiles bind the engine surface) | `Views/LiveTV/UIKit/LiveMultiviewViewController.swift` |
 | Routing decisions | `Services/Plex/Playback/Pipeline/ContentRouter.swift` |
 | Aether render surface | `Views/Player/Aether/AetherVideoSurfaceView.swift` |
+| Music library (sidebar + browse pane) | `Views/Music/UIKit/MusicLibraryViewController.swift` |
+| Music Now Playing | `Views/Music/UIKit/MusicNowPlayingViewController.swift` |
+| Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
+| Music menus | `Views/Music/UIKit/MusicMenus.swift` |
 
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
@@ -819,9 +868,8 @@ returned all 50 items (75KB); adding `X-Plex-Container-Start=0` returned one
 (1.7KB). So a `limit:` argument that only sets the size parameter silently does
 nothing, and the caller pays for the full page. `getRecentlyAdded` has shipped
 that way, which is why its `start` is an optional parameter rather than always 0:
-`PlexProvider.recentlyAdded` and `PlexMusicProvider.recentlyAddedAlbums` were
-tuned against the over-fetch, and the music one filters `type == "album"` out of
-it, so making the limit work would shrink its results.
+`PlexProvider.recentlyAdded` was tuned against the over-fetch, so making the
+limit work would shrink its results.
 
 **Neither `updatedAt` nor `scannedAt` on `/library/sections` detects new content.**
 On the same server a section's `updatedAt` was six months stale with items added
