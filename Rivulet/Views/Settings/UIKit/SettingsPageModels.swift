@@ -250,8 +250,8 @@ enum SettingsContent {
             SettingsRowItem(id: "cat_playback",   title: "Playback",   kind: .navigation(.playback)),
             // Music settings withdrawn until the audio features behind them
             // exist — all three rows were no-ops (see the `music` builder).
-            // Music BROWSING is unaffected: the sidebar still shows
-            // MusicHomeView for every visible Plex music library.
+            // Music BROWSING is unaffected: the sidebar still shows the
+            // Music library for every visible Plex music library.
 //            SettingsRowItem(id: "cat_music",      title: "Music",      kind: .navigation(.music)),
             SettingsRowItem(id: "cat_liveTV",     title: "Live TV",    kind: .navigation(.liveTV)),
             SettingsRowItem(id: "cat_servers",    title: "Servers",    kind: .navigation(.servers)),
@@ -505,8 +505,8 @@ enum SettingsContent {
     ///     playback has no crossfade to configure.
     ///   - Loudness Normalization gated `MusicAudioProcessor.adjustedVolume(for:)`,
     ///     which has no callers.
-    ///   - Audio Quality Badges gated `AudioQualityBadge`, a view that is never
-    ///     instantiated anywhere.
+    ///   - Audio Quality Badges gated `AudioQualityBadge`, a view that was never
+    ///     instantiated and has since been deleted.
     /// Restore the rows below once one of those is actually wired up, and fix
     /// the crossfade key/type mismatch when you do.
     private static var music: [SettingsRowItem] {

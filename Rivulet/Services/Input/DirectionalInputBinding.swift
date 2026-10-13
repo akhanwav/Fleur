@@ -32,6 +32,10 @@
 //  pattern) is fine; sibling focus targets are not. If the host surface is
 //  only sometimes focusless, mount the binding only during that state.
 //
+//  The focusless form claims its swipes unconditionally unless `swipeGate` is
+//  given: that is for a surface that hands a direction's touches to another
+//  recognizer in some state.
+//
 
 import UIKit
 
@@ -65,28 +69,34 @@ final class DirectionalInputBinding: NSObject {
     /// Arrow press held past `InputConfig.holdThreshold` (press path only —
     /// a touch surface expresses "hold" as repeated swipes instead).
     private let onHold: ((Direction) -> Void)?
-    /// Gate for the `gatedSwipesOn` variant, consulted in
-    /// `gestureRecognizerShouldBegin`. nil on the focusless variant, whose
-    /// swipes are claimed unconditionally.
+    /// A held arrow press let go, or cancelled.
+    private let onHoldEnd: ((Direction) -> Void)?
+    /// Gate for the swipes, consulted in `gestureRecognizerShouldBegin`. nil on
+    /// a focusless binding without a `swipeGate`, whose swipes are claimed
+    /// unconditionally.
     private let shouldHandle: ((Direction) -> Bool)?
 
     private var directionByRecognizer: [ObjectIdentifier: Direction] = [:]
 
     /// Installs recognizers for `directions` on `view`. Directions listed in
     /// `holds` also get a long-press recognizer whose `.began` fires `onHold`
-    /// (their taps then only fire on release before the hold threshold).
-    /// Keep the binding alive for the life of the view (store it on the
+    /// (their taps then only fire on release before the hold threshold) and
+    /// whose release fires `onHoldEnd`. With a `swipeGate`, a swipe it declines
+    /// never begins. Keep the binding alive for the life of the view (store it on the
     /// owning controller).
     init(
         view: UIView,
         directions: [Direction],
         holds: [Direction] = [],
         onTap: @escaping (Direction) -> Void,
-        onHold: ((Direction) -> Void)? = nil
+        onHold: ((Direction) -> Void)? = nil,
+        onHoldEnd: ((Direction) -> Void)? = nil,
+        swipeGate: ((Direction) -> Bool)? = nil
     ) {
         self.onTap = onTap
         self.onHold = onHold
-        self.shouldHandle = nil
+        self.onHoldEnd = onHoldEnd
+        self.shouldHandle = swipeGate
         super.init()
 
         for direction in directions {
@@ -108,6 +118,7 @@ final class DirectionalInputBinding: NSObject {
             swipe.direction = direction.swipeDirection
             swipe.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.indirect.rawValue)]
             swipe.allowedPressTypes = []
+            if swipeGate != nil { swipe.delegate = self }
             view.addGestureRecognizer(swipe)
             directionByRecognizer[ObjectIdentifier(swipe)] = direction
         }
@@ -132,6 +143,7 @@ final class DirectionalInputBinding: NSObject {
     ) {
         self.onTap = onSwipe
         self.onHold = nil
+        self.onHoldEnd = nil
         self.shouldHandle = shouldHandle
         super.init()
 
@@ -162,13 +174,22 @@ final class DirectionalInputBinding: NSObject {
     }
 
     @objc func handleLong(_ recognizer: UIGestureRecognizer) {
-        guard recognizer.state == .began, let direction = direction(of: recognizer) else { return }
-        onHold?(direction)
+        guard let direction = direction(of: recognizer) else { return }
+        hold(direction, recognizer.state)
+    }
+
+    /// A held arrow at `state`: begun, or let go.
+    func hold(_ direction: Direction, _ state: UIGestureRecognizer.State) {
+        switch state {
+        case .began: onHold?(direction)
+        case .ended, .cancelled: onHoldEnd?(direction)
+        default: break
+        }
     }
 }
 
 extension DirectionalInputBinding: UIGestureRecognizerDelegate {
-    /// Gated variant only (the focusless variant sets no delegate).
+    /// Gated swipes only (an ungated focusless binding sets no delegate).
     /// Declining here, before the recognizer begins, is what leaves the
     /// swipe to the focus engine — bailing in the handler would be too late.
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {

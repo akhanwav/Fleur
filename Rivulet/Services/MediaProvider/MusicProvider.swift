@@ -8,7 +8,7 @@
 //  Sibling to MediaProvider for the music surface. Music-only backends
 //  (Navidrome, Subsonic) and music-capable general backends (Plex,
 //  Jellyfin) conform. Reuses the video-agnostic MediaItemRef, MediaLibrary,
-//  SortOption, Page, PagedResult, StreamInfo, MediaProviderKind, ConnectionState.
+//  Page, PagedResult, StreamInfo, MediaProviderKind, ConnectionState.
 //
 
 import Foundation
@@ -22,11 +22,19 @@ protocol MusicProvider: Sendable, Identifiable {
     // MARK: - Browse
     func musicLibraries() async throws -> [MediaLibrary]
     func artists(in library: MediaLibrary,
-                 sort: SortOption,
+                 sort: MusicSort,
+                 filter: MusicFilter,
                  page: Page) async throws -> PagedResult<MusicArtist>
     func albums(in library: MediaLibrary,
-                sort: SortOption,
+                sort: MusicSort,
+                filter: MusicFilter,
                 page: Page) async throws -> PagedResult<MusicAlbum>
+    func tracks(in library: MediaLibrary,
+                sort: MusicSort,
+                filter: MusicFilter,
+                page: Page) async throws -> PagedResult<MusicTrack>
+    /// The genres the library's ALBUMS carry; `MusicFilter.genreID` takes their ids.
+    func genres(in library: MediaLibrary) async throws -> [MusicGenre]
     func search(_ query: String) async throws -> [MusicItem]
 
     // MARK: - Hierarchy
@@ -34,13 +42,20 @@ protocol MusicProvider: Sendable, Identifiable {
     func tracks(for albumRef: MediaItemRef) async throws -> [MusicTrack]
     func allTracks(for artistRef: MediaItemRef) async throws -> [MusicTrack]
 
+    // MARK: - Playlists
+    func playlists(in library: MediaLibrary, sort: MusicSort) async throws -> [MusicPlaylist]
+    func tracks(inPlaylist playlistRef: MediaItemRef,
+                page: Page) async throws -> PagedResult<MusicTrack>
+    /// Appends tracks to a regular playlist. Smart playlists reject them.
+    func addToPlaylist(_ playlistRef: MediaItemRef, tracks: [MediaItemRef]) async throws
+
     // MARK: - Detail
     func artistDetail(for ref: MediaItemRef) async throws -> MusicArtistDetail
     func albumDetail(for ref: MediaItemRef) async throws -> MusicAlbumDetail
-    func trackDetail(for ref: MediaItemRef) async throws -> MusicTrackDetail
+    /// Time-synced lyric lines, or nil when the backend has none for the track.
+    func lyrics(for trackRef: MediaItemRef) async throws -> [MusicLyricLine]?
 
     // MARK: - Home rails
-    func recentlyAddedAlbums(limit: Int) async throws -> [MusicAlbum]
     func recentlyPlayed(limit: Int) async throws -> [MusicItem]
 
     // MARK: - Playback

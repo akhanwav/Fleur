@@ -97,25 +97,66 @@ enum PlexMusicMapper {
             MediaItemRef(providerID: providerID, itemID: $0)
         }
         let durationMs = meta.duration ?? 0
-        // Pick the first audio stream's codec + bitrate if available.
-        let firstAudio: PlexStream? = (meta.Media ?? []).first?.Part?.first?.Stream?
-            .first(where: { $0.streamType == 2 })
+        // The first audio stream's codec and bitrate; a list response has no streams, only the media's.
+        let media = (meta.Media ?? []).first
+        let firstAudio: PlexStream? = media?.Part?.first?.Stream?.first(where: { $0.streamType == 2 })
         return MusicTrack(
             ref: MediaItemRef(providerID: providerID, itemID: meta.ratingKey ?? ""),
             title: meta.title ?? "",
             albumRef: albumRef,
             albumTitle: meta.parentTitle,
             artistRef: artistRef,
-            artistName: meta.grandparentTitle,
+            // originalTitle is the track's own artist; it differs from the
+            // album artist on compilations and cast recordings.
+            artistName: meta.originalTitle.flatMap { $0.isEmpty ? nil : $0 } ?? meta.grandparentTitle,
             trackNumber: meta.index,
             discNumber: meta.parentIndex,
             duration: TimeInterval(durationMs) / 1000,
-            audioCodec: firstAudio?.codec,
-            bitrate: firstAudio?.bitrate,
+            audioCodec: firstAudio?.codec ?? media?.audioCodec,
+            bitrate: firstAudio?.bitrate ?? media?.bitrate,
             sampleRate: firstAudio?.samplingRate,
             artwork: artwork(meta, serverURL: serverURL, authToken: authToken),
             userState: userState(meta)
         )
+    }
+
+    // MARK: - Playlist
+
+    static func playlist(
+        _ playlist: PlexPlaylist,
+        providerID: String,
+        serverURL: String,
+        authToken: String
+    ) -> MusicPlaylist {
+        MusicPlaylist(
+            ref: MediaItemRef(providerID: providerID, itemID: playlist.ratingKey),
+            title: playlist.title ?? "",
+            artworkURL: PlexMediaMapper.artworkURL(playlist.composite, serverURL: serverURL, authToken: authToken),
+            trackCount: playlist.leafCount ?? 0,
+            duration: TimeInterval(playlist.duration ?? 0) / 1000,
+            isSmart: playlist.smart ?? false
+        )
+    }
+
+    // MARK: - Lyrics
+
+    /// Keys of a track's synced lyric streams (type 4, LRC). Needs full metadata.
+    static func lyricStreamKeys(_ meta: PlexMetadata) -> [String] {
+        (meta.Media?.first?.Part?.first?.Stream ?? [])
+            .filter { $0.streamType == 4 && $0.codec == "lrc" }
+            .compactMap(\.key)
+    }
+
+    /// Time-synced lines only: nil when the lyrics are untimed or empty.
+    static func lyricLines(_ lyrics: PlexLyrics) -> [MusicLyricLine]? {
+        let lines: [MusicLyricLine] = (lyrics.Line ?? []).compactMap { line in
+            guard let startMs = line.startOffset else { return nil }
+            // Sidecar LRC files with CRLF endings leave a stray \r on each line.
+            let text = (line.Span ?? []).compactMap(\.text).joined()
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : MusicLyricLine(start: TimeInterval(startMs) / 1000, text: text)
+        }
+        return lines.isEmpty ? nil : lines
     }
 
     // MARK: - Dispatch
@@ -145,7 +186,6 @@ enum PlexMusicMapper {
     static func artistDetail(
         _ meta: PlexMetadata,
         albums: [PlexMetadata],
-        topTracks: [PlexMetadata],
         similarArtists: [PlexMetadata],
         providerID: String,
         serverURL: String,
@@ -157,9 +197,6 @@ enum PlexMusicMapper {
             genres: meta.Genre?.compactMap(\.tag) ?? [],
             albums: albums.map {
                 album($0, providerID: providerID, serverURL: serverURL, authToken: authToken)
-            },
-            topTracks: topTracks.map {
-                track($0, providerID: providerID, serverURL: serverURL, authToken: authToken)
             },
             similarArtists: similarArtists.map {
                 artist($0, providerID: providerID, serverURL: serverURL, authToken: authToken)
@@ -189,19 +226,6 @@ enum PlexMusicMapper {
             },
             genres: meta.Genre?.compactMap(\.tag) ?? [],
             contributors: contributors
-        )
-    }
-
-    static func trackDetail(
-        _ meta: PlexMetadata,
-        lyrics: String?,
-        providerID: String,
-        serverURL: String,
-        authToken: String
-    ) -> MusicTrackDetail {
-        MusicTrackDetail(
-            track: track(meta, providerID: providerID, serverURL: serverURL, authToken: authToken),
-            lyrics: lyrics
         )
     }
 }

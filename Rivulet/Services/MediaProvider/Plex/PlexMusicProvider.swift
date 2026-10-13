@@ -50,55 +50,42 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
 
     func artists(
         in library: MediaLibrary,
-        sort: SortOption,
+        sort: MusicSort,
+        filter: MusicFilter,
         page: Page
     ) async throws -> PagedResult<MusicArtist> {
-        try await plexCall {
-            let result = try await networkManager.getLibraryItemsWithTotal(
-                serverURL: serverURL, authToken: authToken,
-                sectionId: library.id,
-                start: page.offset,
-                size: page.limit,
-                sort: plexSortString(for: sort),
-                type: 8                      // Plex artists type
-            )
-            let mapped = result.items.map { meta in
-                PlexMusicMapper.artist(
-                    meta, providerID: id,
-                    serverURL: serverURL, authToken: authToken
-                )
-            }
-            let total = result.totalSize ?? mapped.count
-            let next: Page? = (page.offset + page.limit < total)
-                ? Page(offset: page.offset + page.limit, limit: page.limit) : nil
-            return PagedResult(items: mapped, total: total, nextPage: next)
+        try await sectionItems(in: library, type: 8, sort: sort, filter: filter, page: page) {
+            PlexMusicMapper.artist($0, providerID: id, serverURL: serverURL, authToken: authToken)
         }
     }
 
     func albums(
         in library: MediaLibrary,
-        sort: SortOption,
+        sort: MusicSort,
+        filter: MusicFilter,
         page: Page
     ) async throws -> PagedResult<MusicAlbum> {
+        try await sectionItems(in: library, type: 9, sort: sort, filter: filter, page: page) {
+            PlexMusicMapper.album($0, providerID: id, serverURL: serverURL, authToken: authToken)
+        }
+    }
+
+    func tracks(
+        in library: MediaLibrary,
+        sort: MusicSort,
+        filter: MusicFilter,
+        page: Page
+    ) async throws -> PagedResult<MusicTrack> {
+        try await sectionItems(in: library, type: 10, sort: sort, filter: filter, page: page) {
+            PlexMusicMapper.track($0, providerID: id, serverURL: serverURL, authToken: authToken)
+        }
+    }
+
+    func genres(in library: MediaLibrary) async throws -> [MusicGenre] {
         try await plexCall {
-            let result = try await networkManager.getLibraryItemsWithTotal(
-                serverURL: serverURL, authToken: authToken,
-                sectionId: library.id,
-                start: page.offset,
-                size: page.limit,
-                sort: plexSortString(for: sort),
-                type: 9                      // Plex albums type
-            )
-            let mapped = result.items.map { meta in
-                PlexMusicMapper.album(
-                    meta, providerID: id,
-                    serverURL: serverURL, authToken: authToken
-                )
-            }
-            let total = result.totalSize ?? mapped.count
-            let next: Page? = (page.offset + page.limit < total)
-                ? Page(offset: page.offset + page.limit, limit: page.limit) : nil
-            return PagedResult(items: mapped, total: total, nextPage: next)
+            try await networkManager.getGenres(
+                serverURL: serverURL, authToken: authToken, sectionId: library.id, type: 9
+            ).map { MusicGenre(id: $0.key, title: $0.title) }
         }
     }
 
@@ -159,6 +146,52 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
         }
     }
 
+    // MARK: - Playlists
+
+    func playlists(in library: MediaLibrary, sort: MusicSort) async throws -> [MusicPlaylist] {
+        try await plexCall {
+            try await networkManager.getAudioPlaylists(
+                serverURL: serverURL, authToken: authToken, sectionId: library.id,
+                sort: Self.sortString(sort, type: 15)
+            ).map {
+                PlexMusicMapper.playlist($0, providerID: id, serverURL: serverURL, authToken: authToken)
+            }
+        }
+    }
+
+    func tracks(
+        inPlaylist playlistRef: MediaItemRef,
+        page: Page
+    ) async throws -> PagedResult<MusicTrack> {
+        try await plexCall {
+            let result = try await networkManager.getPlaylistItemsWithTotal(
+                serverURL: serverURL, authToken: authToken,
+                ratingKey: playlistRef.itemID, start: page.offset, size: page.limit
+            )
+            let tracks = result.items.filter { $0.type == "track" }.map {
+                PlexMusicMapper.track($0, providerID: id, serverURL: serverURL, authToken: authToken)
+            }
+            return Self.paged(tracks, total: result.totalSize, page: page)
+        }
+    }
+
+    func addToPlaylist(_ playlistRef: MediaItemRef, tracks: [MediaItemRef]) async throws {
+        guard !tracks.isEmpty else { return }
+        try await plexCall {
+            // Asked of the server: the id this provider was built with can be
+            // a URL hash when the server list had not loaded yet.
+            let machineID = try await networkManager.getMachineIdentifier(
+                serverURL: serverURL, authToken: authToken
+            )
+            try await networkManager.addToPlaylist(
+                serverURL: serverURL, authToken: authToken,
+                playlistRatingKey: playlistRef.itemID,
+                machineIdentifier: machineID,
+                ratingKeys: tracks.map(\.itemID)
+            )
+        }
+    }
+
     // MARK: - Detail
 
     func artistDetail(for ref: MediaItemRef) async throws -> MusicArtistDetail {
@@ -169,20 +202,14 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
             async let childrenFetch = networkManager.getChildren(
                 serverURL: serverURL, authToken: authToken, ratingKey: ref.itemID
             )
-            async let leavesFetch = networkManager.getAllLeaves(
-                serverURL: serverURL, authToken: authToken, ratingKey: ref.itemID
-            )
             let meta = try await metaFetch
             let albumsMeta = try await childrenFetch
-            let allLeaves = try await leavesFetch
 
             let albums = albumsMeta.filter { $0.type == "album" }
-            let topTracks = Array(allLeaves.prefix(10))
             // TODO(post-wave-1): wire /library/metadata/{id}/similar.
             return PlexMusicMapper.artistDetail(
                 meta,
                 albums: albums,
-                topTracks: topTracks,
                 similarArtists: [],
                 providerID: id,
                 serverURL: serverURL, authToken: authToken
@@ -209,36 +236,25 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
         }
     }
 
-    func trackDetail(for ref: MediaItemRef) async throws -> MusicTrackDetail {
+    func lyrics(for trackRef: MediaItemRef) async throws -> [MusicLyricLine]? {
         try await plexCall {
-            let meta = try await networkManager.getFullMetadata(
-                serverURL: serverURL, authToken: authToken, ratingKey: ref.itemID
+            // Lyric streams are listed on single-item metadata only.
+            let meta = try await networkManager.getMetadata(
+                serverURL: serverURL, authToken: authToken, ratingKey: trackRef.itemID
             )
-            // TODO(post-wave-1): wire getLyrics helper + pipe through.
-            return PlexMusicMapper.trackDetail(
-                meta, lyrics: nil,
-                providerID: id,
-                serverURL: serverURL, authToken: authToken
-            )
+            for key in PlexMusicMapper.lyricStreamKeys(meta) {
+                // A LyricFind stream is often listed and then answers 404: try the next.
+                if let lyrics = try? await networkManager.getLyrics(
+                    serverURL: serverURL, authToken: authToken, streamKey: key
+                ), let lines = PlexMusicMapper.lyricLines(lyrics) {
+                    return lines
+                }
+            }
+            return nil
         }
     }
 
     // MARK: - Home rails
-
-    func recentlyAddedAlbums(limit: Int) async throws -> [MusicAlbum] {
-        try await plexCall {
-            let items = try await networkManager.getRecentlyAdded(
-                serverURL: serverURL, authToken: authToken, limit: limit
-            )
-            return items.compactMap { meta -> MusicAlbum? in
-                guard meta.type == "album" else { return nil }
-                return PlexMusicMapper.album(
-                    meta, providerID: id,
-                    serverURL: serverURL, authToken: authToken
-                )
-            }
-        }
-    }
 
     func recentlyPlayed(limit: Int) async throws -> [MusicItem] {
         // TODO(post-wave-1): wire music recently-played hub.
@@ -270,32 +286,85 @@ final class PlexMusicProvider: MusicProvider, @unchecked Sendable {
     // MARK: - State
 
     func setRating(_ rating: Double?, for ref: MediaItemRef) async throws {
-        // setUserRating does not yet exist on PlexNetworkManager.
-        // TODO(post-wave-1): add setUserRating to PlexNetworkManager and wire it here.
-        throw MediaProviderError.backendSpecific(
-            underlying: "Plex rating update not yet wired at network layer"
-        )
+        try await plexCall {
+            try await networkManager.setRating(
+                serverURL: serverURL, authToken: authToken,
+                ratingKey: ref.itemID,
+                rating: rating.map { Int(($0 * PlexUserRating.starScale).rounded()) }
+            )
+        }
     }
 
     func setFavorite(_ favorite: Bool, for ref: MediaItemRef) async throws {
-        // Plex has no separate "favorite" concept — non-zero rating = favorite.
+        // Plex has no favorite flag: a rating above three stars is one
+        // (PlexUserRating). Unfavoriting clears the rating.
         try await setRating(favorite ? 5.0 : nil, for: ref)
     }
 
     // MARK: - Helpers
 
-    private func plexSortString(for sort: SortOption) -> String? {
-        switch sort {
-        case .titleAsc: return "titleSort:asc"
-        case .titleDesc: return "titleSort:desc"
-        case .releaseDateDesc: return "originallyAvailableAt:desc"
-        case .addedAtDesc: return "addedAt:desc"
-        case .addedAtAsc: return "addedAt:asc"
-        case .releaseDateAsc: return "originallyAvailableAt:asc"
-        case .lastContentAddedDesc: return "addedAt:desc"
-        // Music uses userRating (per-user star rating) not rating (community rating);
-        // Plex's music libraries don't populate the community `rating` field.
-        case .ratingDesc: return "userRating:desc"
+    /// One page of a section's artists (8), albums (9) or tracks (10).
+    private func sectionItems<T: Sendable>(
+        in library: MediaLibrary,
+        type: Int,
+        sort: MusicSort,
+        filter: MusicFilter,
+        page: Page,
+        map: (PlexMetadata) -> T
+    ) async throws -> PagedResult<T> {
+        try await plexCall {
+            let result = try await networkManager.getLibraryItemsWithTotal(
+                serverURL: serverURL, authToken: authToken,
+                sectionId: library.id,
+                start: page.offset,
+                size: page.limit,
+                sort: Self.sortString(sort, type: type),
+                type: type,
+                filters: Self.filterItems(filter, type: type)
+            )
+            return Self.paged(result.items.map(map), total: result.totalSize, page: page)
         }
+    }
+
+    private static func paged<T: Sendable>(_ items: [T], total: Int?, page: Page) -> PagedResult<T> {
+        let total = total ?? items.count
+        let next: Page? = (page.offset + page.limit < total)
+            ? Page(offset: page.offset + page.limit, limit: page.limit) : nil
+        return PagedResult(items: items, total: total, nextPage: next)
+    }
+
+    /// Plex `sort` value for artists (8), albums (9), tracks (10) and playlists (15).
+    /// The artist sorts are the server's own "Album Artist" keys.
+    static func sortString(_ sort: MusicSort, type: Int) -> String {
+        let trackOrder = "track.absoluteIndex,track.index,track.titleSort,track.id"
+        switch (sort, type) {
+        case (.recentlyAdded, _): return "addedAt:desc"
+        case (.albumRecentlyAdded, _): return "album.addedAt:desc,album.id,\(trackOrder)"
+        case (.artistRecentlyAdded, _):
+            return "artist.addedAt:desc,artist.id,album.titleSort,album.year,\(trackOrder)"
+        case (.random, _): return "random"
+        case (.artist, 9):
+            return "artist.titleSort,album.titleSort,album.index,album.id,album.originallyAvailableAt"
+        case (.artist, 10):
+            return "artist.titleSort,album.titleSort,album.year,\(trackOrder)"
+        case (.year, 9): return "year:desc,titleSort"
+        case (.year, 10): return "album.year:desc,album.titleSort,\(trackOrder)"
+        case (.album, 10): return "album.titleSort,album.year,\(trackOrder)"
+        default: return "titleSort:asc"
+        }
+    }
+
+    /// Plex filter query items. Genre ids come from the ALBUM genre directory.
+    static func filterItems(_ filter: MusicFilter, type: Int) -> [URLQueryItem] {
+        var items: [URLQueryItem] = []
+        if let genreID = filter.genreID {
+            items.append(URLQueryItem(name: type == 9 ? "genre" : "album.genre", value: genreID))
+        }
+        if filter.favoritesOnly {
+            // ">>=" is Plex's "greater than"; the threshold matches PlexUserRating.isFavorite.
+            let threshold = Int(PlexUserRating.favoriteStarThreshold * PlexUserRating.starScale)
+            items.append(URLQueryItem(name: "userRating>>", value: "\(threshold)"))
+        }
+        return items
     }
 }

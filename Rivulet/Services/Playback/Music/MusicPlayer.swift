@@ -42,6 +42,7 @@ final class MusicPlayer: ObservableObject {
     private var statusObserver: NSKeyValueObservation?
     private var didPlayToEndObserver: NSObjectProtocol?
     private var fadeTimer: Timer?
+    private var seekTarget: TimeInterval?
 
     /// Sweet fade duration for pause/resume
     private let sweetFadeDuration: TimeInterval = 0.3
@@ -115,7 +116,8 @@ final class MusicPlayer: ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let seconds = time.seconds
-                if !seconds.isNaN && !seconds.isInfinite {
+                // A seek in flight still reports the position it left.
+                if self.seekTarget == nil, !seconds.isNaN && !seconds.isInfinite {
                     self.currentTime = seconds
                 }
             }
@@ -162,8 +164,23 @@ final class MusicPlayer: ObservableObject {
     }
 
     func seek(to time: TimeInterval) {
+        guard let player else { return }
         let cmTime = CMTime(seconds: time, preferredTimescale: 600)
-        player?.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero)
+        seekTarget = time
+        player.seek(to: cmTime, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                // A newer seek owns the target by now if it differs.
+                if self?.seekTarget == time { self?.seekTarget = nil }
+            }
+        }
+    }
+
+    /// The player's own clock, read now: `currentTime` only ticks twice a second.
+    var playbackTime: TimeInterval {
+        // A seek in flight still reports the position it left.
+        if let seekTarget { return seekTarget }
+        guard let seconds = player?.currentTime().seconds, seconds.isFinite else { return currentTime }
+        return seconds
     }
 
     // MARK: - Volume Fading
@@ -217,6 +234,7 @@ final class MusicPlayer: ObservableObject {
         player = nil
         currentItem = nil
         nextItem = nil
+        seekTarget = nil
         currentTime = 0
         duration = 0
     }

@@ -298,9 +298,9 @@ final class RootShellViewController: UIViewController {
     /// The nearest backing `UIView` at or above `item` in the focus chain.
     ///
     /// SwiftUI's focus items are NOT UIViews, so `as? UIView` on a focused item
-    /// (and `context.nextFocusedView`, which is the same cast) is nil for every
-    /// hosted SwiftUI tab — Music and Live TV. That silently turned off both
-    /// `contentHasHadFocus` and the Menu containment check there: Music could
+    /// (and `context.nextFocusedView`, which is the same cast) is nil for a
+    /// hosted SwiftUI tab (Live TV). That silently turned off both
+    /// `contentHasHadFocus` and the Menu containment check there: the tab could
     /// only ever leave via the give-up fallback, and Menu fell through to the
     /// system and quit the app.
     ///
@@ -376,7 +376,7 @@ extension RootShellViewController: MenuBackHandling {
         // shell absorbed the press.
         // Via `backingView`, not a bare `as? UIView`: a SwiftUI tab's focused
         // item is not a UIView, so the plain cast failed there and Menu bubbled
-        // to the system, quitting the app from Music and Live TV.
+        // to the system, quitting the app from Live TV.
         // Nothing focused with nothing presented is a page still loading (a
         // spinner, no focus target): Menu opens the sidebar rather than
         // reaching the system and quitting the app.

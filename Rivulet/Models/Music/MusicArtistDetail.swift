@@ -15,6 +15,5 @@ struct MusicArtistDetail: Sendable {
     let bio: String?
     let genres: [String]
     let albums: [MusicAlbum]
-    let topTracks: [MusicTrack]
     let similarArtists: [MusicArtist]
 }

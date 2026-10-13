@@ -22,8 +22,8 @@
 //
 //  Navigation:
 //    - Detail navigation is UIKit-native: standalone expanded detail /
-//      episode detail page presented from this controller. Only music
-//      selections hand back to SwiftUI (`onSelectMusic`).
+//      episode detail page presented from this controller. A music tile
+//      opens its Music page; in Search the host does it (`onSelectMusic`).
 //    - Preview carousel is presented as `PreviewContainerViewController`
 //      (a UIKit overFullScreen modal hosting SwiftUI `PreviewOverlayHost`)
 //      from this controller — mirrors the SwiftUI flow.
@@ -413,7 +413,7 @@ struct HomeSectionData {
 @MainActor
 final class PlexHomeViewController: UIViewController {
 
-    // Callbacks back into the SwiftUI shell.
+    // Set by the host: opens the Music page for an artist or album.
     var onSelectMusic: ((PlexMetadata) -> Void)?
 
 
@@ -1256,8 +1256,8 @@ final class PlexHomeViewController: UIViewController {
         return .noResults
     }
 
-    /// Tap routing for search results: music keeps the SwiftUI page's routing
-    /// (artist/album → music detail push, track → play now); everything else
+    /// Tap routing for search results: music has its own routing
+    /// (artist/album → Music page, track → play now); everything else
     /// opens the preview carousel over the tapped group — the same experience
     /// as tapping a library grid tile.
     private func handleSearchTap(section: HomeSectionData, indexPath: IndexPath) {
@@ -3929,9 +3929,8 @@ final class PlexHomeViewController: UIViewController {
         case .continueWatching, .recentlyAdded, .recommendations:
             guard itemIndex < section.items.count else { return }
             let item = section.items[itemIndex]
-            presentTileMenu(sections: tileMenuSections(for: item,
-                                                       isContinueWatching: section.kind == .continueWatching,
-                                                       shelfLocation: (sectionID: sectionID, itemIndex: itemIndex)))
+            presentTileMenu(for: item, isContinueWatching: section.kind == .continueWatching,
+                            shelfLocation: (sectionID: sectionID, itemIndex: itemIndex))
         case .discoverList:
             presentDiscoverTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .searchGrid:
@@ -3943,7 +3942,7 @@ final class PlexHomeViewController: UIViewController {
                 return
             }
             let item = section.items[itemIndex]
-            presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: false))
+            presentTileMenu(for: item, isContinueWatching: false)
         case .watchlist:
             presentWatchlistTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
@@ -4120,6 +4119,14 @@ final class PlexHomeViewController: UIViewController {
         case .collection, .person, .unknown:
             return nil
         }
+    }
+
+    /// A library tile's long-press menu: the Music menu for a music tile, the video one otherwise.
+    private func presentTileMenu(for item: MediaItem, isContinueWatching: Bool,
+                                 shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) {
+        if presentMusicTileMenuIfNeeded(for: item) { return }
+        presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: isContinueWatching,
+                                                   shelfLocation: shelfLocation))
     }
 
     private func presentTileMenu(sections: [[TileMenuAction]]) {
@@ -5268,6 +5275,58 @@ final class PlexHomeViewController: UIViewController {
         top.present(detail, animated: true)
     }
 
+    /// A Plex music tile outside Search (Home's Recently Added in Music). The tile does not
+    /// say album, artist or track, so the item is fetched first. False for any other tile.
+    private func withMusicItem(for item: MediaItem,
+                               _ then: @escaping @MainActor (MusicItem) async -> Void) -> Bool {
+        guard item.isMusic == true,
+              item.ref.providerID == MediaProviderRegistry.shared.plexProvider?.id,
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return false }
+        Task { [weak self] in
+            do {
+                let meta = try await PlexNetworkManager.shared.getMetadata(
+                    serverURL: serverURL, authToken: token, ratingKey: item.ref.itemID)
+                guard let provider = MusicProviderRegistry.shared.primaryProvider,
+                      let music = PlexMusicMapper.item(meta, providerID: provider.id,
+                                                       serverURL: serverURL, authToken: token) else { return }
+                await then(music)
+            } catch {
+                MusicPresenter.reportFailure(error, from: self)
+            }
+        }
+        return true
+    }
+
+    /// Select on a music tile, routed as Search routes it.
+    private func openMusicIfNeeded(_ item: MediaItem) -> Bool {
+        withMusicItem(for: item) { [weak self] music in
+            switch music {
+            case .album(let album): MusicPresenter.showAlbum(album, from: self)
+            case .artist(let artist): MusicPresenter.showArtist(artist, from: self)
+            case .track(let track): MusicQueue.shared.playNow(track: track)
+            }
+        }
+    }
+
+    /// Long press on a music tile: the Music library's menu, not the video one.
+    private func presentMusicTileMenuIfNeeded(for item: MediaItem) -> Bool {
+        let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem
+        let tileFrame = focusedTileFrame()
+        return withMusicItem(for: item) { [weak self] music in
+            await MusicMenus.loadPlaylists()
+            // The fetches took a moment: no menu for a tile focus has already left.
+            guard let self, UIFocusSystem.focusSystem(for: view)?.focusedItem === focused else { return }
+            let navigate: (MusicNavigationRequest) -> Void = { [weak self] in MusicPresenter.show($0, from: self) }
+            let rows = switch music {
+            case .album(let album): MusicMenus.album(album, navigate: navigate)
+            case .artist(let artist): MusicMenus.artist(artist)
+            case .track(let track): MusicMenus.track(track, screen: .songs, navigate: navigate)
+            }
+            MusicMenus.presentPopup(rows, from: self, sourceFrame: tileFrame)
+        }
+    }
+
     private func playMusicTrack(_ plexMeta: PlexMetadata) {
         guard let provider = MusicProviderRegistry.shared.primaryProvider,
               let serverURL = authManager.selectedServerURL,
@@ -5316,6 +5375,8 @@ final class PlexHomeViewController: UIViewController {
         // (handleSearchTap) all come through here. A collection never opens
         // the carousel, whose Play would hand the collection's key to the player.
         if Self.openCollectionIfNeeded(section.items[indexPath.item], from: self) { return }
+        // Nor does music: the carousel is a video surface.
+        if openMusicIfNeeded(section.items[indexPath.item]) { return }
         // The library grid is sparse (unloaded slots are placeholders), so the
         // carousel gets only what has loaded, with the tapped slot remapped to
         // its index in that list. Every other section maps 1:1 and keeps its
@@ -6255,7 +6316,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
         guard case .grid = section.kind, let item = section.items[safe: indexPath.item],
               !item.isGridPlaceholder else { return }
-        presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: false))
+        presentTileMenu(for: item, isContinueWatching: false)
     }
 
     // MARK: - Tile menu builder

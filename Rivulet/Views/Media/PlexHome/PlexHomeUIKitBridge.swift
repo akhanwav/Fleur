@@ -6,9 +6,7 @@
 //  Rivulet
 //
 //  SwiftUI bridge to host `PlexHomeViewController` (UIKit/TVUIKit home).
-//  Forwards music selections back to a SwiftUI binding so the surrounding
-//  NavigationStack pushes the music routers. All other navigation is
-//  handled inside the UIKit controller itself.
+//  All navigation is handled inside UIKit.
 //
 
 import SwiftUI
@@ -19,18 +17,6 @@ struct PlexHomeUIKitBridge: UIViewControllerRepresentable {
     /// the lifetime of the hosted controller — library call sites must `.id`
     /// the container by library key so a key change rebuilds the VC.
     var mode: HomeMode = .home
-    @Binding var selectedMusicItem: PlexMetadata?
-
-    final class Coordinator {
-        var selectedMusicItem: Binding<PlexMetadata?>
-        init(selectedMusicItem: Binding<PlexMetadata?>) {
-            self.selectedMusicItem = selectedMusicItem
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(selectedMusicItem: $selectedMusicItem)
-    }
 
     /// The single shared HOME controller. SwiftUI identity churn during
     /// launch (state flips re-evaluating the tab tree) was discarding the
@@ -59,16 +45,8 @@ struct PlexHomeUIKitBridge: UIViewControllerRepresentable {
             vc = PlexHomeViewController(mode: mode)
         }
 
-        vc.onSelectMusic = { meta in
-            context.coordinator.selectedMusicItem.wrappedValue = meta
-        }
         return vc
     }
 
-    func updateUIViewController(_ uiViewController: PlexHomeViewController, context: Context) {
-        // Refresh the callbacks to capture the latest bindings.
-        uiViewController.onSelectMusic = { meta in
-            context.coordinator.selectedMusicItem.wrappedValue = meta
-        }
-    }
+    func updateUIViewController(_ uiViewController: PlexHomeViewController, context: Context) {}
 }

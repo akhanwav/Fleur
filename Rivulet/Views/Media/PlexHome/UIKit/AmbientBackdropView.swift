@@ -34,6 +34,13 @@ final class AmbientBackdropView: UIView {
     /// avoid overwriting a wash the hero already established.
     var hasAmbient: Bool { currentURL != nil }
 
+    /// Music's Now Playing shows the wash at full brightness, as Apple Music does,
+    /// and reduces the artwork to its colours first.
+    var showsVignette = true {
+        didSet { vignette.isHidden = !showsVignette }
+    }
+    var imageTransform: (@Sendable (UIImage) -> UIImage)?
+
     private let crossfadeDuration: TimeInterval = 0.6
     private let imageAlpha: CGFloat = 0.85
 
@@ -85,7 +92,11 @@ final class AmbientBackdropView: UIView {
 
         let oldImage = currentImageView.image
         loadTask = Task { [weak self] in
-            let image = await ImageCacheManager.shared.image(for: url)
+            var image = await ImageCacheManager.shared.image(for: url)
+            // Off the main actor: Now Playing's transform resamples and redraws the cover.
+            if let source = image, let transform = self?.imageTransform {
+                image = await Task.detached { transform(source) }.value
+            }
             guard let self, !Task.isCancelled, let image, self.currentURL == url else { return }
             self.applyImage(image, replacing: oldImage)
         }

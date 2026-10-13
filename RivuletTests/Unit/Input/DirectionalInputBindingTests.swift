@@ -124,6 +124,64 @@ final class DirectionalInputBindingTests: XCTestCase {
         XCTAssertTrue(binding.gestureRecognizerShouldBegin(swipe))
     }
 
+    // MARK: Focusless variant with a swipe gate and a hold release
+
+    func test_swipeGate_makesTheBindingTheSwipesDelegate_andLeavesTapsAndHoldsWithout() {
+        let view = UIView()
+        let binding = DirectionalInputBinding(
+            view: view, directions: [.up, .left], holds: [.up], onTap: { _ in }, swipeGate: { _ in true }
+        )
+
+        for swipe in recognizers(UISwipeGestureRecognizer.self, on: view) {
+            XCTAssertTrue(swipe.delegate === binding)
+        }
+        XCTAssertEqual(recognizers(UITapGestureRecognizer.self, on: view).count, 2)
+        XCTAssertEqual(recognizers(UILongPressGestureRecognizer.self, on: view).count, 1)
+        for press in (view.gestureRecognizers ?? []) where !(press is UISwipeGestureRecognizer) {
+            XCTAssertNil(press.delegate)
+        }
+    }
+
+    func test_swipeGate_shouldBegin_returnsTheGatesAnswerPerDirection() {
+        let view = UIView()
+        let binding = DirectionalInputBinding(
+            view: view, directions: [.up, .left], onTap: { _ in }, swipeGate: { $0 == .left }
+        )
+
+        let swipes = recognizers(UISwipeGestureRecognizer.self, on: view)
+        let up = swipes.first { binding.direction(of: $0) == .up }!
+        let left = swipes.first { binding.direction(of: $0) == .left }!
+        XCTAssertFalse(binding.gestureRecognizerShouldBegin(up))
+        XCTAssertTrue(binding.gestureRecognizerShouldBegin(left))
+    }
+
+    // The existing adopters' case: nothing they installed changes.
+    func test_withoutSwipeGate_noRecognizerHasADelegate() {
+        let view = UIView()
+        _ = DirectionalInputBinding(
+            view: view, directions: DirectionalInputBinding.Direction.allCases, holds: [.left], onTap: { _ in },
+            onHold: { _ in }
+        )
+        XCTAssertEqual(view.gestureRecognizers?.count, 9)
+        for recognizer in view.gestureRecognizers ?? [] { XCTAssertNil(recognizer.delegate) }
+    }
+
+    // Through `hold`: UIKit resets a bare recognizer that is set to ended, so its state cannot carry the release.
+    func test_holdEnd_firesOnEndedAndCancelled_notOnBegan() {
+        var ended: [DirectionalInputBinding.Direction] = []
+        let binding = DirectionalInputBinding(
+            view: UIView(), directions: [.down], holds: [.down], onTap: { _ in }, onHold: { _ in },
+            onHoldEnd: { ended.append($0) }
+        )
+
+        binding.hold(.down, .began)
+        binding.hold(.down, .changed)
+        XCTAssertTrue(ended.isEmpty)
+        binding.hold(.down, .ended)
+        binding.hold(.down, .cancelled)
+        XCTAssertEqual(ended, [.down, .down])
+    }
+
     func test_foreignRecognizer_hasNoDirectionAndFiresNothing() {
         let view = UIView()
         var fired = 0
@@ -133,5 +191,22 @@ final class DirectionalInputBindingTests: XCTestCase {
         XCTAssertNil(binding.direction(of: foreign))
         binding.handleTap(foreign)
         XCTAssertEqual(fired, 0)
+    }
+
+    // MARK: Library A to Z strip (device-unverified: the simulator cannot swipe)
+
+    func test_alphabetStrip_leftSwipeLeavesLikeSelect_andIsDeclinedWithoutFocus() throws {
+        let bar = LibraryAlphabetBarView()
+        bar.setLetters(["A", "B"])
+        var left = 0
+        bar.onLetterSelected = { left += 1 }
+
+        let swipes = recognizers(UISwipeGestureRecognizer.self, on: bar)
+        XCTAssertEqual(swipes.map(\.direction), [.left])
+        let binding = try XCTUnwrap(swipes[0].delegate as? DirectionalInputBinding)
+        // Focus is outside the strip: the swipe stays with the focus engine.
+        XCTAssertFalse(binding.gestureRecognizerShouldBegin(swipes[0]))
+        binding.handleSwipe(swipes[0])
+        XCTAssertEqual(left, 1)
     }
 }

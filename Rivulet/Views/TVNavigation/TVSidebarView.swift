@@ -31,7 +31,6 @@ struct TVSidebarView: View {
     @StateObject private var profileManager = PlexUserProfileManager.shared
     @StateObject private var nestedNavState = NestedNavigationState()
     @StateObject private var deepLinkHandler = DeepLinkHandler.shared
-    @StateObject private var musicQueue = MusicQueue.shared
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
     @AppStorage("liveTVAboveLibraries") private var liveTVAboveLibraries = false
     @AppStorage("showDiscoverTab") private var showDiscoverTab = true
@@ -46,7 +45,6 @@ struct TVSidebarView: View {
     @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
     @State private var showWhatsNew = false
     @State private var didApplyDebugLaunch = false
-    @State private var musicLibraryEntryToken = UUID()
 
     @Namespace private var contentNamespace
 
@@ -140,9 +138,6 @@ struct TVSidebarView: View {
         .ignoresSafeArea()
         .onChange(of: selectedTab) { _, newTab in
             nestedNavState.isNested = false
-            if isMusicLibraryTab(newTab) {
-                musicLibraryEntryToken = UUID()
-            }
         }
         .onChange(of: authManager.hasCredentials) { old, new in
             // Clear watchlist state on logout.
@@ -381,6 +376,7 @@ struct TVSidebarView: View {
             if show { presentWhatsNewPopup() }
         }
         .onAppear {
+            MusicNowPlayingViewController.installPresenter()
             applyDebugLaunchTab()
             // Defer What's New check if profile picker needs to be shown first
             if profileManager.showProfilePickerOnLaunch && authManager.selectedServerToken != nil {
@@ -428,11 +424,6 @@ struct TVSidebarView: View {
             )
             .presentationBackground(.clear)
         }
-        // Music Now Playing overlay
-        .fullScreenCover(isPresented: $musicQueue.showNowPlaying) {
-            MusicNowPlayingView(isPresented: $musicQueue.showNowPlaying)
-                .presentationBackground(.black)
-        }
     }
 
     // MARK: - Tab Content
@@ -446,8 +437,8 @@ struct TVSidebarView: View {
     /// retry at all (issue #280), and every hosted tab's root is rebuilt on
     /// every SwiftUI update of this view.
     ///
-    /// Still hosted, and correctly so: Music and Live TV are genuinely
-    /// SwiftUI, and Home carries the welcome / profile-gate overlays.
+    /// Still hosted, and correctly so: Live TV is genuinely SwiftUI, and Home
+    /// carries the welcome / profile-gate overlays.
     private func contentViewController(for tab: SidebarTab) -> UIViewController {
         switch tab {
         case .discover:
@@ -463,10 +454,11 @@ struct TVSidebarView: View {
         case .library(let key):
             // The shell caches per `SidebarTab`, so each library key already
             // gets its own controller — this is what the SwiftUI `.id(key)`
-            // was buying. Music libraries render MusicHomeView, so they fall
-            // through to hosting.
-            if let lib = dataStore.libraries.first(where: { $0.key == key }), !lib.isMusicLibrary {
-                return PlexHomeViewController(mode: .library(key: lib.key, title: lib.title))
+            // was buying.
+            if let lib = dataStore.libraries.first(where: { $0.key == key }) {
+                return lib.isMusicLibrary
+                    ? MusicLibraryViewController(libraryKey: lib.key, title: lib.title)
+                    : PlexHomeViewController(mode: .library(key: lib.key, title: lib.title))
             }
         case .providerLibrary(_, let libraryID):
             // The same page as a Plex library, through the provider.
@@ -542,17 +534,11 @@ struct TVSidebarView: View {
                 // DiscoverView was removed — see git history.)
                 UIKitHomeContainer(mode: .discover)
             case .library(let key):
-                if let lib = dataStore.libraries.first(where: { $0.key == key }) {
-                    if lib.isMusicLibrary {
-                            MusicHomeView(libraryKey: lib.key, libraryTitle: lib.title)
-                                .id("\(lib.key)-\(musicLibraryEntryToken.uuidString)")
-                    } else {
-                        // Library page = the home VC in .library mode (one
-                        // implementation, two surfaces). `.id` rebuilds the
-                        // controller when switching libraries.
-                        UIKitHomeContainer(mode: .library(key: lib.key, title: lib.title))
-                            .id(lib.key)
-                    }
+                // Both library surfaces mount directly as UIKit VCs above. This
+                // is left for a tab built before the library list held its key.
+                if let lib = dataStore.libraries.first(where: { $0.key == key }), !lib.isMusicLibrary {
+                    UIKitHomeContainer(mode: .library(key: lib.key, title: lib.title))
+                        .id(lib.key)
                 }
             case .liveTV(let sourceId):
                 LiveTVContainerView(sourceIdFilter: sourceId)
@@ -611,11 +597,9 @@ struct TVSidebarView: View {
               let lib = dataStore.visibleMediaLibraries.first(where: { $0.title == name }) else { return }
         didApplyDebugLaunch = true
         selectedTab = .library(key: lib.key)
-    }
-
-    private func isMusicLibraryTab(_ tab: SidebarTab) -> Bool {
-        guard case .library(let key) = tab else { return false }
-        return dataStore.libraries.first(where: { $0.key == key })?.isMusicLibrary ?? false
+        #if DEBUG
+        MusicPresenter.debugOpenIfRequested()
+        #endif
     }
 
     /// Present the canonical UIKit changelog popup (same one Settings uses) for

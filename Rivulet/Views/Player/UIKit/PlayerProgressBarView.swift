@@ -410,7 +410,8 @@ final class PlayerProgressBarView: UIView {
         playheadMarker.layer.cornerRadius = isFocusDimmed ? 0 : 1
         playheadMarker.alpha = isScrubbing ? 0 : 1
 
-        let needleTop = centerY - (ring ? Metrics.ringThumbnailLift : Metrics.thumbnailLift)
+        let lift = showsScrubThumbnail ? Metrics.thumbnailLift : Metrics.needleDrop
+        let needleTop = centerY - (ring ? Metrics.ringThumbnailLift : lift)
         let needleBottom = ring ? centerY - Metrics.ring / 2 : centerY + Metrics.needleDrop
         scrubNeedle.frame = CGRect(x: playheadX - 1, y: needleTop, width: 2, height: needleBottom - needleTop)
         scrubNeedle.alpha = isScrubbing ? 1 : 0
@@ -426,7 +427,7 @@ final class PlayerProgressBarView: UIView {
         let halfThumb = Metrics.thumbnail.width / 2
         let thumbX = min(max(playheadX, halfThumb), max(halfThumb, width - halfThumb))
         thumbnailContainer.center = CGPoint(x: thumbX, y: needleTop - Metrics.thumbnail.height / 2)
-        thumbnailContainer.alpha = isScrubbing ? 1 : 0
+        thumbnailContainer.alpha = isScrubbing && showsScrubThumbnail ? 1 : 0
         let eyebrow = isScrubbing ? chapterEyebrowText(at: displayTime) : nil
         if let eyebrow {
             eyebrowLabel.attributedText = NSAttributedString(string: eyebrow, attributes: [.kern: 16 * 0.12])
@@ -722,7 +723,7 @@ final class PlayerProgressBarView: UIView {
     private func vodLabels(displayTime: TimeInterval, duration: TimeInterval) -> Labels {
         let remaining = max(0, duration - displayTime)
         guard showsClockTimes else {
-            return Labels(elapsed: Self.formatTime(displayTime), remaining: "-\(Self.formatTime(remaining))")
+            return Labels(elapsed: formatTime(displayTime), remaining: "-\(formatTime(remaining))")
         }
         let now = Date()
         return Labels(elapsed: Self.clockFormatter.string(from: now),
@@ -755,8 +756,13 @@ final class PlayerProgressBarView: UIView {
         updateClockTick()
     }
 
+    /// Music's Now Playing writes "0:04", as Apple Music does.
+    var padsMinutes = true
+    /// A song has no picture to scan through: the needle only crosses the track.
+    var showsScrubThumbnail = true
+
     /// AVKit's format: "09:46" under an hour, "1:02:03" over.
-    private static func formatTime(_ seconds: TimeInterval) -> String {
+    private func formatTime(_ seconds: TimeInterval) -> String {
         guard seconds.isFinite && seconds >= 0 else { return "00:00" }
         let totalSeconds = Int(seconds)
         let hours = totalSeconds / 3600
@@ -765,7 +771,7 @@ final class PlayerProgressBarView: UIView {
         if hours > 0 {
             return String(format: "%d:%02d:%02d", hours, minutes, secs)
         }
-        return String(format: "%02d:%02d", minutes, secs)
+        return String(format: padsMinutes ? "%02d:%02d" : "%d:%02d", minutes, secs)
     }
 }
 

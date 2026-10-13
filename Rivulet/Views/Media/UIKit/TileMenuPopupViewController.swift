@@ -7,8 +7,8 @@
 //
 //  The long-press action menu for poster tiles (home rows, library grid).
 //  Replicates the native tvOS context menu the SwiftUI home got from
-//  `.contextMenu` (reference: Music tab, which still uses it): a liquid-
-//  glass panel appears at the pressed tile's position, covering it, over a
+//  `.contextMenu`: a liquid-glass panel appears at the pressed tile's
+//  position, covering it, over a
 //  dimmed (not blurred) backdrop. Rows are leading-icon + title; the
 //  focused row is a white capsule with dark content; hairline dividers
 //  separate action groups.
