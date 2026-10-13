@@ -617,6 +617,8 @@ class PlexDataStore: ObservableObject {
         hasFetchedContinueWatching = false
         libraries = []
         hasLoadedLibraries = false
+        // A fetch still out for the previous profile must not dedupe the reload below.
+        isLoadingLibraries = false
         libraryHubs.removeAll()
         pinnedCollectionItems.removeAll()
         lastRecentlyAddedStamp = nil
@@ -633,6 +635,11 @@ class PlexDataStore: ObservableObject {
         initialHomeRetryTask?.cancel()
         initialHomeRetryTask = nil
         didCompleteInitialHubFetch = false
+
+        // The tvOS Home screen row and the "in your library" index are the
+        // previous profile's too.
+        TopShelfCache.shared.clear()
+        await LibraryGUIDIndex.shared.profileChanged()
 
         // Clear on-deck/continue watching cache
         await cacheManager.clearOnDeckCache()
@@ -680,7 +687,8 @@ class PlexDataStore: ObservableObject {
 
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
-            hubsError = "Not authenticated"
+            // Withheld is signed in: content loads once a profile is entered.
+            if !authManager.isContentWithheld { hubsError = "Not authenticated" }
             return
         }
 
@@ -782,6 +790,11 @@ class PlexDataStore: ObservableObject {
     }
 
     private func fetchHubsFromServer(serverURL: String, token: String, updateLoading: Bool) async {
+        // A token captured before a profile change must not fetch, paint or cache.
+        guard authManager.selectedServerToken == token else {
+            if updateLoading { isLoadingHubs = false }
+            return
+        }
         let userId = profileManager.selectedUserId
 
         do {
@@ -800,6 +813,10 @@ class PlexDataStore: ObservableObject {
                 continueWatchingFetchCompleted = true
             } catch {
                 print("📦 PlexDataStore: Continue Watching fetch error (keeping current hub): \(error)")
+            }
+            guard authManager.selectedServerToken == token else {
+                if updateLoading { isLoadingHubs = false }
+                return
             }
 
             // Reset recovery flag on success
@@ -889,6 +906,7 @@ class PlexDataStore: ObservableObject {
             print("📦 PlexDataStore: Continue Watching fast-poll error (keeping current hub): \(error)")
             return
         }
+        guard authManager.selectedServerToken == token else { return }
 
         hasFetchedContinueWatching = true
         guard !continueWatchingHubsAreEqual(self.continueWatchingHub, fetched) else { return }
@@ -1038,7 +1056,7 @@ class PlexDataStore: ObservableObject {
                         }
                     }
 
-                    for await (key, _, hubs) in group {
+                    for await (key, _, hubs) in group where authManager.selectedServerToken == token {
                         await noteLibraryHubFetchResult(key: key, hubs: hubs)
                     }
                 }
@@ -1069,7 +1087,7 @@ class PlexDataStore: ObservableObject {
                         }
                     }
 
-                    for await (key, _, hubs) in group {
+                    for await (key, _, hubs) in group where authManager.selectedServerToken == token {
                         await noteLibraryHubFetchResult(key: key, hubs: hubs)
                     }
                 }
@@ -1304,6 +1322,7 @@ class PlexDataStore: ObservableObject {
         // The old app-composed row set is kept below, commented, until this has
         // had a real look on device.
         var rail: CachedHomeRail = []
+        var carriedContinueWatching = false
 
         // Continue Watching. Not gated on promotion: it is a global row that
         // every scoped `/hubs/promoted` call returns, and PMS already scopes its
@@ -1319,6 +1338,11 @@ class PlexDataStore: ObservableObject {
                 hubIdentifier: cw.hubIdentifier,
                 metas: metas
             ))
+        } else if let cached = homeItems.first(where: \.isContinueWatching),
+                  Self.carriesOverContinueWatching(hasFetched: hasFetchedContinueWatching,
+                                                   isHidden: HomeRowSettings.isHidden(cached.hubIdentifier)) {
+            rail.append(cached)
+            carriedContinueWatching = true
         }
 
         // One row per promoted hub, per pinned library. Library order is the
@@ -1379,7 +1403,8 @@ class PlexDataStore: ObservableObject {
         // because nothing has landed yet, and blanking the rail here is
         // permanent: `setHomeItems` re-persists it, so one early call would bake
         // an empty Home into every subsequent warm launch (the trap #236 hit).
-        guard !rail.isEmpty || didCompleteInitialHubFetch else { return }
+        // A carried Continue Watching row is not something that landed.
+        guard rail.count > (carriedContinueWatching ? 1 : 0) || didCompleteInitialHubFetch else { return }
 
         setHomeItems(rail)
     }
@@ -1584,6 +1609,7 @@ class PlexDataStore: ObservableObject {
     /// [PlexHub] decode before first paint.
     func paintLibraryItemsFromCacheIfNeeded(forKey key: String) async -> Bool {
         if let existing = libraryItemsByKey[key], !existing.isEmpty { return true }
+        guard authManager.selectedServerToken != nil else { return false }
         guard let cached = await cacheManager.getCachedLibraryItems(forLibrary: key),
               !cached.isEmpty else { return false }
         setLibraryItemsFromCache(cached, forKey: key)
@@ -1698,6 +1724,13 @@ class PlexDataStore: ObservableObject {
         return fetched.isEmpty ? .omit : .render
     }
 
+    /// Before the session's first Continue Watching fetch, no hub means "not
+    /// loaded yet": the row the launch cache painted stays instead of dropping
+    /// out until the fetch returns. After it, no hub means the user has none.
+    nonisolated static func carriesOverContinueWatching(hasFetched: Bool, isHidden: Bool) -> Bool {
+        !hasFetched && !isHidden
+    }
+
     /// Replica of `PlexHomeViewController.isContinueWatchingHub(_:)` for the
     /// per-library projection's CW detection.
     private func isContinueWatchingHub(_ hub: PlexHub) -> Bool {
@@ -1725,7 +1758,7 @@ class PlexDataStore: ObservableObject {
 
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
-            librariesError = "Not authenticated"
+            if !authManager.isContentWithheld { librariesError = "Not authenticated" }
             return
         }
 
@@ -1757,6 +1790,10 @@ class PlexDataStore: ObservableObject {
 
         do {
             let fetched = try await fetchLibrariesOffMain(serverURL: serverURL, token: token, userId: userId)
+            guard authManager.selectedServerToken == token else {
+                if updateLoading { isLoadingLibraries = false }
+                return
+            }
 
             // Reset recovery flag on success
             hasAttemptedConnectionRecovery = false

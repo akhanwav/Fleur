@@ -69,6 +69,21 @@ final class HomeRecentlyAddedCarryOverTests: XCTestCase {
         )
     }
 
+    // MARK: - Continue Watching (the row dropped out of Home around 3 s after launch)
+
+    func test_continueWatching_carriesOverUntilItsFirstFetch() {
+        XCTAssertTrue(PlexDataStore.carriesOverContinueWatching(hasFetched: false, isHidden: false))
+    }
+
+    func test_continueWatching_isDroppedOnceAFetchSaysThereIsNone() {
+        // Otherwise a stale row re-persists itself on every projection.
+        XCTAssertFalse(PlexDataStore.carriesOverContinueWatching(hasFetched: true, isHidden: false))
+    }
+
+    func test_continueWatching_hiddenRowIsNotCarried() {
+        XCTAssertFalse(PlexDataStore.carriesOverContinueWatching(hasFetched: false, isHidden: true))
+    }
+
     func test_rowID_isStablePerLibrary() {
         let movies = PlexDataStore.recentlyAddedRowID(forLibraryKey: "/library/sections/1")
         let bollywood = PlexDataStore.recentlyAddedRowID(forLibraryKey: "/library/sections/7")

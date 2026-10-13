@@ -3061,26 +3061,24 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             throw PlexAPIError.invalidResponse
         }
 
-        // Log response for debugging
+        return try Self.homeUserToken(status: httpResponse.statusCode, data: data)
+    }
 
-        // 200/201 = success, 401 = invalid PIN, 403 = PIN required
-        switch httpResponse.statusCode {
+    /// Reads a /switch response: the profile's token, nil when the PIN was refused
+    /// (401) or missing (403). A success without a token throws: the caller's own
+    /// token must never stand in for the profile's.
+    nonisolated static func homeUserToken(status: Int, data: Data) throws -> String? {
+        switch status {
         case 200, 201:
-            // Parse the user's auth token from response
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let userToken = json["authToken"] as? String {
-                return userToken
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let userToken = json["authToken"] as? String else {
+                throw PlexAPIError.parsingError
             }
-            return authToken // Fall back to original token
-        case 401:
-            print("🌐 PlexNetwork: ❌ Invalid PIN")
-            return nil
-        case 403:
-            print("🌐 PlexNetwork: ❌ PIN required but not provided")
+            return userToken
+        case 401, 403:
             return nil
         default:
-            print("🌐 PlexNetwork: ❌ User switch failed with status \(httpResponse.statusCode)")
-            throw PlexAPIError.httpError(statusCode: httpResponse.statusCode, data: data)
+            throw PlexAPIError.httpError(statusCode: status, data: data)
         }
     }
 }

@@ -59,6 +59,14 @@ struct ProfilePickerOverlay: View {
                 }
                 .padding(.horizontal, 120)
 
+                // The profile list did not load (plex.tv unreachable): nothing to pick yet.
+                if profileManager.homeUsers.isEmpty {
+                    Button("Try Again") {
+                        Task { await profileManager.fetchHomeUsers() }
+                    }
+                    .disabled(profileManager.isLoadingUsers)
+                }
+
                 Spacer()
             }
         }

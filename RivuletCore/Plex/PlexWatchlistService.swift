@@ -21,8 +21,9 @@ final class PlexWatchlistService: ObservableObject {
         cache: FileWatchlistCache(),
         // Watchlist lives on metadata.provider.plex.tv (the account-wide
         // Discover API), so it requires the owner's authToken — NOT the
-        // server-specific selectedServerToken.
-        tokenProvider: { PlexAuthManager.shared.authToken }
+        // server-specific selectedServerToken. It is the account's list, so
+        // another Home profile gets no token and no Watchlist.
+        tokenProvider: { PlexAuthManager.shared.accountContentToken }
     )
 
     @Published private(set) var watchlistItems: [PlexWatchlistItem] = []
@@ -54,7 +55,8 @@ final class PlexWatchlistService: ObservableObject {
         self.cache = cache
         self.tokenProvider = tokenProvider
 
-        if let cached = cache.load() {
+        // The cached list is the account's too.
+        if tokenProvider() != nil, let cached = cache.load() {
             watchlistItems = cached
             watchlistGUIDs = Set(cached.flatMap(\.guids))
         }

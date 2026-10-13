@@ -65,6 +65,28 @@ final class PlexWatchlistServiceTests: XCTestCase {
         XCTAssertFalse(service.contains(tmdbId: 43))
     }
 
+    /// The Watchlist is the account's: a Home profile with no account token
+    /// must not see the cached copy or fetch a fresh one.
+    func testNoAccountToken_paintsNoCacheAndFetchesNothing() async {
+        final class StoredCache: WatchlistCacheProtocol {
+            let items: [PlexWatchlistItem]
+            init(_ items: [PlexWatchlistItem]) { self.items = items }
+            func load() -> [PlexWatchlistItem]? { items }
+            func save(_ items: [PlexWatchlistItem]) {}
+            func clear() {}
+        }
+        let api = StubWatchlistAPI()
+        api.fetchResult = [makeItem(id: "9", guid: "tmdb://9")]
+
+        let service = PlexWatchlistService(
+            api: api, cache: StoredCache([makeItem(id: "1")]), tokenProvider: { nil })
+        XCTAssertTrue(service.watchlistItems.isEmpty)
+
+        await service.fetchWatchlist(force: true)
+        XCTAssertTrue(service.watchlistItems.isEmpty)
+        XCTAssertTrue(service.watchlistGUIDs.isEmpty)
+    }
+
     func testResetClearsState() async {
         let api = StubWatchlistAPI()
         let service = PlexWatchlistService(api: api, cache: NullWatchlistCache())

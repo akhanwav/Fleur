@@ -10,6 +10,7 @@ enum IOSChangelog {
     static let entries: [(version: String, lines: [String])] = [
         ("1.0.7 (79)", [
             "Fixed the Plex Live TV guide failing to load on slower servers",
+            "Fixed a managed profile briefly showing the owner's library at launch",
         ]),
         ("1.0.7 (78)", [
             "Fixed videos and Live TV failing with a security certificate error on some server connections",

@@ -25,6 +25,8 @@ actor CacheManager {
     private let recentlyAddedPrefix = "recently_added_"
     private let hubsCacheFile = "hubs_cache.json"
     private let cacheInfoFile = "cache_info.json"
+    /// UserDefaults: the Home user whose token wrote these files (0 is the account).
+    private let cacheOwnerKey = "plexCacheUserID"
 
     // MARK: - Cache Configuration
 
@@ -36,13 +38,17 @@ actor CacheManager {
 
     // MARK: - Cache Directory
 
-    private var cacheDirectory: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?.appendingPathComponent("PlexCache")
-    }
+    private let cacheDirectory: URL?
+    private let defaults: UserDefaults
 
     // MARK: - Initialization
 
-    private init() {
+    /// The arguments exist for tests; the app only uses `shared`.
+    init(directory: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("PlexCache"),
+         defaults: UserDefaults = .standard) {
+        cacheDirectory = directory
+        self.defaults = defaults
         memoryCache.countLimit = 64 // Larger limit for tvOS
         Task {
             await createCacheDirectoryIfNeeded()
@@ -106,7 +112,17 @@ actor CacheManager {
 
     // MARK: - Generic Cache Operations
 
+    /// Drops every file written with another Home profile's token, so one
+    /// profile's rows are never painted for the next.
+    private func purgeIfOwnerChanged() {
+        let owner = defaults.integer(forKey: PlexProfileSession.contentUserIDKey)
+        guard owner != defaults.integer(forKey: cacheOwnerKey) else { return }
+        clearAllCache()
+        defaults.set(owner, forKey: cacheOwnerKey)
+    }
+
     private func cacheData<T: Encodable>(_ value: T, fileName: String) {
+        purgeIfOwnerChanged()
         guard let cacheDir = cacheDirectory,
               let data = try? JSONEncoder().encode(value) else { return }
         let fileURL = cacheDir.appendingPathComponent(fileName)
@@ -120,6 +136,7 @@ actor CacheManager {
     }
 
     private func decodedCache<T: Decodable>(for fileName: String, as type: T.Type) -> T? {
+        purgeIfOwnerChanged()
         // Check memory cache first
         if let rawData = memoryCache.object(forKey: fileName as NSString) {
             let data = rawData as Data

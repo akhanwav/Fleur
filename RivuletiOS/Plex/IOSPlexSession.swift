@@ -80,15 +80,18 @@ final class IOSPlexSession: ObservableObject {
             .sink { [weak self] in self?.profileImageURL = $0 }
             .store(in: &cancellables)
 
+        // Signed in with a server but no content token means a Home profile has
+        // to be entered first; `verifyConnection` does that, then content loads.
         if isConfigured {
             state = .connected
             Task { await refresh() }
-        } else if auth.isAuthenticated {
-            // Token but no server: a sign-in that never finished picking one.
-            Task { await auth.resumeServerSelection() }
         }
     }
 
+    /// Signed in with a server chosen. Content may still wait on a Home profile.
+    var isSignedIn: Bool { auth.isAuthenticated }
+
+    /// Signed in and holding a content token, so content can load.
     var isConfigured: Bool {
         auth.selectedServerURL != nil && auth.selectedServerToken != nil
     }
@@ -115,7 +118,7 @@ final class IOSPlexSession: ObservableObject {
         case .idle:
             pinCode = nil
             authenticationURL = nil
-            state = isConfigured ? .connected : .signedOut
+            state = isSignedIn ? .connected : .signedOut
         case .requestingPin:
             state = .requestingPIN
         case .waitingForPIN(let code, _):
@@ -128,7 +131,7 @@ final class IOSPlexSession: ObservableObject {
             selectedServerName = auth.selectedServer?.name ?? auth.savedServerName
             // Content loads through the onAuthenticated handoff; between the
             // token arriving and a server being picked there is nothing to show.
-            state = isConfigured ? .connected : .findingServers
+            state = isSignedIn ? .connected : .findingServers
         case .selectingServer(let servers):
             availableServers = servers
             state = .selectingServer
@@ -556,7 +559,7 @@ final class IOSPlexSession: ObservableObject {
 
     // MARK: - Private
 
-    private func clearContent() {
+    func clearContent() {
         libraries = []
         shelves = []
         continueWatching = nil

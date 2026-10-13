@@ -4,20 +4,50 @@
 import SwiftUI
 import UIKit
 
-/// Signed-out call to action shown in place of content.
+/// Call to action shown in place of content: sign in, or, when signed in with
+/// content waiting on a Home profile, choose who is watching.
 struct IOSPlexConnectView: View {
+    @EnvironmentObject private var plex: IOSPlexSession
+    @ObservedObject private var profiles = PlexUserProfileManager.shared
     @State private var showingSignIn = false
+    @State private var choosingProfile = false
 
     var body: some View {
-        ContentUnavailableView {
-            Label("Sign In to Plex", systemImage: "person.crop.circle")
-        } description: {
-            Text("Sign in to watch your Plex libraries on iPhone and iPad.")
-        } actions: {
-            Button("Sign In") { showingSignIn = true }
-                .buttonStyle(.borderedProminent)
+        if plex.isSignedIn, !profiles.needsProfileSelection {
+            // plex.tv is still being asked to let the saved profile in.
+            ProgressView()
+        } else if plex.isSignedIn {
+            ContentUnavailableView {
+                Label("Who’s Watching?", systemImage: "person.2")
+            } description: {
+                Text("Choose a profile to load your Plex libraries.")
+            } actions: {
+                Button("Choose Profile") { choosingProfile = true }
+                    .buttonStyle(.borderedProminent)
+            }
+            .sheet(isPresented: $choosingProfile) { IOSProfilePickerSheet() }
+        } else {
+            ContentUnavailableView {
+                Label("Sign In to Plex", systemImage: "person.crop.circle")
+            } description: {
+                Text("Sign in to watch your Plex libraries on iPhone and iPad.")
+            } actions: {
+                Button("Sign In") { showingSignIn = true }
+                    .buttonStyle(.borderedProminent)
+            }
+            .sheet(isPresented: $showingSignIn) { IOSPlexConnectionSheet() }
         }
-        .sheet(isPresented: $showingSignIn) { IOSPlexConnectionSheet() }
+    }
+}
+
+/// The profile picker on its own, for when content is waiting on a profile.
+struct IOSProfilePickerSheet: View {
+    var body: some View {
+        NavigationStack {
+            IOSProfilePicker()
+                .navigationTitle("Who’s Watching?")
+                .navigationBarTitleDisplayMode(.inline)
+        }
     }
 }
 
@@ -89,7 +119,7 @@ struct IOSPlexConnectionSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button(role: .close) {
-                            if !plex.isConfigured { plex.cancelSignIn() }
+                            if !plex.isSignedIn { plex.cancelSignIn() }
                             dismiss()
                         }
                     }
@@ -264,6 +294,17 @@ struct IOSProfilePicker: View {
                 }
             }
             .padding(20)
+        }
+        .overlay {
+            // The profile list did not load (plex.tv unreachable): nothing to pick yet.
+            if profiles.homeUsers.isEmpty {
+                ContentUnavailableView {
+                    Label("Couldn’t Load Profiles", systemImage: "person.2.slash")
+                } actions: {
+                    Button("Try Again") { Task { await profiles.fetchHomeUsers() } }
+                        .disabled(profiles.isLoadingUsers)
+                }
+            }
         }
         .sheet(item: $pinUser, onDismiss: { if didSwitch { dismiss() } }) { user in
             IOSProfilePINEntry(user: user, initialError: pinError) { pin, remember in

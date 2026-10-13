@@ -54,10 +54,14 @@ class PlexUserProfileManager: ObservableObject {
     /// users who keep the picker off, so their launch path is unchanged.
     @Published var isPresentingLaunchPicker = false
 
+    /// True while content is withheld because the saved profile could not be
+    /// entered. The host shows the profile picker; entering any profile clears it.
+    @Published private(set) var needsProfileSelection = false
+
     // MARK: - UserDefaults Keys
 
     private let userDefaults = UserDefaults.standard
-    private let selectedUserIdKey = "selectedPlexUserId"
+    private let selectedUserIdKey = PlexProfileSession.savedUserIDKey
     private let selectedUserUUIDKey = "selectedPlexUserUUID"
     private let selectedUserNameKey = "selectedPlexUserName"
     private let showProfilePickerOnLaunchKey = "showPlexProfilePickerOnLaunch"
@@ -110,7 +114,10 @@ class PlexUserProfileManager: ObservableObject {
         usersError = nil
 
         do {
+            // Restoring needs to know which user is the account itself.
+            async let accountID: Void = PlexAuthManager.shared.loadAccountUserIDIfNeeded()
             let users = try await networkManager.getHomeUsers(authToken: authToken)
+            await accountID
             homeUsers = users
 
             // Update remembered PINs state for UI
@@ -125,11 +132,39 @@ class PlexUserProfileManager: ObservableObject {
             usersError = "Failed to load profiles"
             isLoadingUsers = false
 
-            // If we can't fetch users, default to single-user mode (no profile switching)
-            // The admin user's content will be shown via the main auth token
+            // Without the list there is no profile switching. Content keeps the
+            // token it already has: a profile's own, or none.
             homeUsers = []
             selectedUser = nil
         }
+        // Nothing learned about a saved profile this build never resolved: it runs
+        // as it did before the update instead of stranding an owner who is offline.
+        if homeUsers.isEmpty, PlexAuthManager.shared.useAccountTokenWhileUnresolved() {
+            LiveTVDataStore.shared.plexContentTokenChanged()
+            Self.onInitialProfileSelected?()
+        }
+        // Still locked (PIN needed, profile gone, plex.tv unreachable): the host asks.
+        if PlexAuthManager.shared.isContentWithheld {
+            needsProfileSelection = true
+        }
+    }
+
+    /// Enters the saved profile again, after a server change dropped its token.
+    func reapplySelectedProfile() async {
+        if hasLoadedProfiles {
+            await restoreOrSelectDefaultUser()
+        } else {
+            await fetchHomeUsers()
+        }
+    }
+
+    /// How an attempt to enter a profile through plex.tv ended.
+    nonisolated enum Entry: Equatable {
+        case entered
+        /// plex.tv refused: the PIN is wrong, missing, or newly required.
+        case rejected
+        /// No answer, or no token for this server: nothing was learned.
+        case unavailable
     }
 
     /// Select a user profile
@@ -139,68 +174,91 @@ class PlexUserProfileManager: ObservableObject {
     /// - Returns: True if selection succeeded
     @discardableResult
     func selectUser(_ user: PlexHomeUser, pin: String? = nil) async -> Bool {
+        await enter(user, pin: pin) == .entered
+    }
 
+    private func enter(_ user: PlexHomeUser, pin: String?) async -> Entry {
         // PIN required but not provided
         if user.requiresPin && (pin == nil || pin?.isEmpty == true) {
-            return false
+            return .rejected
         }
 
-        // Call switch endpoint to get user-specific plex.tv token
-        guard let authToken = PlexAuthManager.shared.authToken else {
-            print("👤 PlexUserProfileManager: No auth token available")
-            return false
+        guard let authToken = PlexAuthManager.shared.authToken,
+              let serverURL = PlexAuthManager.shared.selectedServerURL else {
+            return .unavailable
         }
 
         do {
-            let userPlexToken = try await networkManager.switchToHomeUser(
+            // Call switch endpoint to get user-specific plex.tv token
+            guard let userPlexToken = try await networkManager.switchToHomeUser(
                 userUUID: user.uuid,
                 pin: pin,
                 authToken: authToken
-            )
-
-            guard let userPlexToken = userPlexToken else {
+            ) else {
                 print("👤 PlexUserProfileManager: Invalid PIN for \(user.displayName)")
-                return false
+                return .rejected
             }
 
             // Now get the server-specific access token using the user's plex.tv token
-            guard let serverURL = PlexAuthManager.shared.selectedServerURL else {
-                print("👤 PlexUserProfileManager: No server URL available")
-                return false
-            }
-
-            let serverAccessToken = await networkManager.getServerAccessToken(
+            guard let serverAccessToken = await networkManager.getServerAccessToken(
                 authToken: userPlexToken,
                 serverURL: serverURL
-            )
-
-            guard let serverAccessToken = serverAccessToken else {
+            ) else {
                 print("👤 PlexUserProfileManager: Could not get server access token")
-                return false
+                return .unavailable
             }
 
-            // Update the server token with the user's server-specific token
-            PlexAuthManager.shared.updateServerToken(serverAccessToken)
+            let wasWithheld = PlexAuthManager.shared.isContentWithheld
+            let contentOwnerChanged = PlexAuthManager.shared.enterProfile(
+                user, serverToken: serverAccessToken, usedPin: pin != nil)
 
             // Update selected user
             let previousUser = selectedUser
             selectedUser = user
             saveSelectedUser(user)
+            needsProfileSelection = false
 
             // Notify whatever holds per-profile content and settings. Same
             // handoff as PlexAuthManager: this manager owns the profile, the
-            // caches it invalidates are per platform.
-            if let previousUser, previousUser.id != user.id {
-                await Self.onProfileChanged?()
-            } else if previousUser == nil {
-                // Initial selection on app launch — sync user-specific settings
-                Self.onInitialProfileSelected?()
+            // caches it invalidates are per platform. "Changed" is judged
+            // against the user the loaded and cached content belongs to, so it
+            // also covers a launch that started on someone else's.
+            if contentOwnerChanged {
+                await contentOwnerDidChange()
+            } else {
+                if wasWithheld {
+                    LiveTVDataStore.shared.plexContentTokenChanged()
+                }
+                if previousUser == nil {
+                    // Initial selection on app launch: sync user-specific settings
+                    Self.onInitialProfileSelected?()
+                }
             }
 
-            return true
+            return .entered
         } catch {
             print("👤 PlexUserProfileManager: ❌ Switch failed: \(error)")
-            return false
+            return .unavailable
+        }
+    }
+
+    /// Account-level content and Live TV belong to the previous user too.
+    private func contentOwnerDidChange() async {
+        PlexWatchlistService.shared.reset()
+        Task { await PlexWatchlistService.shared.fetchWatchlist(force: true) }
+        await Self.onProfileChanged?()
+        LiveTVDataStore.shared.plexContentTokenChanged()
+    }
+
+    /// Withholds content until a profile is entered. The saved profile stays
+    /// saved, so a relaunch is locked too.
+    private func lock() async {
+        let hadContent = PlexAuthManager.shared.selectedServerToken != nil
+        PlexAuthManager.shared.withholdContent()
+        selectedUser = nil
+        needsProfileSelection = true
+        if hadContent {
+            await contentOwnerDidChange()
         }
     }
 
@@ -214,6 +272,8 @@ class PlexUserProfileManager: ObservableObject {
         selectedUser = nil
         usersError = nil
         usersWithRememberedPins = []
+
+        needsProfileSelection = false
 
         // Clear persisted selection
         userDefaults.removeObject(forKey: selectedUserIdKey)
@@ -246,20 +306,21 @@ class PlexUserProfileManager: ObservableObject {
     ///   - success: True if the user was successfully selected
     ///   - pinWasInvalid: True if the remembered PIN was invalid (cleared automatically)
     func selectUserWithRememberedPin(_ user: PlexHomeUser) async -> (success: Bool, pinWasInvalid: Bool) {
+        let entry = await enterWithRememberedPin(user)
+        return (entry == .entered, entry == .rejected)
+    }
+
+    /// Forgets the PIN only when plex.tv refused it, never on a failed request.
+    private func enterWithRememberedPin(_ user: PlexHomeUser) async -> Entry {
         guard let savedPin = KeychainHelper.getPin(forUserUUID: user.uuid) else {
-            return (false, false)
+            return .unavailable
         }
-
-        let success = await selectUser(user, pin: savedPin)
-
-        if success {
-            return (true, false)
-        } else {
-            // PIN is no longer valid - clear it
+        let entry = await enter(user, pin: savedPin)
+        if entry == .rejected {
             forgetPin(for: user)
             print("👤 PlexUserProfileManager: Remembered PIN invalid for \(user.displayName), cleared")
-            return (false, true)
         }
+        return entry
     }
 
     /// Update the set of users with remembered PINs based on current homeUsers
@@ -273,41 +334,70 @@ class PlexUserProfileManager: ObservableObject {
 
     // MARK: - Private Methods
 
+    /// What a restore does once plex.tv has answered for the saved profile.
+    nonisolated enum RestoreAction: Equatable {
+        case none, keep, useAccount, lock
+    }
+
+    /// The account's own profile falls back to the account's token as before.
+    /// Any other profile keeps a session of its own or is locked.
+    nonisolated static func restoreAction(after entry: Entry, isAccount: Bool, ownTokenInUse: Bool) -> RestoreAction {
+        if entry == .entered { return .none }
+        if isAccount { return .useAccount }
+        return entry == .unavailable && ownTokenInUse ? .keep : .lock
+    }
+
     /// Restore previously selected user or select the admin user
     private func restoreOrSelectDefaultUser() async {
-        // Try to find previously selected user
-        if let savedId = userDefaults.object(forKey: selectedUserIdKey) as? Int,
-           let savedUser = homeUsers.first(where: { $0.id == savedId }) {
+        // No users is a failed fetch (every account has itself): nothing was learned.
+        guard !homeUsers.isEmpty else { return }
 
-            // For non-protected users, switch to get their token
-            if !savedUser.requiresPin {
-                let success = await selectUser(savedUser, pin: nil)
-                if success {
-                    return
-                }
-            } else if hasRememberedPin(for: savedUser) {
-                // Try remembered PIN for protected users
-                let (success, pinWasInvalid) = await selectUserWithRememberedPin(savedUser)
-                if success {
-                    return
-                } else if pinWasInvalid {
-                    print("👤 PlexUserProfileManager: Remembered PIN was invalid for \(savedUser.displayName)")
-                }
+        if let savedId = userDefaults.object(forKey: selectedUserIdKey) as? Int {
+            guard let savedUser = homeUsers.first(where: { $0.id == savedId }) else {
+                // The saved profile left the Home.
+                await lock()
+                return
             }
 
-            // For protected users without remembered PIN or if switch failed, just set locally
-            // They'll need to re-enter PIN if they want their specific content
-            selectedUser = savedUser
+            let entry: Entry
+            if !savedUser.requiresPin {
+                entry = await enter(savedUser, pin: nil)
+            } else if hasRememberedPin(for: savedUser) {
+                entry = await enterWithRememberedPin(savedUser)
+            } else {
+                entry = .rejected
+            }
+
+            switch Self.restoreAction(after: entry, isAccount: PlexAuthManager.shared.isAccount(savedUser),
+                                      ownTokenInUse: PlexAuthManager.shared.isUsingToken(of: savedUser)) {
+            case .none:
+                break
+            case .keep:
+                selectedUser = savedUser
+            case .useAccount:
+                let wasWithheld = PlexAuthManager.shared.isContentWithheld
+                selectedUser = savedUser
+                needsProfileSelection = false
+                if PlexAuthManager.shared.useAccountServerToken(for: savedUser) {
+                    await contentOwnerDidChange()
+                } else if wasWithheld {
+                    LiveTVDataStore.shared.plexContentTokenChanged()
+                }
+            case .lock:
+                await lock()
+            }
             return
         }
 
-        // Default to admin user
-        if let adminUser = homeUsers.first(where: { $0.admin }) {
-            let success = await selectUser(adminUser, pin: nil)
+        // Default to the signed-in account's own profile
+        if let accountUser = homeUsers.first(where: PlexAuthManager.shared.isAccount) {
+            let success = await selectUser(accountUser, pin: nil)
             if !success {
-                // Fallback: just set locally
-                selectedUser = adminUser
-                saveSelectedUser(adminUser)
+                // It is the account (at sign-in no server is chosen yet): its
+                // token needs no entry, and the record keeps the launch rule on it.
+                selectedUser = accountUser
+                saveSelectedUser(accountUser)
+                _ = PlexAuthManager.shared.useAccountServerToken(for: accountUser)
             }
         } else if let firstUser = homeUsers.first, !firstUser.requiresPin {
             // Fallback to first non-protected user

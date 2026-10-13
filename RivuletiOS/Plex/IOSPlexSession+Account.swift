@@ -8,10 +8,13 @@ extension IOSPlexSession {
     /// iOS side of the profile handoff (tvOS sets the same hooks in RivuletApp.init).
     func installProfileHooks() {
         PlexUserProfileManager.onProfileChanged = { [weak self] in
-            self?.contentSessionChanged()
-            await self?.refresh()
+            guard let self else { return }
+            contentSessionChanged()
+            // Locked: nothing loads, and the last profile's rows must not stay up.
+            if !isConfigured { clearContent() }
+            await refresh()
         }
-        // The first selection swaps in the profile's server token, so content loaded with the admin token is stale.
+        // The first selection confirms the profile's server token; reload under it.
         PlexUserProfileManager.onInitialProfileSelected = { [weak self] in
             Task { await self?.refresh() }
         }
@@ -20,12 +23,15 @@ extension IOSPlexSession {
     /// Re-tests the saved connection, failing over when it died, and reloads content when it moved.
     func verifyConnection() async {
         guard auth.authToken != nil else { return }
+        // Content waits on the saved Home profile: enter it first, server reachable
+        // or not. The profile hooks reload once it is in.
+        if auth.isContentWithheld {
+            await PlexUserProfileManager.shared.fetchHomeUsers()
+        }
         let before = auth.selectedServerURL
         await auth.verifyAndFixConnection()
         let moved = auth.selectedServerURL != before
-        // Failover installs the owner's token; put the selected profile's back.
         if moved {
-            await reapplySelectedProfile()
             await refresh()
         } else if auth.isConnected, await flushOfflineProgress() {
             await watchStateDidChange()
@@ -61,19 +67,7 @@ extension IOSPlexSession {
             return false
         }
         contentSessionChanged()
-        await reapplySelectedProfile()
         await refresh()
         return true
-    }
-
-    /// Re-selects a non-admin profile after something installed the account token.
-    private func reapplySelectedProfile() async {
-        let profiles = PlexUserProfileManager.shared
-        guard profiles.hasLoadedProfiles else { await profiles.fetchHomeUsers(); return }
-        guard let user = profiles.selectedUser, !user.admin else { return }
-        let restored = user.requiresPin
-            ? await profiles.selectUserWithRememberedPin(user).success
-            : await profiles.selectUser(user)
-        if !restored { profiles.selectedUser = profiles.homeUsers.first(where: \.admin) }
     }
 }

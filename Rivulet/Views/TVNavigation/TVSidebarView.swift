@@ -13,7 +13,7 @@ import os.log
 import Sentry
 
 // Temporary diagnostic logger for intermittent sidebar focus loss.
-private let libraryIndexLog = Logger(subsystem: "com.rivulet.app", category: "LibraryIndex")
+nonisolated private let libraryIndexLog = Logger(subsystem: "com.rivulet.app", category: "LibraryIndex")
 
 // MARK: - TVSidebarView
 
@@ -177,37 +177,42 @@ struct TVSidebarView: View {
         shell
         .task(id: authManager.hasCredentials) {
             StartupTimer.mark("TVSidebar .task entry")
-            guard authManager.selectedServerToken != nil else { return }
+            guard authManager.hasCredentials else { return }
 
-            // If profile picker on launch is enabled, block content immediately
-            if profileManager.showProfilePickerOnLaunch && !hasCheckedProfilePicker {
+            // A saved profile with no stored token of its own: nothing may load
+            // until plex.tv lets it in, so resolve it now instead of deferring.
+            let wantsPicker = profileManager.showProfilePickerOnLaunch && !hasCheckedProfilePicker
+            if wantsPicker || authManager.isContentWithheld {
+                // Block content immediately; profile data must load before the picker shows
                 isAwaitingProfileSelection = true
-            }
-
-            if profileManager.showProfilePickerOnLaunch && !hasCheckedProfilePicker {
-                // Must await profile data before showing picker
                 await profileManager.fetchHomeUsers()
                 hasCheckedProfilePicker = true
 
-                if profileManager.hasMultipleProfiles {
+                if authManager.isContentWithheld {
+                    // `needsProfileSelection` presents the picker; content loads after it.
+                    return
+                } else if wantsPicker && profileManager.hasMultipleProfiles {
                     // Stand the launch splash down so the picker is the top
                     // surface (otherwise it renders under the splash, which
-                    // rides its 15s safety timeout because hubs — and thus
-                    // isHomeContentReady — are deferred until after selection).
+                    // rides its 15s safety timeout because hubs, and thus
+                    // isHomeContentReady, are deferred until after selection).
                     profileManager.isPresentingLaunchPicker = true
                     showProfilePicker = true
                     // Content will load after profile is selected
                     return
                 } else {
                     isAwaitingProfileSelection = false
+                    // No picker after all: What's New was deferred for it.
+                    checkAndShowWhatsNew()
                 }
             } else {
-                // Home users are NOT needed to render the home screen (single-user
-                // content uses the main auth token); they only feed the profile
-                // switcher / settings. The plex.tv /api/v2/home/users call can be
-                // slow (18s on device) and was contending with the critical hub
-                // fetch for the network + cooperative thread pool at launch — so
-                // defer it until after the home content path has had its window.
+                // Home users are NOT needed to render the home screen (the saved
+                // profile's own token is already installed); they feed the profile
+                // switcher / settings and re-validate that profile. The plex.tv
+                // /api/v2/home/users call can be slow (18s on device) and was
+                // contending with the critical hub fetch for the network +
+                // cooperative thread pool at launch, so defer it until after the
+                // home content path has had its window.
                 hasCheckedProfilePicker = true
                 Task {
                     // 10s: the 3s defer landed this slow plex.tv call back
@@ -218,142 +223,7 @@ struct TVSidebarView: View {
                 }
             }
 
-            // CRITICAL PATH: Only hubs needed for home screen to render
-            StartupTimer.mark("TVSidebar → loadHubsIfNeeded")
-            await dataStore.loadHubsIfNeeded()
-            StartupTimer.mark("TVSidebar loadHubsIfNeeded returned")
-
-            // Kick off watchlist fetch — DEFERRED so it doesn't contend with
-            // the home's cache decode + first paint at launch (the watchlist
-            // row fills in a couple seconds later).
-            Task {
-                try? await Task.sleep(for: .seconds(2))
-                await PlexWatchlistService.shared.fetchWatchlist()
-            }
-
-            // IMMEDIATE: hydrate the library GUID index from last launch's
-            // persisted snapshot. Local decode (a few ms), so it runs with no
-            // defer — this makes "do I own this?" answers (and the trending
-            // hero upgrade) available right after the home paints, instead of
-            // waiting ~20s for the network rebuild below. A fresh network
-            // rebuild always supersedes this (see LibraryGUIDIndex.hasFreshData).
-            Task.detached(priority: .userInitiated) {
-                _ = await LibraryGUIDIndex.shared.hydrateFromDisk()
-            }
-
-            // BACKGROUND: Libraries -> library hubs -> prefetch (chained, not blocking home).
-            // Delayed so the big per-library hub decodes (316KB/550KB payloads)
-            // don't saturate the cores during the home's first paint.
-            Task {
-                try? await Task.sleep(for: .seconds(2))
-                await dataStore.loadLibrariesIfNeeded()
-                await dataStore.loadLibraryHubsIfNeeded()
-                dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
-
-                // Rebuild the library GUID index in the background. Used by Discover and
-                // Watchlist surfaces to answer "do I own this?" in O(1). The index
-                // matches by external GUID, so the fetch must include them
-                // (Plex omits them from the default summary response).
-                //
-                // DEFERRED 5s past launch: this fetches ~5MB per page
-                // (5000 items + includeGuids, paginated) — so it must stay
-                // clear of the home's first-paint window. It no longer gates the
-                // trending hero or "in your library" badges: hydrateFromDisk()
-                // above serves last launch's snapshot in ms. This fetch refreshes
-                // that snapshot from the server, and replace(with:) re-posts
-                // .libraryGUIDIndexDidUpdate so the hero picks up any new data.
-                Task.detached(priority: .background) {
-                    try? await Task.sleep(for: .seconds(5))
-                    let (serverURL, token) = await MainActor.run {
-                        (PlexAuthManager.shared.selectedServerURL, PlexAuthManager.shared.selectedServerToken)
-                    }
-                    guard let serverURL, let token else { return }
-
-                    let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
-
-                    var allItems: [PlexMetadata] = []
-                    // Completeness is tracked per section, not as a single global
-                    // flag, because the two ways a build goes wrong look identical
-                    // in aggregate: a section that threw on its very first page
-                    // contributes nothing, and a section that threw at offset 5000
-                    // of 12000 contributes a plausible-looking 5000 items. Both are
-                    // incomplete, and the second one is the dangerous case, since
-                    // the totals alone give no hint that anything is missing.
-                    var incompleteSections = 0
-                    let pageSize = 5000
-                    for library in visible {
-                        // Page through the whole section — libraries larger than one
-                        // page used to be truncated, silently dropping ownership
-                        // matches for everything past the first 5000 titles (#202).
-                        var start = 0
-                        var sectionComplete = false
-                        while true {
-                            do {
-                                let result = try await PlexNetworkManager.shared.getLibraryItemsWithTotal(
-                                    serverURL: serverURL,
-                                    authToken: token,
-                                    sectionId: library.key,
-                                    start: start,
-                                    size: pageSize,
-                                    includeGuids: true
-                                )
-                                allItems.append(contentsOf: result.items)
-                                start += result.items.count
-                                // An empty page or reaching the reported total is the
-                                // only way out that means we actually saw the section
-                                // in full. Anything else leaves sectionComplete false.
-                                if result.items.isEmpty || start >= (result.totalSize ?? 0) {
-                                    sectionComplete = true
-                                    break
-                                }
-                            } catch {
-                                // The break abandons every remaining page of this
-                                // section, so the section is partial from here on.
-                                libraryIndexLog.error("[GUIDIndex] fetch failed for section \(library.key, privacy: .public) at offset \(start): \(error.localizedDescription, privacy: .public)")
-                                let crumb = Breadcrumb(level: .error, category: "guid_index")
-                                crumb.message = "Library GUID fetch failed"
-                                crumb.data = ["section": library.key, "offset": start, "error": error.localizedDescription]
-                                SentryBridge.addBreadcrumb(crumb)
-                                break
-                            }
-                        }
-                        if !sectionComplete { incompleteSections += 1 }
-                    }
-
-                    // Only a build where every visible section ran to completion may
-                    // overwrite the disk cache. See LibraryGUIDIndex.Completeness.
-                    let completeness: LibraryGUIDIndex.Completeness =
-                        incompleteSections == 0 ? .complete : .partial
-
-                    let withGuids = allItems.filter { ($0.Guid ?? []).isEmpty == false }
-                    let sample = withGuids.first.flatMap { $0.Guid?.first?.id } ?? "(none)"
-                    libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, \(incompleteSections) incomplete sections, sample=\(sample, privacy: .public)")
-
-                    let crumb = Breadcrumb(level: .info, category: "guid_index")
-                    crumb.message = "Library GUID index rebuilt"
-                    crumb.data = [
-                        "libraries": visible.count,
-                        "failed_sections": incompleteSections,
-                        "items": allItems.count,
-                        "with_guids": withGuids.count
-                    ]
-                    SentryBridge.addBreadcrumb(crumb)
-
-                    // No standalone Sentry event for an incomplete build. The
-                    // underlying cause is the user's own Plex server going
-                    // unreachable, and PlexNetworkManager already captures each
-                    // transport failure with its endpoint, elapsed time and error
-                    // code. An event here only duplicated that, once per launch, for
-                    // users whose whole server was down. The breadcrumb above keeps
-                    // the context on any real downstream error at no cost.
-
-                    // An empty result with at least one section incomplete means we
-                    // learned nothing from the server, so keep whatever the disk
-                    // hydrate gave us rather than blanking a working index.
-                    if allItems.isEmpty && completeness == .partial { return }
-                    await LibraryGUIDIndex.shared.replace(with: allItems, completeness: completeness)
-                }
-            }
+            await loadLaunchContent()
         }
         .task {
             // Start background preloading of Live TV data (low priority)
@@ -379,7 +249,8 @@ struct TVSidebarView: View {
             MusicNowPlayingViewController.installPresenter()
             applyDebugLaunchTab()
             // Defer What's New check if profile picker needs to be shown first
-            if profileManager.showProfilePickerOnLaunch && authManager.selectedServerToken != nil {
+            if authManager.isContentWithheld
+                || (profileManager.showProfilePickerOnLaunch && authManager.selectedServerToken != nil) {
                 return
             }
             checkAndShowWhatsNew()
@@ -393,28 +264,34 @@ struct TVSidebarView: View {
         }
         .onChange(of: showProfilePicker) { _, isShowing in
             if !isShowing {
+                // Menu closed the picker with content still withheld: ask again.
+                guard !profileManager.needsProfileSelection else {
+                    showProfilePicker = true
+                    return
+                }
                 // Profile selected, unblock content
                 isAwaitingProfileSelection = false
                 profileManager.isPresentingLaunchPicker = false
 
                 // Load content if not already loaded (profile switch handles its own reload)
-                Task {
-                    if dataStore.hubs.isEmpty {
-                        // CRITICAL PATH: Only hubs needed for home screen to render
-                        await dataStore.loadHubsIfNeeded()
-
-                        // BACKGROUND: Libraries -> library hubs -> prefetch
-                        Task {
-                            await dataStore.loadLibrariesIfNeeded()
-                            await dataStore.loadLibraryHubsIfNeeded()
-                            dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
-                        }
-                    }
+                if dataStore.hubs.isEmpty {
+                    Task { await loadLaunchContent() }
                 }
 
                 // Now show What's New if applicable (was deferred for profile picker)
                 checkAndShowWhatsNew()
             }
+        }
+        // Content is withheld until a profile is entered: ask who is watching.
+        .onChange(of: profileManager.needsProfileSelection) { _, needed in
+            if needed {
+                isAwaitingProfileSelection = true
+                profileManager.isPresentingLaunchPicker = true
+                // The picker cannot present over a player, and nothing may keep playing.
+                MusicQueue.shared.stop()
+                Self.rootViewController()?.dismiss(animated: false)
+            }
+            showProfilePicker = needed
         }
         // Compact profile switcher popup (from sidebar account tab)
         .fullScreenCover(isPresented: $showProfileSwitcher) {
@@ -423,6 +300,151 @@ struct TVSidebarView: View {
                 profileManager: profileManager
             )
             .presentationBackground(.clear)
+        }
+    }
+
+    // MARK: - Launch Content
+
+    /// Everything the shell loads once a content token is installed: at launch,
+    /// or after the launch profile picker when content waited for it.
+    private func loadLaunchContent() async {
+        // CRITICAL PATH: Only hubs needed for home screen to render
+        StartupTimer.mark("TVSidebar → loadHubsIfNeeded")
+        await dataStore.loadHubsIfNeeded()
+        StartupTimer.mark("TVSidebar loadHubsIfNeeded returned")
+
+        // Kick off watchlist fetch — DEFERRED so it doesn't contend with
+        // the home's cache decode + first paint at launch (the watchlist
+        // row fills in a couple seconds later).
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            await PlexWatchlistService.shared.fetchWatchlist()
+        }
+
+        // IMMEDIATE: hydrate the library GUID index from last launch's
+        // persisted snapshot. Local decode (a few ms), so it runs with no
+        // defer — this makes "do I own this?" answers (and the trending
+        // hero upgrade) available right after the home paints, instead of
+        // waiting ~20s for the network rebuild below. A fresh network
+        // rebuild always supersedes this (see LibraryGUIDIndex.hasFreshData).
+        Task.detached(priority: .userInitiated) {
+            _ = await LibraryGUIDIndex.shared.hydrateFromDisk()
+        }
+
+        // BACKGROUND: Libraries -> library hubs -> prefetch (chained, not blocking home).
+        // Delayed so the big per-library hub decodes (316KB/550KB payloads)
+        // don't saturate the cores during the home's first paint.
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            await dataStore.loadLibrariesIfNeeded()
+            await dataStore.loadLibraryHubsIfNeeded()
+            dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
+
+            // Rebuild the library GUID index in the background. Used by Discover and
+            // Watchlist surfaces to answer "do I own this?" in O(1). The index
+            // matches by external GUID, so the fetch must include them
+            // (Plex omits them from the default summary response).
+            //
+            // DEFERRED 5s past launch: this fetches ~5MB per page
+            // (5000 items + includeGuids, paginated) — so it must stay
+            // clear of the home's first-paint window. It no longer gates the
+            // trending hero or "in your library" badges: hydrateFromDisk()
+            // above serves last launch's snapshot in ms. This fetch refreshes
+            // that snapshot from the server, and replace(with:) re-posts
+            // .libraryGUIDIndexDidUpdate so the hero picks up any new data.
+            Task.detached(priority: .background) {
+                try? await Task.sleep(for: .seconds(5))
+                let (serverURL, token) = await MainActor.run {
+                    (PlexAuthManager.shared.selectedServerURL, PlexAuthManager.shared.selectedServerToken)
+                }
+                guard let serverURL, let token else { return }
+
+                let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
+
+                var allItems: [PlexMetadata] = []
+                // Completeness is tracked per section, not as a single global
+                // flag, because the two ways a build goes wrong look identical
+                // in aggregate: a section that threw on its very first page
+                // contributes nothing, and a section that threw at offset 5000
+                // of 12000 contributes a plausible-looking 5000 items. Both are
+                // incomplete, and the second one is the dangerous case, since
+                // the totals alone give no hint that anything is missing.
+                var incompleteSections = 0
+                let pageSize = 5000
+                for library in visible {
+                    // Page through the whole section — libraries larger than one
+                    // page used to be truncated, silently dropping ownership
+                    // matches for everything past the first 5000 titles (#202).
+                    var start = 0
+                    var sectionComplete = false
+                    while true {
+                        do {
+                            let result = try await PlexNetworkManager.shared.getLibraryItemsWithTotal(
+                                serverURL: serverURL,
+                                authToken: token,
+                                sectionId: library.key,
+                                start: start,
+                                size: pageSize,
+                                includeGuids: true
+                            )
+                            allItems.append(contentsOf: result.items)
+                            start += result.items.count
+                            // An empty page or reaching the reported total is the
+                            // only way out that means we actually saw the section
+                            // in full. Anything else leaves sectionComplete false.
+                            if result.items.isEmpty || start >= (result.totalSize ?? 0) {
+                                sectionComplete = true
+                                break
+                            }
+                        } catch {
+                            // The break abandons every remaining page of this
+                            // section, so the section is partial from here on.
+                            libraryIndexLog.error("[GUIDIndex] fetch failed for section \(library.key, privacy: .public) at offset \(start): \(error.localizedDescription, privacy: .public)")
+                            let crumb = Breadcrumb(level: .error, category: "guid_index")
+                            crumb.message = "Library GUID fetch failed"
+                            crumb.data = ["section": library.key, "offset": start, "error": error.localizedDescription]
+                            SentryBridge.addBreadcrumb(crumb)
+                            break
+                        }
+                    }
+                    if !sectionComplete { incompleteSections += 1 }
+                }
+
+                // Only a build where every visible section ran to completion may
+                // overwrite the disk cache. See LibraryGUIDIndex.Completeness.
+                let completeness: LibraryGUIDIndex.Completeness =
+                    incompleteSections == 0 ? .complete : .partial
+
+                let withGuids = allItems.filter { ($0.Guid ?? []).isEmpty == false }
+                let sample = withGuids.first.flatMap { $0.Guid?.first?.id } ?? "(none)"
+                libraryIndexLog.info("[GUIDIndex] populated: \(allItems.count) items total, \(withGuids.count) with external GUIDs, \(incompleteSections) incomplete sections, sample=\(sample, privacy: .public)")
+
+                let crumb = Breadcrumb(level: .info, category: "guid_index")
+                crumb.message = "Library GUID index rebuilt"
+                crumb.data = [
+                    "libraries": visible.count,
+                    "failed_sections": incompleteSections,
+                    "items": allItems.count,
+                    "with_guids": withGuids.count
+                ]
+                SentryBridge.addBreadcrumb(crumb)
+
+                // No standalone Sentry event for an incomplete build. The
+                // underlying cause is the user's own Plex server going
+                // unreachable, and PlexNetworkManager already captures each
+                // transport failure with its endpoint, elapsed time and error
+                // code. An event here only duplicated that, once per launch, for
+                // users whose whole server was down. The breadcrumb above keeps
+                // the context on any real downstream error at no cost.
+
+                // An empty result with at least one section incomplete means we
+                // learned nothing from the server, so keep whatever the disk
+                // hydrate gave us rather than blanking a working index.
+                if allItems.isEmpty && completeness == .partial { return }
+                // The token changed hands while this ran: not that profile's library.
+                guard await MainActor.run(body: { PlexAuthManager.shared.selectedServerToken }) == token else { return }
+                await LibraryGUIDIndex.shared.replace(with: allItems, completeness: completeness)
+            }
         }
     }
 
@@ -611,10 +633,14 @@ struct TVSidebarView: View {
         top.present(popup, animated: true)
     }
 
-    private static func topPresentedViewController() -> UIViewController? {
+    private static func rootViewController() -> UIViewController? {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first,
-              var top = window.rootViewController else { return nil }
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first else { return nil }
+        return window.rootViewController
+    }
+
+    private static func topPresentedViewController() -> UIViewController? {
+        guard var top = rootViewController() else { return nil }
         while let presented = top.presentedViewController { top = presented }
         return top
     }

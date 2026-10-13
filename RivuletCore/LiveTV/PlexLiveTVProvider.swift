@@ -149,9 +149,10 @@ actor PlexLiveTVProvider: LiveTVProvider {
         // NOT `self.authToken`. This provider is constructed with
         // `selectedServerToken`, and a server token is rejected by the provider
         // hosts — the same account-vs-server trap the Discover endpoints
-        // document. Read the account token directly for this one call.
+        // document. Read the account token directly for this one call: they are
+        // the account's favourites, so another Home profile gets none.
         var favouriteRanks: [String: Int] = [:]
-        if let accountToken = await PlexAuthManager.shared.authToken {
+        if let accountToken = await PlexAuthManager.shared.accountContentToken {
             let favourites = await networkManager.getFavoriteChannelIdentifiers(authToken: accountToken)
             for (index, identifier) in favourites.enumerated() where favouriteRanks[identifier] == nil {
                 favouriteRanks[identifier] = index

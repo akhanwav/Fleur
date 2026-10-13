@@ -199,7 +199,16 @@ actor LibraryGUIDIndex {
         guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             return nil
         }
-        return dir.appendingPathComponent("library-guid-index.json")
+        // One snapshot per Home profile: what is "in your library" depends on who looks.
+        let owner = UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey)
+        return dir.appendingPathComponent(owner == 0 ? "library-guid-index.json" : "library-guid-index-\(owner).json")
+    }
+
+    /// Another profile owns the content now: drop the previous one's answers
+    /// and take this profile's last snapshot.
+    func profileChanged() {
+        hasFreshData = false
+        rebuild(from: Self.loadFromDisk() ?? [], source: "profileChanged")
     }
 
     /// Persist the ingested snapshot for the next launch. Fire-and-forget on a

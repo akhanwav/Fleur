@@ -161,6 +161,7 @@ struct WhatsNewView: View {
             "Music genres, playlists and large libraries now load in full.",
             "Add music to a playlist or jump to its album or artist from any menu.",
             "Fixed music on Home opening a video page instead of its album.",
+            "Fixed a managed profile briefly showing the owner's library at launch.",
         ]),
         ("1.0.7 (95)", [
             "Cast page improvements.",

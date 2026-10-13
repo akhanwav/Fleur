@@ -85,6 +85,8 @@ class LiveTVDataStore: ObservableObject {
     /// Bumped when the source set changes. A load started for an older set is
     /// cancelled; one for the current set is waited on (see `loadChannels`).
     private var providersGeneration = 0
+    /// Plex sources saved but not built: no profile's token is installed yet.
+    private var withheldPlexSources: [SourceConfiguration] = []
     private var channelLoad: (task: Task<Void, Never>, generation: Int)?
     private var epgLoad: (task: Task<Void, Never>, generation: Int, channelCount: Int, window: DateInterval)?
     private var backgroundPreloadTask: Task<Void, Never>?
@@ -311,6 +313,7 @@ class LiveTVDataStore: ObservableObject {
     /// Remove a source by ID
     func removeSource(id: String) async {
         providers.removeValue(forKey: id)
+        withheldPlexSources.removeAll { $0.id == id }
         KeychainHelper.delete(Self.apiTokenKey(sourceId: id))
         saveSources()
         await updateSourceInfo()
@@ -363,19 +366,10 @@ class LiveTVDataStore: ObservableObject {
                 }
 
             case "plex":
-                // Restore Plex source using PlexAuthManager's saved credentials
-                if let serverURL = config.baseURL {
-                    let authManager = PlexAuthManager.shared
-                    if let authToken = authManager.selectedServerToken {
-                        let serverName = authManager.savedServerName ?? "Plex"
-                        let provider = PlexLiveTVProvider(
-                            serverURL: serverURL,
-                            authToken: authToken,
-                            serverName: serverName
-                        )
-                        providers[config.id] = provider
-                    } else {
-                    }
+                if let provider = plexProvider(for: config) {
+                    providers[config.id] = provider
+                } else {
+                    withheldPlexSources.append(config)
                 }
 
             default:
@@ -383,8 +377,12 @@ class LiveTVDataStore: ObservableObject {
             }
         }
 
-        // Listed now, so the sidebar's Live TV tab exists from launch; the
-        // connection probe below can take tens of seconds.
+        listSources()
+    }
+
+    /// Lists the sources now, so the sidebar's Live TV tab exists at once; the
+    /// connection probe behind `updateSourceInfo` can take tens of seconds.
+    private func listSources() {
         sources = providers.map { id, provider in
             LiveTVSourceInfo(id: id, sourceType: provider.sourceType, displayName: provider.displayName,
                              channelCount: 0, isConnected: false, lastSync: nil,
@@ -397,9 +395,53 @@ class LiveTVDataStore: ObservableObject {
         }
     }
 
+    /// A Plex source under the token content uses now; nil while content is withheld.
+    private func plexProvider(for config: SourceConfiguration) -> PlexLiveTVProvider? {
+        guard let serverURL = config.baseURL,
+              let authToken = PlexAuthManager.shared.selectedServerToken else { return nil }
+        return PlexLiveTVProvider(serverURL: serverURL, authToken: authToken,
+                                  serverName: PlexAuthManager.shared.savedServerName ?? "Plex")
+    }
+
+    /// The content token now belongs to another Home profile, or was just
+    /// installed: rebuild the Plex sources under it. IPTV sources hold no Plex
+    /// token and are left alone.
+    func plexContentTokenChanged() {
+        var configs = withheldPlexSources
+        for (id, provider) in providers {
+            guard let plex = provider as? PlexLiveTVProvider else { continue }
+            configs.append(SourceConfiguration(id: id, type: "plex", name: plex.displayName,
+                                               baseURL: plex.serverURL, m3uURL: nil, epgURL: nil, apiToken: nil))
+            providers.removeValue(forKey: id)
+        }
+        guard !configs.isEmpty else { return }
+
+        let ids = Set(configs.map(\.id))
+        let removed = Set(channels.lazy.filter { ids.contains($0.sourceId) }.map(\.id))
+        channels.removeAll { ids.contains($0.sourceId) }
+        for channelId in removed {
+            epg.removeValue(forKey: channelId)
+        }
+
+        withheldPlexSources = []
+        for config in configs {
+            if let provider = plexProvider(for: config) {
+                providers[config.id] = provider
+            } else {
+                withheldPlexSources.append(config)
+            }
+        }
+        listSources()
+        Task {
+            await loadChannels()
+            await loadEPG()
+        }
+    }
+
     /// Save current source configurations to UserDefaults
     private func saveSources() {
-        var configs: [SourceConfiguration] = []
+        // A source waiting for a profile to be entered is still saved.
+        var configs = withheldPlexSources
 
         for (id, provider) in providers {
             switch provider.sourceType {

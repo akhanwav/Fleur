@@ -69,10 +69,10 @@ class PlexAuthManager: ObservableObject {
     @Published var selectedServer: PlexDevice?
     @Published var selectedServerURL: String?
 
-    /// The access token to use for the selected server
-    /// For shared/friend's servers, this is the server-specific accessToken
-    /// For owned servers, this falls back to the user's authToken
-    @Published var selectedServerToken: String?
+    /// The token every content request uses. It is the account's server token
+    /// only while the account itself is the profile in use; a Plex Home profile
+    /// gets its own, and nil withholds content until that profile is entered.
+    @Published private(set) var selectedServerToken: String?
 
     /// Whether we can currently reach the Plex server (separate from authentication)
     @Published var isConnected: Bool = true
@@ -89,6 +89,7 @@ class PlexAuthManager: ObservableObject {
 
     // UserDefaults keys (non-sensitive data only)
     private let usernameKey = "plexUsername"
+    private let accountUserIDKey = "plexAccountUserID"
     private let userThumbKey = "plexUserThumb"
     private let serverURLKey = "selectedServerURL"
     private let serverNameKey = "selectedServerName"
@@ -121,10 +122,12 @@ class PlexAuthManager: ObservableObject {
         let hasPersistedSession = userDefaults.bool(forKey: hasPersistedSessionKey)
         let keychainHasToken = KeychainHelper.get(keychainTokenKey) != nil
             || KeychainHelper.get(keychainServerTokenKey) != nil
+            || KeychainHelper.get(PlexProfileSession.keychainKey) != nil
         if !hasPersistedSession && keychainHasToken {
             print("🔐 PlexAuthManager: Detected stale Keychain data from previous install — clearing")
             KeychainHelper.delete(keychainTokenKey)
             KeychainHelper.delete(keychainServerTokenKey)
+            PlexProfileSession.delete()
             state = .idle
             return
         }
@@ -137,9 +140,12 @@ class PlexAuthManager: ObservableObject {
         userThumbURL = userDefaults.string(forKey: userThumbKey).flatMap { URL(string: $0) }
         selectedServerURL = userDefaults.string(forKey: serverURLKey)
 
-        // Load server-specific token from Keychain, fall back to user's auth token for owned servers
-        let savedServerToken = KeychainHelper.get(keychainServerTokenKey)
-        selectedServerToken = savedServerToken ?? authToken
+        // A saved Home profile starts on its own stored token or on none.
+        switch storedContent {
+        case .account: selectedServerToken = accountServerToken
+        case .profile(let token): selectedServerToken = token
+        case .withheld, .unresolved: selectedServerToken = nil
+        }
 
         if authToken != nil {
             state = .authenticated
@@ -235,6 +241,9 @@ class PlexAuthManager: ObservableObject {
         // Create a tracked task for the connection test
         let task = Task { @MainActor () -> Bool in
             if let workingURL = await findBestConnection(for: server) {
+                // A profile's stored token was issued for the server it was entered on.
+                let serverChanged = selectedServerURL.map { !urlBelongs($0, to: server) } ?? false
+
                 // Flip identity + URL + token atomically once the connection
                 // is verified. Setting `selectedServer = server` eagerly
                 // (before the async test) caused a confusing UI / data-
@@ -252,15 +261,8 @@ class PlexAuthManager: ObservableObject {
                 userDefaults.set(selectedServerURL, forKey: serverURLKey)
                 userDefaults.set(server.name, forKey: serverNameKey)
 
-                // Save the correct token for this server (securely in Keychain)
                 // For shared servers, use server-specific accessToken; for owned, use user's authToken
-                let tokenForServer = server.accessToken ?? authToken
-                selectedServerToken = tokenForServer
-                if let token = tokenForServer {
-                    KeychainHelper.set(token, forKey: keychainServerTokenKey)
-                }
-
-                let isShared = server.owned == false
+                await adoptAccountServerToken(server.accessToken ?? authToken, serverChanged: serverChanged)
 
                 isConnected = true
                 connectionError = nil
@@ -700,8 +702,11 @@ class PlexAuthManager: ObservableObject {
         // Clear tokens from Keychain (secure storage)
         KeychainHelper.delete(keychainTokenKey)
         KeychainHelper.delete(keychainServerTokenKey)
+        PlexProfileSession.delete()
 
         // Clear non-sensitive data from UserDefaults
+        userDefaults.removeObject(forKey: PlexProfileSession.contentUserIDKey)
+        userDefaults.removeObject(forKey: accountUserIDKey)
         userDefaults.removeObject(forKey: usernameKey)
         userDefaults.removeObject(forKey: userThumbKey)
         userDefaults.removeObject(forKey: serverURLKey)
@@ -734,12 +739,114 @@ class PlexAuthManager: ObservableObject {
         state = .idle
     }
 
-    /// Update the server token for user profile switching
-    /// This is called when switching Plex Home users to use their specific token
-    func updateServerToken(_ token: String) {
-        selectedServerToken = token
-        // Note: We don't persist this to UserDefaults since it's session-specific
-        // On next app launch, we'll fetch users again and switch if needed
+    // MARK: - Content Token
+
+    /// The account's own token for the selected server.
+    private var accountServerToken: String? {
+        KeychainHelper.get(keychainServerTokenKey) ?? authToken
+    }
+
+    /// Who the stored state lets load content: the account, the saved profile, or nobody yet.
+    private var storedContent: PlexProfileSession.Content {
+        PlexProfileSession.content(
+            accountToken: authToken,
+            savedUserID: userDefaults.object(forKey: PlexProfileSession.savedUserIDKey) as? Int,
+            session: PlexProfileSession.load(),
+            everResolved: userDefaults.object(forKey: PlexProfileSession.contentUserIDKey) != nil)
+    }
+
+    /// Signed in with a server, but content waits for a Home profile to be entered.
+    var isContentWithheld: Bool {
+        isAuthenticated && selectedServerToken == nil
+    }
+
+    /// The account token for account-level content (Watchlist, favourite channels),
+    /// only while the account itself is the profile in use.
+    var accountContentToken: String? {
+        guard selectedServerToken != nil,
+              userDefaults.integer(forKey: PlexProfileSession.contentUserIDKey) == 0 else { return nil }
+        return authToken
+    }
+
+    /// Whether a Home user is the signed-in account itself, not another profile in its Home.
+    func isAccount(_ user: PlexHomeUser) -> Bool {
+        PlexProfileSession.isAccount(userID: user.id, admin: user.admin,
+                                     accountUserID: userDefaults.object(forKey: accountUserIDKey) as? Int)
+    }
+
+    /// An install from before the account's id was kept learns it on the next profile fetch.
+    func loadAccountUserIDIfNeeded() async {
+        if userDefaults.object(forKey: accountUserIDKey) == nil { await fetchUserInfo() }
+    }
+
+    /// Whether content is loading with this profile's own token, not the account's.
+    func isUsingToken(of user: PlexHomeUser) -> Bool {
+        selectedServerToken != nil && !isAccount(user)
+            && userDefaults.integer(forKey: PlexProfileSession.contentUserIDKey) == user.id
+    }
+
+    /// Installs a Home profile's server token. Returns true when content now
+    /// belongs to a different user than the one it was loaded and cached for.
+    func enterProfile(_ user: PlexHomeUser, serverToken: String, usedPin: Bool) -> Bool {
+        guard let authToken else { return false }
+        let isAccount = isAccount(user)
+        let access = PlexProfileSession.access(isAccount: isAccount, usedPin: usedPin, serverToken: serverToken)
+        PlexProfileSession(userID: user.id, accountToken: authToken, access: access).save()
+        if selectedServerToken != serverToken { selectedServerToken = serverToken }
+        return setContentOwner(isAccount ? 0 : user.id)
+    }
+
+    /// The account's own profile could not be entered through plex.tv: content
+    /// keeps the account's server token. Before a server is chosen it only records that.
+    func useAccountServerToken(for account: PlexHomeUser) -> Bool {
+        guard let authToken else { return false }
+        PlexProfileSession(userID: account.id, accountToken: authToken, access: .account).save()
+        if selectedServerToken == nil, selectedServerURL != nil { selectedServerToken = accountServerToken }
+        return setContentOwner(0)
+    }
+
+    /// plex.tv could not be asked about a saved profile this build has never
+    /// resolved: run on the account's token, as that install did before. Returns
+    /// true when it installed the token.
+    func useAccountTokenWhileUnresolved() -> Bool {
+        guard isContentWithheld, storedContent == .unresolved else { return false }
+        selectedServerToken = accountServerToken
+        return selectedServerToken != nil
+    }
+
+    /// Locks content until the saved profile is entered through plex.tv. The
+    /// account's token is never the fallback.
+    func withholdContent() {
+        selectedServerToken = nil
+        guard let authToken,
+              let userID = userDefaults.object(forKey: PlexProfileSession.savedUserIDKey) as? Int else { return }
+        PlexProfileSession(userID: userID, accountToken: authToken, access: .withheld).save()
+        // Resolved from here on: with no session (a failed Keychain write) it stays
+        // withheld, and the never-resolved fallback to the account is closed.
+        if userDefaults.object(forKey: PlexProfileSession.contentUserIDKey) == nil {
+            userDefaults.set(0, forKey: PlexProfileSession.contentUserIDKey)
+        }
+    }
+
+    private func setContentOwner(_ userID: Int) -> Bool {
+        let previous = userDefaults.integer(forKey: PlexProfileSession.contentUserIDKey)
+        userDefaults.set(userID, forKey: PlexProfileSession.contentUserIDKey)
+        return previous != userID
+    }
+
+    /// Stores the account's token for the selected server, and makes it the
+    /// content token only while the account is the profile in use.
+    private func adoptAccountServerToken(_ token: String?, serverChanged: Bool) async {
+        if let token {
+            KeychainHelper.set(token, forKey: keychainServerTokenKey)
+        }
+        if storedContent == .account {
+            selectedServerToken = token
+        } else if serverChanged {
+            // The profile's token is for the old server: enter it again on this one.
+            withholdContent()
+            await PlexUserProfileManager.shared.reapplySelectedProfile()
+        }
     }
 
     /// Check if currently authenticated (has valid credentials)
@@ -828,12 +935,8 @@ class PlexAuthManager: ObservableObject {
                         userDefaults.set(selectedServerURL, forKey: serverURLKey)
                         userDefaults.set(currentServer.name, forKey: serverNameKey)
 
-                        // Update server token for new server (securely in Keychain)
-                        let tokenForServer = currentServer.accessToken ?? authToken
-                        selectedServerToken = tokenForServer
-                        if let newToken = tokenForServer {
-                            KeychainHelper.set(newToken, forKey: keychainServerTokenKey)
-                        }
+                        // Same server at a new address: a profile's own token still holds.
+                        await adoptAccountServerToken(currentServer.accessToken ?? authToken, serverChanged: false)
 
                         isConnected = true
                         connectionError = nil
@@ -959,6 +1062,10 @@ class PlexAuthManager: ObservableObject {
             )
 
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                // Which Home user is this account: the admin flag does not say.
+                if let id = json["id"] as? Int {
+                    userDefaults.set(id, forKey: accountUserIDKey)
+                }
                 if let name = json["username"] as? String ?? json["friendlyName"] as? String {
                     username = name
                     userDefaults.set(name, forKey: usernameKey)

@@ -14,7 +14,7 @@ struct IOSAccountView: View {
     var body: some View {
         NavigationStack {
             Form {
-                if plex.isConfigured {
+                if plex.isSignedIn {
                     accountSections
                 } else {
                     signedOutSection
@@ -49,7 +49,7 @@ struct IOSAccountView: View {
                     NavigationLink("Licenses") { IOSLicensesView() }
                 }
 
-                if plex.isConfigured {
+                if plex.isSignedIn {
                     Section {
                         Button("Sign Out", role: .destructive) { confirmingSignOut = true }
                             .confirmationDialog("Sign out of Plex?", isPresented: $confirmingSignOut, titleVisibility: .visible) {
