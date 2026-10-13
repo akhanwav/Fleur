@@ -695,7 +695,7 @@ enum SettingsContent {
 
     private static var libraries: [SettingsRowItem] {
         let mgr = LibrarySettingsManager.shared
-        let libs = mgr.sortLibraries(PlexDataStore.shared.libraries.filter { $0.isVideoLibrary || $0.isMusicLibrary })
+        let libs = mgr.sortLibraries(PlexDataStore.shared.libraries.filter(\.hasBrowseSurface))
         // Jellyfin's in the user's order, hidden ones included so they can
         // come back; each server reorders within its own run.
         let jellyfinStore = JellyfinDataStore.shared
@@ -757,7 +757,7 @@ enum SettingsContent {
     private static func moveMediaLibrary(key: String, up: Bool) {
         let mgr = LibrarySettingsManager.shared
         let mediaLibs = mgr.sortLibraries(
-            PlexDataStore.shared.libraries.filter { $0.isVideoLibrary || $0.isMusicLibrary })
+            PlexDataStore.shared.libraries.filter(\.hasBrowseSurface))
         mgr.moveLibrary(key: key, up: up, among: mediaLibs.map { $0.key })
     }
 

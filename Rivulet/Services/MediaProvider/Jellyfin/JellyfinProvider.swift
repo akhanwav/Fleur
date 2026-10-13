@@ -192,12 +192,18 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         return result?.items ?? []
     }
 
-    private func latestItems(parentID: String, limit: Int) async throws -> [JFItem] {
-        try await client.get("Items/Latest", [
-            URLQueryItem(name: "parentId", value: parentID),
+    private func latestItems(in library: MediaLibrary, limit: Int) async throws -> [JFItem] {
+        var query = [
+            URLQueryItem(name: "parentId", value: library.id),
             URLQueryItem(name: "limit", value: "\(limit)"),
             URLQueryItem(name: "fields", value: "Overview,RecursiveItemCount,SortName,ParentId,DateCreated,DateLastContentAdded,MediaSourceCount")
-        ])
+        ]
+        // A "Home Videos and Photos" library also answers with photos, which
+        // nothing here can open. Leaf types: the server groups episodes itself.
+        if library.kind == .mixed {
+            query.append(URLQueryItem(name: "includeItemTypes", value: "Movie,Episode,Video"))
+        }
+        return try await client.get("Items/Latest", query)
     }
 
     /// Asked per library: across every library at once, a 12.1 server returns
@@ -208,7 +214,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
         let videoLibraries = try await libraries().filter { [.movies, .shows, .mixed].contains($0.kind) }
         var latest: [JFItem] = []
         for library in videoLibraries {
-            latest += try await latestItems(parentID: library.id, limit: limit)
+            latest += try await latestItems(in: library, limit: limit)
         }
         let newestFirst = latest.sorted { Self.addedDate($0) > Self.addedDate($1) }
         return map(Array(newestFirst.prefix(limit)))
@@ -227,7 +233,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
     func hubs(in library: MediaLibrary) async throws -> [MediaHub] {
         async let resumed = resumeItems(parentID: library.id, limit: 24)
         async let upNext = nextUpEpisodes(parentID: library.id, limit: 24)
-        async let latest = latestItems(parentID: library.id, limit: 24)
+        async let latest = latestItems(in: library, limit: 24)
         let continuing = Array((try await resumed + (await upNext)).prefix(24))
         let added = try await latest
         var hubs: [MediaHub] = []
@@ -243,7 +249,7 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
 
     /// One request, where `hubs(in:)` makes three.
     func recentlyAddedHub(in library: MediaLibrary) async throws -> MediaHub? {
-        recentlyAddedHub(library, try await latestItems(parentID: library.id, limit: 24))
+        recentlyAddedHub(library, try await latestItems(in: library, limit: 24))
     }
 
     private func recentlyAddedHub(_ library: MediaLibrary, _ added: [JFItem]) -> MediaHub? {

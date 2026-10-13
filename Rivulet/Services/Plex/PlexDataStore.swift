@@ -206,7 +206,7 @@ class PlexDataStore: ObservableObject {
 
     /// Video and music libraries combined (for sidebar display)
     var visibleMediaLibraries: [PlexLibrary] {
-        visibleLibraries.filter { $0.isVideoLibrary || $0.isMusicLibrary }
+        visibleLibraries.filter(\.hasBrowseSurface)
     }
 
     /// Check if any music library is visible in the sidebar
@@ -2307,4 +2307,10 @@ class PlexDataStore: ObservableObject {
         }
         return true
     }
+}
+
+extension PlexLibrary {
+    /// The sections tvOS has a page for. Photo sections have none yet (#33),
+    /// so the sidebar and Settings both leave them out.
+    var hasBrowseSurface: Bool { isVideoLibrary || isMusicLibrary }
 }

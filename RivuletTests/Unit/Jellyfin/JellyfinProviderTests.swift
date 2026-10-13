@@ -350,6 +350,18 @@ final class JellyfinProviderTests: XCTestCase {
         XCTAssertEqual(server.requests.map { $0.url!.path }, ["/Items/Latest"])
     }
 
+    /// A "Home Videos and Photos" library answers Items/Latest with photos
+    /// too; only the mixed kind needs the type list.
+    func test_recentlyAddedHub_mixedLibrary_asksForVideoTypesOnly() async throws {
+        server.respond("/Items/Latest", body: "[]")
+        let home = MediaLibrary(id: "lib-h", providerID: "jellyfin:srv", title: "Home", kind: .mixed)
+        _ = try await provider().recentlyAddedHub(in: home)
+        _ = try await provider().recentlyAddedHub(in: movies)
+        let queries = server.requests.map { $0.url?.query ?? "" }
+        XCTAssertTrue(queries[0].contains("includeItemTypes=Movie,Episode,Video"), queries[0])
+        XCTAssertFalse(queries[1].contains("includeItemTypes"))
+    }
+
     func test_recentlyAddedHub_nilWhenEmpty() async throws {
         server.respond("/Items/Latest", body: "[]")
         let hub = try await provider().recentlyAddedHub(in: movies)

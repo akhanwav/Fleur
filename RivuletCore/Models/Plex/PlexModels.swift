@@ -163,9 +163,11 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
     let key: String
     let type: String          // "movie", "show", "artist", etc.
     var title: String
-    let agent: String
-    let scanner: String
-    let language: String
+    // Optional: nothing reads them, and one section without them would
+    // otherwise fail the whole list.
+    let agent: String?
+    let scanner: String?
+    let language: String?
     let uuid: String
     let updatedAt: Int?
     let createdAt: Int?
