@@ -86,6 +86,8 @@ final class RootShellViewController: UIViewController {
 
         sidebar.onTabSelected = { [weak self] tab in
             guard let self else { return }
+            // The profile row opens the switcher; it has no content to mount.
+            if tab == .account { self.onTabChange?(tab); return }
             // Mount BEFORE collapsing. `collapseSidebar` resolves focus
             // immediately, but the report back through SwiftUI is async, so
             // waiting for the binding to return parked focus in the OUTGOING

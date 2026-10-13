@@ -57,6 +57,8 @@ final class LibraryAlphabetBarView: UIView {
     private var stackHeight: NSLayoutConstraint!
     private var letterViews: [LetterView] { stack.arrangedSubviews.compactMap { $0 as? LetterView } }
     private var containsFocus = false
+    /// Touch remotes send no arrow press: Left swipe twin of LetterView's press.
+    private var leftSwipe: DirectionalInputBinding?
     private static let rowHeight: CGFloat = 34
     /// Keeps a long non-Latin strip inside the title-safe band; rows shrink
     /// to fit rather than run off the screen.
@@ -80,6 +82,11 @@ final class LibraryAlphabetBarView: UIView {
             entryGuide.topAnchor.constraint(equalTo: topAnchor),
             entryGuide.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
+        leftSwipe = DirectionalInputBinding(
+            gatedSwipesOn: self, directions: [.left],
+            shouldHandle: { [weak self] _ in self?.containsFocus == true },
+            onSwipe: { [weak self] _ in self?.onLetterSelected?() }
+        )
     }
 
     required init?(coder: NSCoder) { fatalError() }

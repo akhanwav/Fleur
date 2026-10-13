@@ -107,7 +107,16 @@ final class SearchContainerViewController: UIViewController {
 
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        guard preferredHalf == .keyboard else { return [results] }
+        guard preferredHalf == .keyboard else {
+            // Coming back from outside the page (the sidebar): the tile focus left.
+            // The page has not scrolled meanwhile, so the view is still that tile.
+            if let tile = lastResultsFocus, tile.window != nil,
+               let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView,
+               !focused.isDescendant(of: view) {
+                return [tile, results]
+            }
+            return [results]
+        }
         // ORDER matters, and both entries are load-bearing.
         //
         // The container alone is not enough. `results` IS the search
@@ -162,10 +171,22 @@ final class SearchContainerViewController: UIViewController {
 
     // MARK: - Keyboard ⇄ results hand-off
 
-    /// Which half of the page the next focus REQUEST should aim at. Only the
-    /// press hand-off below writes it, so it always reflects a deliberate move.
+    /// Which half of the page the next focus REQUEST should aim at. Written by
+    /// the press hand-off below, and by `didUpdateFocus` for the engine's own moves.
     private enum Half { case keyboard, results }
     private var preferredHalf: Half = .keyboard
+    private weak var lastResultsFocus: UIView?
+
+    /// Follow the engine's own moves, so Right out of the sidebar returns to
+    /// the half focus left. Focus leaving the page (the sidebar) changes nothing.
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        guard let next = context.nextFocusedView, next.isDescendant(of: view) else { return }
+        let inResults = next.isDescendant(of: results.view)
+        preferredHalf = inResults ? .results : .keyboard
+        if inResults { lastResultsFocus = next }
+    }
 
     /// Re-expand the collapsed keyboard.
     ///

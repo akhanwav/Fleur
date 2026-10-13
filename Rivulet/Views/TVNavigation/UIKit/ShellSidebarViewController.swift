@@ -628,7 +628,7 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let tab = sections[indexPath.section].items[indexPath.item].tab
-        select(tab: tab)
+        if tab != .account { select(tab: tab) }
         if embedded { onTabSelected?(tab) }
     }
 

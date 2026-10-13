@@ -1702,43 +1702,37 @@ final class PlexHomeViewController: UIViewController {
         pendingGridFocusItem = entry.offset
     }
 
-    /// Hand focus to the jumped-to slot. `setNeedsFocusUpdate` is honoured
-    /// because the strip and the grid both live inside this controller.
+    /// Hand focus to the jumped-to slot. Asked through the controller, which
+    /// contains the strip: a request naming the cell is dropped while focus
+    /// sits outside that cell (measured), the same rule as setNeedsFocusUpdate.
     private func focusPendingGridSlot() {
-        guard let item = pendingGridFocusItem else { return }
-        // Explicit request: honoured wherever focus currently sits in the
-        // window's focus system, unlike setNeedsFocusUpdate, which this
-        // controller may only make while it contains focus.
-        if let gridSection = gridSectionIndex,
-           let cell = collectionView.cellForItem(at: IndexPath(item: item, section: gridSection)),
-           let system = UIFocusSystem.focusSystem(for: collectionView) {
-            system.requestFocusUpdate(to: cell)
-            system.updateFocusIfNeeded()
-            return
-        }
+        guard pendingGridFocusItem != nil else { return }
         wantsPendingGridFocus = true
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
 
-    /// Left, Select, Menu or the idle timer on the strip: back to the grid at
-    /// the current letter, or failing that any visible tile.
+    /// Left, Select, Menu and the idle timer on the strip: back to the grid at
+    /// the current letter, failing that the tile nearest the centre.
     private func leaveStrip() {
         stripIdleWork?.cancel()
         // Hidden before the request: visible, it occludes the tiles under it.
         letterIndicator.hide()
+        if let grid = gridSectionIndex,
+           pendingGridFocusItem.flatMap({ collectionView.cellForItem(at: IndexPath(item: $0, section: grid)) }) == nil {
+            pendingGridFocusItem = centerGridIndexPath()?.item
+        }
         focusPendingGridSlot()
-        let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView
-        guard focused?.isDescendant(of: alphabetBar) == true else { return }
-        landFocusOnCenterTile()
     }
 
     /// From a letter, the engine's own Left search lands on the shell's edge
-    /// catcher and opens the sidebar. No engine move may leave this page
-    /// from the strip; Left is handled on the letter itself (leaveStrip).
+    /// catcher, and Right on a shelf tile peeking past the strip. No
+    /// directional move may leave the strip. leaveStrip's own request is not
+    /// asked here (measured), so it passes.
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
         if let prev = context.previouslyFocusedView, prev.isDescendant(of: alphabetBar),
-           let next = context.nextFocusedView, !next.isDescendant(of: view) {
+           let next = context.nextFocusedView, !next.isDescendant(of: alphabetBar),
+           !context.focusHeading.isEmpty || !next.isDescendant(of: view) {
             return false
         }
         return super.shouldUpdateFocus(in: context)
@@ -6142,19 +6136,23 @@ final class PlexHomeViewController: UIViewController {
     }
 
     /// Fast mode over: focus the grid tile nearest the screen centre.
-    private func landFocusOnCenterTile() {
-        stopFastScroll()
-        guard let grid = gridSectionIndex else { return }
+    /// The visible grid tile nearest the viewport's centre.
+    private func centerGridIndexPath() -> IndexPath? {
+        guard let grid = gridSectionIndex else { return nil }
         collectionView.layoutIfNeeded()
         let centerY = collectionView.contentOffset.y + collectionView.bounds.height / 2
-        let nearest = collectionView.indexPathsForVisibleItems
+        return collectionView.indexPathsForVisibleItems
             .filter { $0.section == grid }
             .min { a, b in
                 let ya = collectionView.layoutAttributesForItem(at: a)?.frame.midY ?? 0
                 let yb = collectionView.layoutAttributesForItem(at: b)?.frame.midY ?? 0
                 return abs(ya - centerY) < abs(yb - centerY)
             }
-        guard let nearest, let cell = collectionView.cellForItem(at: nearest),
+    }
+
+    private func landFocusOnCenterTile() {
+        stopFastScroll()
+        guard let nearest = centerGridIndexPath(), let cell = collectionView.cellForItem(at: nearest),
               let system = UIFocusSystem.focusSystem(for: collectionView) else { return }
         isOnSystemIndexBar = false
         system.requestFocusUpdate(to: cell)
@@ -6252,6 +6250,14 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         // with four focusable pills on screen. The cell takes focus only when
         // it has a button, and redirects into it via
         // `preferredFocusEnvironments`.
+        // Only as the way IN. With a button of its own focused, the full-width
+        // cell is the nearest Left candidate and redirects straight back to it,
+        // so Left never reached the shell's edge catcher.
+        if kind == .searchPrompt || kind == .searchState,
+           let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
+           let cell = collectionView.cellForItem(at: indexPath), focused.isDescendant(of: cell) {
+            return false
+        }
         if kind == .searchPrompt { return !recentSearchItems.isEmpty }
         if kind == .searchState { return currentSearchState.hasFocusableAction }
         return !isShelfKind(kind)
