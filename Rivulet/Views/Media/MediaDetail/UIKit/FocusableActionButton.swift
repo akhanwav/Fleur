@@ -129,7 +129,8 @@ final class FocusableActionButton: UIControl {
         }
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }
-            self.transform = focused ? CGAffineTransform(scaleX: 1.06, y: 1.06) : .identity
+            self.transform = focused
+                ? CGAffineTransform(scaleX: HeroPillButton.focusScale, y: HeroPillButton.focusScale) : .identity
             self.backgroundColor = focused ? .white : self.restingFill
             self.materialBackground.alpha = focused ? 0 : 1
             for v in self.invertOnFocus {
@@ -139,7 +140,7 @@ final class FocusableActionButton: UIControl {
             for v in self.invertBackgroundOnFocus {
                 v.backgroundColor = focused
                     ? UIColor.black.withAlphaComponent(0.2)
-                    : UIColor.white.withAlphaComponent(0.25)
+                    : UIColor.white.withAlphaComponent(0.5)
             }
             for v in self.invertFillOnFocus {
                 v.backgroundColor = focused

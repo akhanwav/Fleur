@@ -16,21 +16,18 @@
 //  quality / action+cast row) lives in `MediaDetailChromeView` so the
 //  same code drives the expanded-detail surface. The cell adds:
 //   - backdrop (full-stage sized, parallaxed, clipped by the card)
-//   - vignette gradients (left + bottom)
+//   - vignette gradients (Apple's three scrim layers)
 //   - corner-clipped card window
 //   - the chrome cascade (vignette + chrome alpha 0→1 on becoming current)
 //
-//  Chrome cascade (selected center cell only):
-//   - Vignette gradients (left scrim + bottom scrim) fade in 140ms
-//     after paging settles, over 260ms easeOut.
-//   - Chrome view (logo + metadata + action row) fades in 210ms after
-//     paging settles (70ms after vignette), over 480ms easeOut.
-//   - On paging start, both snap to alpha 0 (no fade-out).
-//   Timings match perf-spike research from the SwiftUI source
-//   (see perf-spike/CAROUSEL_COMPARISON.md research notes).
+//  Chrome fade (selected center cell only), after Apple's TV app:
+//   - Vignette + chrome fade in together once paging settles, 0.5s
+//     ease-in-out, no delay.
+//   - While paging away they fade against the card's travel
+//     (`setPagingFade`), gone after 0.3 of normalized position.
 //
 //  Designed to keep offscreen passes near zero outside the entry
-//  storm: no Material, no shadows. The vignette is two gradient-backed
+//  storm: no Material, no shadows. The vignette is three gradient-backed
 //  UIViews (GradientView, layerClass = CAGradientLayer) positioned by
 //  Auto Layout, so they resize with the card and ride the morph
 //  animator curve automatically (no layoutSubviews frame-setting).
@@ -79,7 +76,7 @@ final class PreviewCardView: UICollectionViewCell {
 
     // MARK: - Subviews
 
-    /// Vignette container — holds left + bottom gradient sublayers.
+    /// Vignette container: holds the three scrim layers.
     /// Alpha 0 by default; cascade fades to 1.
     private let vignetteContainer: UIView = {
         let v = UIView()
@@ -89,50 +86,43 @@ final class PreviewCardView: UICollectionViewCell {
         return v
     }()
 
-    /// Left-side darkening gradient. Subtle — peaks at 0.7 black at
-    /// the leading edge, drops to 0.12 at 42% across, clears at 55%.
-    // GRADIENT-BACKED UIVIEW (not a CAGradientLayer sublayer) so its bounds
-    // animate natively with the morph's UIViewPropertyAnimator. Gradients use
-    // unit coordinates, so the backing layer fills the view at any size — no
-    // layoutSubviews frame-setting (which fired mismatched implicit CA
-    // animations and made the bottom bar jump mid-morph).
-    private let leftGradientView: GradientView = {
-        let v = GradientView()
-        v.translatesAutoresizingMaskIntoConstraints = false
-        v.isUserInteractionEnabled = false
-        v.gradientLayer.startPoint = CGPoint(x: 0, y: 0.5)
-        v.gradientLayer.endPoint = CGPoint(x: 1, y: 0.5)
-        v.gradientLayer.colors = [
-            UIColor.black.withAlphaComponent(0.70).cgColor,
-            UIColor.black.withAlphaComponent(0.40).cgColor,
-            UIColor.black.withAlphaComponent(0.12).cgColor,
-            UIColor.clear.cgColor
-        ]
-        v.gradientLayer.locations = [0.0, 0.25, 0.42, 0.55]
-        return v
-    }()
+    // Apple's product-page scrim (VideosUI MediaShowcasingGradientLayout,
+    // type canonical): three black layers, each filling the card.
+    // GRADIENT-BACKED UIVIEWS (not CAGradientLayer sublayers) so their bounds
+    // animate with the morph's UIViewPropertyAnimator; unit coordinates fill
+    // the view at any size, so nothing sets frames in layoutSubviews.
+    private let scrimLayers: [GradientView] = [
+        // Bottom band: clear over the top 64 percent.
+        makeScrim(.axial, from: CGPoint(x: 0.5, y: 0), to: CGPoint(x: 0.5, y: 1),
+                  alphas: [0, 0, 0.03, 0.135, 0.27, 0.405, 0.54, 0.675],
+                  locations: [0, 0.64, 0.71, 0.78, 0.84, 0.91, 0.95, 1.0]),
+        // Radial, clear at two thirds across the top edge, darkest lower left.
+        makeScrim(.radial, from: CGPoint(x: 0.667, y: 0), to: CGPoint(x: 1.727, y: 1.884),
+                  alphas: [0, 0.04, 0.15, 0.30, 0.33, 0.49, 0.67, 0.85, 1.0],
+                  locations: [0, 0.19, 0.36, 0.51, 0.53, 0.65, 0.77, 0.89, 1.0]),
+        // Left-to-right wash across the whole width.
+        makeScrim(.axial, from: CGPoint(x: 0, y: 1), to: CGPoint(x: 1, y: 0.8),
+                  alphas: [0.30, 0], locations: nil)
+    ]
 
-    /// Bottom-fading gradient. Five-stop ramp from clear (top) to
-    /// 0.95 black (bottom). Covers 55% of the card height.
-    private let bottomGradientView: GradientView = {
+    private static func makeScrim(_ type: CAGradientLayerType, from start: CGPoint, to end: CGPoint,
+                                  alphas: [CGFloat], locations: [NSNumber]?) -> GradientView {
         let v = GradientView()
         v.translatesAutoresizingMaskIntoConstraints = false
         v.isUserInteractionEnabled = false
-        v.gradientLayer.startPoint = CGPoint(x: 0.5, y: 0)
-        v.gradientLayer.endPoint = CGPoint(x: 0.5, y: 1)
-        // Halved from the original (0.25/0.55/0.80/0.95) — the full-strength
-        // ramp made the entire bottom black. Peaks at ~0.48 so the artwork
-        // still reads under the chrome + episode peek.
-        v.gradientLayer.colors = [
-            UIColor.clear.cgColor,
-            UIColor.black.withAlphaComponent(0.12).cgColor,
-            UIColor.black.withAlphaComponent(0.28).cgColor,
-            UIColor.black.withAlphaComponent(0.40).cgColor,
-            UIColor.black.withAlphaComponent(0.48).cgColor
-        ]
-        v.gradientLayer.locations = [0.0, 0.2, 0.4, 0.65, 1.0]
+        v.gradientLayer.type = type
+        v.gradientLayer.startPoint = start
+        v.gradientLayer.endPoint = end
+        v.gradientLayer.colors = alphas.map { UIColor.black.withAlphaComponent($0).cgColor }
+        v.gradientLayer.locations = locations
+        // Follows the card's top corners, or the scrim shows as dark squares
+        // against the grey surround.
+        v.layer.cornerCurve = .continuous
+        v.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
+        v.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+        v.layer.masksToBounds = true
         return v
-    }()
+    }
 
     /// Shared chrome view (logo / genre / description / quality /
     /// action+cast). Anchored bottom-leading inside the card with
@@ -145,6 +135,20 @@ final class PreviewCardView: UICollectionViewCell {
         v.translatesAutoresizingMaskIntoConstraints = false
         v.mode = .carouselStable
         v.chromeAlpha = 0
+        return v
+    }()
+
+    /// 1 pt white hairline along the top and sides, like Apple's card. On the
+    /// cell, above the vignette, so the scrim and the paging fade don't dim it.
+    private let hairlineView: UIView = {
+        let v = UIView()
+        v.translatesAutoresizingMaskIntoConstraints = false
+        v.isUserInteractionEnabled = false
+        v.layer.borderWidth = 1
+        v.layer.borderColor = UIColor(white: 1, alpha: 0.2).cgColor
+        v.layer.cornerCurve = .continuous
+        v.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
+        v.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         return v
     }()
 
@@ -188,10 +192,10 @@ final class PreviewCardView: UICollectionViewCell {
         contentView.backgroundColor = .clear
         contentView.clipsToBounds = false
 
-        vignetteContainer.addSubview(leftGradientView)
-        vignetteContainer.addSubview(bottomGradientView)
+        scrimLayers.forEach(vignetteContainer.addSubview)
         contentView.addSubview(vignetteContainer)
         contentView.addSubview(chromeView)
+        addSubview(hairlineView)
 
         chromeLeadingConstraint = chromeView.leadingAnchor.constraint(
             equalTo: contentView.leadingAnchor,
@@ -213,29 +217,27 @@ final class PreviewCardView: UICollectionViewCell {
             vignetteContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             vignetteContainer.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
-            // Left gradient = full container (horizontal fade via stops).
-            leftGradientView.topAnchor.constraint(equalTo: vignetteContainer.topAnchor),
-            leftGradientView.leadingAnchor.constraint(equalTo: vignetteContainer.leadingAnchor),
-            leftGradientView.trailingAnchor.constraint(equalTo: vignetteContainer.trailingAnchor),
-            leftGradientView.bottomAnchor.constraint(equalTo: vignetteContainer.bottomAnchor),
-
-            // Bottom gradient = bottom 55% of the container (vertical fade).
-            // Height is a multiple of the container height, so it scales with
-            // the card during the morph via Auto Layout — riding the same
-            // animator curve as everything else.
-            bottomGradientView.leadingAnchor.constraint(equalTo: vignetteContainer.leadingAnchor),
-            bottomGradientView.trailingAnchor.constraint(equalTo: vignetteContainer.trailingAnchor),
-            bottomGradientView.bottomAnchor.constraint(equalTo: vignetteContainer.bottomAnchor),
-            bottomGradientView.heightAnchor.constraint(equalTo: vignetteContainer.heightAnchor, multiplier: 0.55),
-
             // Chrome anchored bottom-leading inside the card. The host
             // animates the inset constraint constants during expand to
             // morph 118 → 140 (carousel → expanded). Same view, same
             // constraint instance — no second view tree.
             chromeLeadingConstraint,
             chromeTrailingConstraint,
-            chromeBottomConstraint
+            chromeBottomConstraint,
+
+            // 1 pt taller than the card, so the bottom stroke falls off screen.
+            hairlineView.topAnchor.constraint(equalTo: topAnchor),
+            hairlineView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hairlineView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hairlineView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: 1)
         ])
+        // Every scrim layer fills the card; the stops do the shaping.
+        NSLayoutConstraint.activate(scrimLayers.flatMap { [
+            $0.topAnchor.constraint(equalTo: vignetteContainer.topAnchor),
+            $0.leadingAnchor.constraint(equalTo: vignetteContainer.leadingAnchor),
+            $0.trailingAnchor.constraint(equalTo: vignetteContainer.trailingAnchor),
+            $0.bottomAnchor.constraint(equalTo: vignetteContainer.bottomAnchor)
+        ] })
     }
 
     // MARK: - Layout
@@ -261,6 +263,9 @@ final class PreviewCardView: UICollectionViewCell {
         loadToken &+= 1
         cascadeToken &+= 1
         isCurrent = false
+        contentView.alpha = 1
+        hairlineView.alpha = 1
+        setCornerRadius(PreviewCarouselGeometry.cornerRadius)
         vignetteContainer.alpha = 0
         chromeView.chromeAlpha = 0
         chromeView.reset()
@@ -272,10 +277,8 @@ final class PreviewCardView: UICollectionViewCell {
     /// Update whether this cell is the currently-focused center card,
     /// optionally with the timed fade-in cascade.
     ///
-    /// Passing `animated: true` runs the SwiftUI page-cascade timing:
-    /// vignette fades in 140ms after call, chrome fades in 210ms after
-    /// call (70ms stagger). Passing `animated: false` snaps to the
-    /// final alpha values — used when the user pages away.
+    /// Passing `animated: true` fades vignette and chrome in over 0.5s.
+    /// Passing `animated: false` snaps to the final alpha values.
     func setIsCurrent(_ current: Bool, animated: Bool) {
         guard isCurrent != current || !animated else { return }
         isCurrent = current
@@ -293,7 +296,7 @@ final class PreviewCardView: UICollectionViewCell {
         chromeView.chromeAlpha = CGFloat(currentChromeAlpha)
 
         if !current {
-            // Snap to invisible. No fade-out — matches SwiftUI behavior.
+            // Snap to invisible; the travel-driven fade already ran (setPagingFade).
             vignetteContainer.alpha = 0
             chromeView.chromeAlpha = 0
             return
@@ -305,24 +308,32 @@ final class PreviewCardView: UICollectionViewCell {
             return
         }
 
-        // Cascade: vignette at 140ms / 260ms duration, chrome at
-        // 210ms / 480ms duration. Both easeOut.
         UIView.animate(
-            withDuration: 0.26,
-            delay: 0.14,
-            options: [.curveEaseOut, .allowUserInteraction]
+            withDuration: 0.5,
+            delay: 0,
+            options: [.curveEaseInOut, .allowUserInteraction, .beginFromCurrentState]
         ) { [weak self] in
             guard let self, self.cascadeToken == token else { return }
             self.vignetteContainer.alpha = 1
-        }
-        UIView.animate(
-            withDuration: 0.48,
-            delay: 0.21,
-            options: [.curveEaseOut, .allowUserInteraction]
-        ) { [weak self] in
-            guard let self, self.cascadeToken == token else { return }
             self.chromeView.chromeAlpha = 1
         }
+    }
+
+    /// Fade the whole card content against paging travel (1 centred, 0 gone).
+    /// On `contentView` so it multiplies an in-flight fade-in instead of fighting it.
+    func setPagingFade(_ alpha: CGFloat) { contentView.alpha = alpha }
+
+    /// Hairline strength for the card's normalized position: 0.1 centred,
+    /// about 0.2 on a resting neighbour.
+    func setHairline(position: CGFloat) {
+        hairlineView.layer.borderColor = UIColor(white: 1, alpha: 0.1 + 0.1 * abs(position)).cgColor
+    }
+
+    /// Hairline and scrim follow the window's corner radius through the morph
+    /// (display-link tick).
+    func setCornerRadius(_ radius: CGFloat) {
+        hairlineView.layer.cornerRadius = radius
+        scrimLayers.forEach { $0.layer.cornerRadius = radius }
     }
 
     // MARK: - Apply
@@ -381,6 +392,8 @@ final class PreviewCardView: UICollectionViewCell {
         chromeLeadingConstraint.constant = inset
         chromeTrailingConstraint.constant = -inset
         chromeView.mode = expanded ? .expandedDetail : .carouselStable
+        // The centred card's hairline fades out as it grows to fullscreen.
+        hairlineView.alpha = expanded ? 0 : 1
     }
 
     // MARK: - Focus

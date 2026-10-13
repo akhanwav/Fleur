@@ -112,21 +112,70 @@ final class EpisodePickerTests: XCTestCase {
         XCTAssertEqual(EpisodePicker.firstUnplayed(in: eps)?.ref.itemID, "second")
     }
 
-    // MARK: - nextUpLabel
+    // MARK: - playTitle
 
-    func testNextUpLabelFormat() {
+    func testShowPageNamesTheNextEpisode() {
         let ep = episode("e3", season: 1, number: 3)
-        XCTAssertEqual(EpisodePicker.nextUpLabel(for: ep), "Next Up: S1E3 · Episode 3")
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Play S1, E3")
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .season), "Play S1, E3")
     }
 
-    func testResumeLabelWhenInProgress() {
-        let ep = episode("e3", season: 2, number: 5, offset: 300)
-        XCTAssertEqual(EpisodePicker.nextUpLabel(for: ep), "Resume: S2E5 · Episode 5")
+    func testShowPageResumesAnInProgressEpisode() {
+        let ep = episode("e5", season: 2, number: 5, offset: 300)
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Resume S2, E5")
     }
 
-    func testNextUpLabelNilWithoutNumbering() {
+    func testUntouchedFirstEpisode() {
+        XCTAssertEqual(EpisodePicker.playTitle(for: episode("e1", number: 1), on: .show), "Play First Episode")
+        // A later season's opener is the first episode of its own page only.
+        let s2e1 = episode("s2e1", season: 2, number: 1)
+        XCTAssertEqual(EpisodePicker.playTitle(for: s2e1, on: .show), "Play S2, E1")
+        XCTAssertEqual(EpisodePicker.playTitle(for: s2e1, on: .season), "Play First Episode")
+        // Started, so it resumes instead.
+        XCTAssertEqual(
+            EpisodePicker.playTitle(for: episode("e1", number: 1, offset: 300), on: .show), "Resume S1, E1")
+    }
+
+    func testFullyWatchedShowPlaysAgain() {
+        // The picker falls back to a played first episode only when all are played.
+        let ep = episode("e1", number: 1, played: true)
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Play Again")
+    }
+
+    func testWithoutNumberingFallsBackToPlainWording() {
         let ep = episode("e1", season: nil, number: nil)
-        XCTAssertNil(EpisodePicker.nextUpLabel(for: ep))
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Play")
+        let started = episode("e1", season: nil, number: nil, offset: 300)
+        XCTAssertEqual(EpisodePicker.playTitle(for: started, on: .show), "Resume")
+    }
+
+    /// An item's own page (movie or episode) never names the episode.
+    func testOwnPageWording() {
+        XCTAssertEqual(EpisodePicker.playTitle(for: episode("e3", number: 3), on: .episode), "Play")
+        XCTAssertEqual(EpisodePicker.playTitle(for: episode("e1", number: 1), on: .episode), "Play")
+        XCTAssertEqual(
+            EpisodePicker.playTitle(for: episode("e3", number: 3, offset: 300), on: .episode), "Resume")
+        XCTAssertEqual(
+            EpisodePicker.playTitle(for: episode("e3", number: 3, played: true), on: .episode), "Play Again")
+    }
+
+    /// A resume point outranks the watched flag (a rewatch in progress).
+    func testRewatchInProgressResumes() {
+        let ep = episode("e3", number: 3, played: true, offset: 300)
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .episode), "Resume")
+    }
+
+    /// Past the policy's completion ceiling there is nothing worth resuming:
+    /// the old "under a minute left" case of the time readout.
+    func testNearlyFinishedItemDoesNotResume() {
+        XCTAssertEqual(
+            EpisodePicker.playTitle(for: episode("e3", number: 3, offset: 1780), on: .episode), "Play")
+    }
+
+    /// A show before its episode resolves: no runtime, no numbering.
+    func testUnresolvedShowSaysPlay() {
+        XCTAssertEqual(EpisodePicker.playTitle(resumes: false, watched: false), "Play")
+        XCTAssertEqual(EpisodePicker.playTitle(resumes: false, watched: true), "Play Again")
     }
 
     // MARK: - isInProgress

@@ -34,7 +34,7 @@ struct PreviewStateMachine {
     private(set) var motionLocked = true
 
     var isCarouselInputEnabled: Bool {
-        phase == .entryMorph || phase == .carouselStable
+        phase == .carouselStable
     }
 
     var isExpanded: Bool {

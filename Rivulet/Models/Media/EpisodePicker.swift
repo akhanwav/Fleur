@@ -40,8 +40,8 @@ enum EpisodePicker {
     ///    season's first unplayed episode.
     ///  - season: that season's first unplayed episode.
     ///
-    /// Shared by the carousel's Play button and the "Next Up / Resume" label so
-    /// the label can never disagree with what Play does.
+    /// Shared by the carousel's Play button and its title, so the title can
+    /// never disagree with what Play does.
     static func resolvePlayTarget(
         for item: MediaItem, provider: MediaProvider
     ) async -> MediaItem? {
@@ -64,16 +64,31 @@ enum EpisodePicker {
         }
     }
 
-    /// The "Next Up: S1E3 · Title" / "Resume: S1E3 · Title" line for a resolved
-    /// episode, or nil if it lacks the numbering to label. "Resume" when the
-    /// user is mid-episode, else "Next Up".
-    static func nextUpLabel(for episode: MediaItem) -> String? {
-        guard let s = episode.seasonNumber, let e = episode.episodeNumber else { return nil }
-        let prefix = episode.userState.isInProgress ? "Resume" : "Next Up"
-        var code = "S\(s)E\(e)"
-        let title = episode.title.trimmingCharacters(in: .whitespaces)
-        if !title.isEmpty { code += " · \(title)" }
-        return "\(prefix): \(code)"
+    /// The Play button's title for `target` (what Play starts) on a page of
+    /// kind `page`. A show or season page names the episode; an item's own
+    /// page does not.
+    static func playTitle(for target: MediaItem, on page: MediaKind) -> String {
+        let onParent = (page == .show || page == .season) && target.kind == .episode
+        let first = target.episodeNumber == 1 && (page == .season || target.seasonNumber == 1)
+        return playTitle(
+            resumes: target.isInProgress,
+            watched: target.isWatched,
+            season: onParent ? target.seasonNumber : nil,
+            episode: onParent ? target.episodeNumber : nil,
+            isFirstEpisode: onParent && first)
+    }
+
+    /// Apple's wording, our rule: a resume point (`WatchProgressPolicy`) says
+    /// Resume and outranks the watched flag; a watched target says Play Again;
+    /// an untouched first episode says Play First Episode; else Play.
+    static func playTitle(
+        resumes: Bool, watched: Bool, season: Int? = nil, episode: Int? = nil, isFirstEpisode: Bool = false
+    ) -> String {
+        let code = season.flatMap { s in episode.map { " S\(s), E\($0)" } } ?? ""
+        if resumes { return "Resume" + code }
+        if watched { return "Play Again" }
+        if isFirstEpisode { return "Play First Episode" }
+        return "Play" + code
     }
 
     /// Sort by season then episode number when those are present, so a caller

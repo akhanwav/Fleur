@@ -104,7 +104,7 @@ final class InfoPopupViewController: UIViewController {
         else { effect = UIBlurEffect(style: .regular) }
         let blur = UIVisualEffectView(effect: effect)
         blur.translatesAutoresizingMaskIntoConstraints = false
-        blur.layer.cornerRadius = 38
+        blur.layer.cornerRadius = 64
         blur.layer.cornerCurve = .continuous
         blur.clipsToBounds = true
 

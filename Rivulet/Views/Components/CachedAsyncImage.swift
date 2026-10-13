@@ -68,7 +68,7 @@ struct CachedAsyncImage<Content: View>: View {
         }
 
         // Quick memory cache check first (nearly instant)
-        if let cached = await ImageCacheManager.shared.cachedImage(for: url) {
+        if let cached = ImageCacheManager.shared.cachedImage(for: url) {
             phase = .success(Image(uiImage: cached))
             // Still trigger background refresh for stale-while-revalidate
             Task.detached(priority: .low) {

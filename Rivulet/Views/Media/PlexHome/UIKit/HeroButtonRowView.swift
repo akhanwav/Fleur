@@ -12,7 +12,7 @@
 //  Focus styling mirrors the SwiftUI `AppStoreActionButtonStyle`:
 //    - unfocused: white-20% background + real Liquid Glass (UIGlassEffect)
 //      overlay + white-20% 0.5pt stroke, scale 1.0
-//    - focused: solid white background, no stroke, scale 1.08
+//    - focused: solid white background, no stroke, Apple's 10 pt growth
 //    - pressed: -5% scale
 //
 //  Animation: spring(response 0.25, damping 0.8) for focus,
@@ -113,7 +113,7 @@ final class HeroButtonRowView: UIView {
         nextButton.addTarget(self, action: #selector(nextTapped), for: .primaryActionTriggered)
 
         stack.axis = .horizontal
-        stack.spacing = 16
+        stack.spacing = HeroPillButton.rowGap
         stack.alignment = .center
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.addArrangedSubview(playButton)
@@ -180,11 +180,19 @@ final class HeroButtonRowView: UIView {
 @MainActor
 final class HeroPillButton: UIControl {
 
-    /// Hardcoded pill width shared with the carousel/detail action row's
+    /// Pill metrics shared with the carousel/detail action row's
     /// `FocusableActionButton` pills (see `MediaDetailChromeView`) so the
-    /// hero and carousel present identically-sized buttons.
+    /// hero and carousel present identical buttons. The label, padding, gap
+    /// and focus growth are Apple's; the width is a floor a longer title
+    /// ("Resume S1, E3") grows past.
     static let pillWidth: CGFloat = 250
     static let buttonHeight: CGFloat = 66
+    static let sidePadding: CGFloat = 39
+    static let iconGap: CGFloat = 14
+    static let rowGap: CGFloat = 24
+    static let titleFont = UIFont.systemFont(ofSize: 29, weight: .semibold)
+    /// Apple grows a focused button by 10 pt of width; on the pill that is 1.04.
+    static let focusScale: CGFloat = (pillWidth + 10) / pillWidth
 
     var title: String = "" {
         didSet { titleLabel.text = title }
@@ -235,11 +243,11 @@ final class HeroPillButton: UIControl {
         iconView.contentMode = .scaleAspectFit
 
         titleLabel.text = title
-        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.font = Self.titleFont
         titleLabel.textColor = .white
 
         contentStack.axis = .horizontal
-        contentStack.spacing = 10
+        contentStack.spacing = Self.iconGap
         contentStack.alignment = .center
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.isUserInteractionEnabled = false
@@ -248,7 +256,12 @@ final class HeroPillButton: UIControl {
         addSubview(contentStack)
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.pillWidth),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: Self.pillWidth),
+            {
+                let c = widthAnchor.constraint(equalToConstant: Self.pillWidth)
+                c.priority = .defaultLow
+                return c
+            }(),
             heightAnchor.constraint(equalToConstant: Self.buttonHeight),
 
             background.topAnchor.constraint(equalTo: topAnchor),
@@ -262,8 +275,8 @@ final class HeroPillButton: UIControl {
             materialBackground.trailingAnchor.constraint(equalTo: trailingAnchor),
 
             contentStack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 32),
-            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
+            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: Self.sidePadding),
+            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Self.sidePadding),
             contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
 
             iconView.widthAnchor.constraint(equalToConstant: 24),
@@ -301,7 +314,8 @@ final class HeroPillButton: UIControl {
     private func applyFocusVisuals(focused: Bool) {
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.8,
                        initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.transform = focused ? CGAffineTransform(scaleX: 1.08, y: 1.08) : .identity
+            self.transform = focused
+                ? CGAffineTransform(scaleX: HeroPillButton.focusScale, y: HeroPillButton.focusScale) : .identity
             self.background.backgroundColor = focused ? .white : UIColor.white.withAlphaComponent(0.2)
             self.materialBackground.alpha = focused ? 0 : 1
             self.strokeLayer.opacity = focused ? 0 : 1
@@ -317,8 +331,8 @@ final class HeroPillButton: UIControl {
         for p in presses where p.type == .select {
             UIView.animate(withDuration: 0.15, delay: 0, usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-                self.transform = CGAffineTransform(scaleX: 0.95 * (self.isFocused ? 1.08 : 1.0),
-                                                   y: 0.95 * (self.isFocused ? 1.08 : 1.0))
+                let scale = 0.95 * (self.isFocused ? HeroPillButton.focusScale : 1.0)
+                self.transform = CGAffineTransform(scaleX: scale, y: scale)
             }
             return
         }
@@ -435,7 +449,8 @@ final class HeroCircleButton: UIControl {
     private func applyFocusVisuals(focused: Bool) {
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 0.8,
                        initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-            self.transform = focused ? CGAffineTransform(scaleX: 1.08, y: 1.08) : .identity
+            self.transform = focused
+                ? CGAffineTransform(scaleX: HeroPillButton.focusScale, y: HeroPillButton.focusScale) : .identity
             self.background.backgroundColor = focused ? .white : UIColor.white.withAlphaComponent(0.12)
             self.materialBackground.alpha = focused ? 0 : 1
             self.strokeLayer.opacity = focused ? 0 : 1
@@ -448,8 +463,8 @@ final class HeroCircleButton: UIControl {
         for p in presses where p.type == .select {
             UIView.animate(withDuration: 0.15, delay: 0, usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
-                self.transform = CGAffineTransform(scaleX: 0.95 * (self.isFocused ? 1.08 : 1.0),
-                                                   y: 0.95 * (self.isFocused ? 1.08 : 1.0))
+                let scale = 0.95 * (self.isFocused ? HeroPillButton.focusScale : 1.0)
+                self.transform = CGAffineTransform(scaleX: scale, y: scale)
             }
             return
         }

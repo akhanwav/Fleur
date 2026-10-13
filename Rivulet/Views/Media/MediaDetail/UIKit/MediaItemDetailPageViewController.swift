@@ -157,7 +157,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
             textColumn.leadingAnchor.constraint(equalTo: heroContent.leadingAnchor, constant: PreviewCarouselGeometry.expandedChromeInset),
             textColumn.bottomAnchor.constraint(equalTo: heroContent.safeAreaLayoutGuide.bottomAnchor, constant: -98),
-            textColumn.widthAnchor.constraint(lessThanOrEqualToConstant: 820),
+            textColumn.widthAnchor.constraint(lessThanOrEqualToConstant: 860),
 
             belowFold.topAnchor.constraint(equalTo: heroContent.bottomAnchor),
             belowFold.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -230,23 +230,28 @@ final class MediaItemDetailPageViewController: UIViewController {
         textColumn.translatesAutoresizingMaskIntoConstraints = false
         textColumn.axis = .vertical
         textColumn.alignment = .leading
-        textColumn.spacing = 10
+        // Apple's rhythm: 18 between rows, 6 under the show name, 32 above the buttons.
+        textColumn.spacing = 18
         parent.addSubview(textColumn)
 
         // 1. Show title (small) — filled by setShowTitle (init or fetch).
-        style(showTitleLabel, size: 34, weight: .bold, alpha: 0.9)
+        style(showTitleLabel, size: 38, weight: .bold, alpha: 0.9)
         showTitleLabel.isHidden = (showTitleLabel.text ?? "").isEmpty
         textColumn.addArrangedSubview(showTitleLabel)
+        textColumn.setCustomSpacing(6, after: showTitleLabel)
 
-        // 2. Episode/item title (large).
-        let titleLabel = label(item.title, size: 50, weight: .bold, alpha: 1)
+        // 2. Episode/item title (large). Both titles cap at 600 wide.
+        let titleLabel = label(item.title, size: 48, weight: .bold, alpha: 1)
         textColumn.addArrangedSubview(titleLabel)
+        for l in [showTitleLabel, titleLabel] {
+            l.widthAnchor.constraint(lessThanOrEqualToConstant: 600).isActive = true
+        }
 
         // 3. Genre · rating.
         genreRatingRow.axis = .horizontal
         genreRatingRow.alignment = .center
-        genreRatingRow.spacing = 14
-        style(genreLabel, size: 24, weight: .semibold, alpha: 0.85)
+        genreRatingRow.spacing = 6
+        style(genreLabel, size: 25, weight: .medium, alpha: 1)
         genreRatingRow.addArrangedSubview(genreLabel)
         if let rating = item.contentRating, !rating.isEmpty {
             ratingBadge.text = rating
@@ -258,28 +263,28 @@ final class MediaItemDetailPageViewController: UIViewController {
         textColumn.addArrangedSubview(genreRatingRow)
 
         // 4. Synopsis with a bold "S2, E1:" prefix.
-        style(synopsisLabel, size: 24, weight: .regular, alpha: 0.9)
-        synopsisLabel.numberOfLines = 3
+        style(synopsisLabel, size: 23, weight: .medium, alpha: 0.9)
+        synopsisLabel.numberOfLines = 4
         synopsisLabel.attributedText = synopsisAttributed()
         synopsisLabel.isHidden = (synopsisLabel.attributedText?.length ?? 0) == 0
-        synopsisLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 820).isActive = true
+        synopsisLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 860).isActive = true
         textColumn.addArrangedSubview(synopsisLabel)
 
         // 5. Date · runtime + capability badges.
         dateRow.axis = .horizontal
         dateRow.alignment = .center
         dateRow.spacing = 12
-        style(dateLabel, size: 22, weight: .semibold, alpha: 0.8)
+        style(dateLabel, size: 25, weight: .medium, alpha: 0.75)
         dateLabel.text = dateRuntimeText()
         dateRow.addArrangedSubview(dateLabel)
         badgeRow.axis = .horizontal
         badgeRow.alignment = .center
-        badgeRow.spacing = 8
+        badgeRow.spacing = 12
         dateRow.addArrangedSubview(badgeRow)
         textColumn.addArrangedSubview(dateRow)
 
         // 6. Actions.
-        textColumn.setCustomSpacing(28, after: dateRow)
+        textColumn.setCustomSpacing(32, after: dateRow)
         textColumn.addArrangedSubview(makeActionRow())
     }
 
@@ -358,7 +363,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         if item.isMetadataOnly { return makeMetadataOnlyActionRow() }
         let pill = FocusableActionButton()
         pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.layer.cornerRadius = 32
+        pill.layer.cornerRadius = HeroPillButton.buttonHeight / 2
         pill.setContentHuggingPriority(.required, for: .horizontal)
         pill.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -368,19 +373,19 @@ final class MediaItemDetailPageViewController: UIViewController {
         icon.contentMode = .scaleAspectFit
         let title = UILabel()
         title.translatesAutoresizingMaskIntoConstraints = false
-        title.font = .systemFont(ofSize: 24, weight: .semibold)
+        title.font = HeroPillButton.titleFont
         title.textColor = .white
         title.text = playPillTitle
         pill.addSubview(icon)
         pill.addSubview(title)
         NSLayoutConstraint.activate([
-            pill.heightAnchor.constraint(equalToConstant: 64),
-            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 24),
+            pill.heightAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
+            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: HeroPillButton.sidePadding),
             icon.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 22),
-            icon.heightAnchor.constraint(equalToConstant: 22),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 14),
-            title.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -28),
+            icon.widthAnchor.constraint(equalToConstant: 24),
+            icon.heightAnchor.constraint(equalToConstant: 24),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HeroPillButton.iconGap),
+            title.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -HeroPillButton.sidePadding),
             title.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
         ])
         pill.invertOnFocus = [icon, title]
@@ -416,7 +421,7 @@ final class MediaItemDetailPageViewController: UIViewController {
             row.addArrangedSubview(goToShow)
         }
         row.axis = .horizontal
-        row.spacing = 18
+        row.spacing = HeroPillButton.rowGap
         row.alignment = .center
         return row
     }
@@ -424,7 +429,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private func makeMetadataOnlyActionRow() -> UIView {
         let pill = FocusableActionButton()
         pill.translatesAutoresizingMaskIntoConstraints = false
-        pill.layer.cornerRadius = 32
+        pill.layer.cornerRadius = HeroPillButton.buttonHeight / 2
         pill.setContentHuggingPriority(.required, for: .horizontal)
         pill.setContentCompressionResistancePriority(.required, for: .horizontal)
 
@@ -434,19 +439,19 @@ final class MediaItemDetailPageViewController: UIViewController {
         icon.contentMode = .scaleAspectFit
         let title = UILabel()
         title.translatesAutoresizingMaskIntoConstraints = false
-        title.font = .systemFont(ofSize: 24, weight: .semibold)
+        title.font = HeroPillButton.titleFont
         title.textColor = .white
         title.text = "Watchlist"
         pill.addSubview(icon)
         pill.addSubview(title)
         NSLayoutConstraint.activate([
-            pill.heightAnchor.constraint(equalToConstant: 64),
-            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 24),
+            pill.heightAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
+            icon.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: HeroPillButton.sidePadding),
             icon.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-            icon.widthAnchor.constraint(equalToConstant: 22),
-            icon.heightAnchor.constraint(equalToConstant: 22),
-            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 14),
-            title.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -28),
+            icon.widthAnchor.constraint(equalToConstant: 24),
+            icon.heightAnchor.constraint(equalToConstant: 24),
+            title.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: HeroPillButton.iconGap),
+            title.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -HeroPillButton.sidePadding),
             title.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
         ])
         pill.invertOnFocus = [icon, title]
@@ -486,7 +491,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         let row = UIStackView(arrangedSubviews: [pill])
         row.axis = .horizontal
-        row.spacing = 18
+        row.spacing = HeroPillButton.rowGap
         row.alignment = .center
         return row
     }
@@ -494,15 +499,15 @@ final class MediaItemDetailPageViewController: UIViewController {
     private func circleButton(systemImage: String) -> FocusableActionButton {
         let b = FocusableActionButton()
         b.translatesAutoresizingMaskIntoConstraints = false
-        b.layer.cornerRadius = 32
+        b.layer.cornerRadius = HeroPillButton.buttonHeight / 2
         let icon = UIImageView(image: UIImage(systemName: systemImage))
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.tintColor = .white
         icon.contentMode = .scaleAspectFit
         b.addSubview(icon)
         NSLayoutConstraint.activate([
-            b.widthAnchor.constraint(equalToConstant: 64),
-            b.heightAnchor.constraint(equalToConstant: 64),
+            b.widthAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
+            b.heightAnchor.constraint(equalToConstant: HeroPillButton.buttonHeight),
             icon.centerXAnchor.constraint(equalTo: b.centerXAnchor),
             icon.centerYAnchor.constraint(equalTo: b.centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 30),
@@ -526,10 +531,10 @@ final class MediaItemDetailPageViewController: UIViewController {
         let color = UIColor.white.withAlphaComponent(0.9)
         if let s = item.seasonNumber, let e = item.episodeNumber {
             body.append(NSAttributedString(string: "S\(s), E\(e): ", attributes: [
-                .font: UIFont.systemFont(ofSize: 24, weight: .bold), .foregroundColor: color]))
+                .font: UIFont.systemFont(ofSize: 23, weight: .bold), .foregroundColor: color]))
         }
         body.append(NSAttributedString(string: overview, attributes: [
-            .font: UIFont.systemFont(ofSize: 24, weight: .regular), .foregroundColor: color]))
+            .font: UIFont.systemFont(ofSize: 23, weight: .medium), .foregroundColor: color]))
         return body
     }
 
@@ -654,14 +659,15 @@ final class MediaItemDetailPageViewController: UIViewController {
     /// `isWatched` is mirrored). Seeded from the item, re-seeded by every
     /// refresh, zeroed by a Mark as Watched.
     ///
-    /// Deliberately NOT `viewOffset > 0 && !isWatched`: a resume point outranks
-    /// the watched flag everywhere else in the app (`PlexMetadata.isWatched`
-    /// reports false while a rewatch is in progress, and both the poster and
-    /// episode cells show the progress bar instead of the watched glyph), so
-    /// keying off `isWatched` would label a resumable rewatch "Play".
+    /// A resume point outranks the watched flag (a resumable rewatch reads
+    /// "Resume", not "Play Again"): `EpisodePicker.playTitle` owns that order.
     private var resumeOffset: TimeInterval = 0
 
-    private var playPillTitle: String { resumeOffset > 0 ? "Resume" : "Play" }
+    private var playPillTitle: String {
+        EpisodePicker.playTitle(
+            resumes: WatchProgressPolicy.hasResumePoint(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime),
+            watched: isWatched)
+    }
 
     private func toggleWatched() {
         isWatched.toggle()
@@ -751,12 +757,15 @@ final class MediaItemDetailPageViewController: UIViewController {
         let l = PaddedLabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.text = text
-        l.font = .systemFont(ofSize: 18, weight: .semibold)
-        l.textColor = UIColor.white.withAlphaComponent(0.85)
-        l.layer.borderColor = UIColor.white.withAlphaComponent(0.4).cgColor
+        l.font = .systemFont(ofSize: 15, weight: .bold)
+        l.textAlignment = .center
+        l.textColor = UIColor.white.withAlphaComponent(0.75)
+        l.layer.borderColor = UIColor.white.withAlphaComponent(0.5).cgColor
         l.layer.borderWidth = 1
-        l.layer.cornerRadius = 6
+        l.layer.cornerRadius = 4
         l.layer.cornerCurve = .continuous
+        // Apple caps a badge at 22pt total height.
+        l.heightAnchor.constraint(equalToConstant: 22).isActive = true
         return l
     }
 
@@ -781,7 +790,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
 /// A UILabel with internal padding (for the bordered badges).
 private final class PaddedLabel: UILabel {
-    private let inset = UIEdgeInsets(top: 3, left: 8, bottom: 3, right: 8)
+    private let inset = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
     override func drawText(in rect: CGRect) { super.drawText(in: rect.inset(by: inset)) }
     override var intrinsicContentSize: CGSize {
         let s = super.intrinsicContentSize

@@ -14,7 +14,7 @@
 //
 //      ┌─────────────────────────────────────────┐  ← self
 //      │ ┌──────────────────┐                    │
-//      │ │ metadataBlock    │  (760pt max)       │
+//      │ │ metadataBlock    │  (860pt max)       │
 //      │ │   logoSlot       │                    │
 //      │ │   genreRow       │                    │
 //      │ │   descLabel      │                    │
@@ -59,14 +59,20 @@ private let chromeLog = Logger(
 
 final class MediaDetailChromeView: UIView {
 
-    /// Hardcoded action-button sizing shared with the home hero's
+    /// Action-button sizing shared with the home hero's
     /// `HeroPillButton`/`HeroCircleButton` (see `HeroButtonRowView`) so the
-    /// carousel/expanded-detail row matches the hero exactly. Width is
-    /// fixed regardless of content (icon/label/progress) so pills don't
-    /// grow or shrink per item.
+    /// carousel/expanded-detail row matches the hero exactly. The pill width
+    /// is a floor: a long title ("Play First Episode") grows past it.
     private static let actionButtonHeight: CGFloat = HeroPillButton.buttonHeight
     private static let actionPillWidth: CGFloat = HeroPillButton.pillWidth
-    private static let playProgressTrackWidth: CGFloat = 60
+    private static let playProgressTrackWidth: CGFloat = 50
+    private static let playProgressTrackHeight: CGFloat = 8
+    /// Apple's description cap: wider on an episode.
+    private static let descriptionMaxWidth: CGFloat = 677
+    private static let episodeDescriptionMaxWidth: CGFloat = 860
+    private static let captionFont = UIFont.systemFont(ofSize: 25, weight: .medium)
+    private static let descriptionFont = UIFont.systemFont(ofSize: 23, weight: .medium)
+    private static let rolesLabelAlpha: CGFloat = 0.6
 
     // MARK: - Public surface
 
@@ -121,9 +127,11 @@ final class MediaDetailChromeView: UIView {
     /// episode Play resolves to, which only arrives asynchronously. Rebuilt with
     /// the pill.
     private var playProgressFillWidth: NSLayoutConstraint?
-    /// The Play pill's time readout. Held so `setPlayTarget` can rewrite it —
-    /// the pill is built once and only its watch-derived bits change.
-    private weak var playTimeLabel: UILabel?
+    /// The Play pill's title and progress track. Held so `setPlayTarget` can
+    /// rewrite them: the pill is built once and only its watch-derived bits change.
+    private weak var playTitleLabel: UILabel?
+    private weak var playProgressTrack: UIView?
+    private var descriptionMaxWidth: NSLayoutConstraint?
 
     // MARK: - State
 
@@ -155,19 +163,19 @@ final class MediaDetailChromeView: UIView {
         let s = UIStackView()
         s.translatesAutoresizingMaskIntoConstraints = false
         s.axis = .vertical
-        // LEADING, not .fill: the metadata block has a ≤760 width cap, and
+        // LEADING, not .fill: the metadata block has a ≤860 width cap, and
         // .fill pins both its edges to the stack — an undefined conflict that
         // could snap the block to the trailing edge (far right) when the chrome
-        // is wider than 760. Leading-align it deterministically; the action row
+        // is wider than 860. Leading-align it deterministically; the action row
         // gets an explicit full-width constraint instead.
         s.alignment = .leading
-        s.spacing = 14
+        s.spacing = 18
         return s
     }()
 
-    /// Inner metadata block — vertical stack, max 760pt wide.
+    /// Inner metadata block — vertical stack, max 860pt wide.
     /// Natural-content height: takes as much vertical space as the logo
-    /// slot (138pt) + genre row + description + quality row + spacing.
+    /// slot (126pt) + genre row + description + quality row + spacing.
     /// The outer `chromeStack` settles this block above the action row;
     /// the chrome view itself is anchored from below by the card.
     /// Matches the carousel-stable layout at commit `bc127a9` (the
@@ -177,12 +185,12 @@ final class MediaDetailChromeView: UIView {
         s.translatesAutoresizingMaskIntoConstraints = false
         s.axis = .vertical
         s.alignment = .leading
-        s.spacing = 14
+        s.spacing = 18
         return s
     }()
 
-    /// Logo slot — fixed 138pt tall, 620pt max wide, bottom-leading
-    /// aligned. Either the logo image or the fallback label occupies it
+    /// Logo slot — fixed 126pt tall, bottom-leading aligned. The logo image
+    /// (420pt max wide) or the fallback label (600pt max wide) occupies it
     /// depending on whether `artwork.logo` loaded.
     private let logoSlotView: UIView = {
         let v = UIView()
@@ -200,7 +208,7 @@ final class MediaDetailChromeView: UIView {
     private let titleFallbackLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: 52, weight: .bold)
+        l.font = .systemFont(ofSize: 48, weight: .bold)
         l.textColor = .white
         l.numberOfLines = 2
         l.lineBreakMode = .byTruncatingTail
@@ -212,43 +220,29 @@ final class MediaDetailChromeView: UIView {
         let s = UIStackView()
         s.translatesAutoresizingMaskIntoConstraints = false
         s.axis = .horizontal
-        s.spacing = 8
+        s.spacing = 6
         s.alignment = .center
         return s
     }()
 
-    /// Italic tagline OR plain overview, up to 3 lines / 560pt wide.
+    /// Italic tagline OR plain overview, up to 4 lines / 677pt wide (860 on
+    /// an episode).
     private let descriptionLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: 24, weight: .regular)
+        l.font = MediaDetailChromeView.descriptionFont
         l.textColor = UIColor.white.withAlphaComponent(0.85)
         l.numberOfLines = 4
         l.lineBreakMode = .byTruncatingTail
         return l
     }()
 
-    /// "Next Up: S1E3 · Title" (or "Resume:" when the target is in progress),
-    /// shown between the metadata block and the action row on show/season cards
-    /// so the user knows which episode Play will start. Hidden for movies and
-    /// episodes, and until the target episode resolves.
-    private let nextUpLabel: UILabel = {
-        let l = UILabel()
-        l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: 22, weight: .semibold)
-        l.textColor = UIColor.white.withAlphaComponent(0.85)
-        l.numberOfLines = 1
-        l.lineBreakMode = .byTruncatingTail
-        l.isHidden = true
-        return l
-    }()
-
-    /// "2023 · 49 min   ⭐ 7.8   [4K] [DV] [5.1]" — caption.bold(), white.
+    /// "2023 · 49 min   ⭐ 7.8   [4K] [DV] [5.1]", dimmer than the genre row.
     private let qualityRow: UIStackView = {
         let s = UIStackView()
         s.translatesAutoresizingMaskIntoConstraints = false
         s.axis = .horizontal
-        s.spacing = 8
+        s.spacing = 12
         s.alignment = .center
         return s
     }()
@@ -273,18 +267,19 @@ final class MediaDetailChromeView: UIView {
         s.translatesAutoresizingMaskIntoConstraints = false
         s.axis = .horizontal
         s.alignment = .center
-        s.spacing = 18
+        s.spacing = HeroPillButton.rowGap
         return s
     }()
 
-    /// "Starring …" text, right-aligned, capped at 460pt.
+    /// "Starring …" in a 410pt box on the trailing margin, left-aligned, its
+    /// bottom on the buttons' bottom. The names are brighter than the label.
     private let castLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: 24, weight: .regular)
-        l.textColor = UIColor.white.withAlphaComponent(0.85)
+        l.font = MediaDetailChromeView.captionFont
+        l.textColor = .white
         l.numberOfLines = 3
-        l.textAlignment = .right
+        l.textAlignment = .natural
         l.lineBreakMode = .byTruncatingTail
         return l
     }()
@@ -316,33 +311,29 @@ final class MediaDetailChromeView: UIView {
         metadataBlock.addArrangedSubview(qualityRow)
         chromeStack.addArrangedSubview(metadataBlock)
 
-        // Equal rhythm across the lower block: description → quality → action
-        // all separated by the same gap. (description→quality is a custom
-        // metadataBlock spacing; quality→action is the chromeStack gap.)
-        metadataBlock.setCustomSpacing(30, after: descriptionLabel)
-        chromeStack.setCustomSpacing(30, after: metadataBlock)
-        chromeStack.addArrangedSubview(nextUpLabel)
-        chromeStack.setCustomSpacing(16, after: nextUpLabel)
+        // Apple's rhythm: 18 between the text rows, 32 above the buttons.
+        chromeStack.setCustomSpacing(32, after: metadataBlock)
         chromeStack.addArrangedSubview(actionAndCastRow)
 
         // actionAndCastRow is a plain UIView (not a stack). Children
         // are pinned explicitly: actionButtonsStack to leading +
-        // centerY, castLabel to trailing + centerY, with a min-gap
+        // centerY, castLabel to trailing + bottom, with a min-gap
         // between. The two compete only over the gap, so neither
         // can stretch beyond its content width.
         actionAndCastRow.addSubview(actionButtonsStack)
         actionAndCastRow.addSubview(castLabel)
 
-        // Each action button has a hardcoded width (Self.actionPillWidth /
-        // Self.actionButtonHeight), so the stack already settles at a
-        // fixed total width. Hugging is still set to .required so the
-        // stack itself never stretches beyond the sum of its children.
+        // Hugging is .required so the stack never stretches beyond the sum
+        // of its buttons.
         actionButtonsStack.setContentHuggingPriority(.required, for: .horizontal)
         actionButtonsStack.setContentCompressionResistancePriority(.required, for: .horizontal)
-        castLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        let descMaxWidth = descriptionLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 560)
-        descMaxWidth.priority = .required
+        let descMaxWidth = descriptionLabel.widthAnchor.constraint(
+            lessThanOrEqualToConstant: Self.descriptionMaxWidth)
+        descriptionMaxWidth = descMaxWidth
+
+        let castWidth = castLabel.widthAnchor.constraint(equalToConstant: 410)
+        castWidth.priority = .defaultHigh
 
         NSLayoutConstraint.activate([
             // Chrome stack fills self.
@@ -351,9 +342,11 @@ final class MediaDetailChromeView: UIView {
             chromeStack.topAnchor.constraint(equalTo: topAnchor),
             chromeStack.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            // Logo slot: 138pt tall, 620pt max wide.
-            logoSlotView.heightAnchor.constraint(equalToConstant: 138),
-            logoSlotView.widthAnchor.constraint(lessThanOrEqualToConstant: 620),
+            // Logo slot: 126pt tall; the image caps at 420 wide, the text
+            // title at 600.
+            logoSlotView.heightAnchor.constraint(equalToConstant: 126),
+            logoSlotView.widthAnchor.constraint(lessThanOrEqualToConstant: 600),
+            titleLogoImageView.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
 
             // Logo image: aspectFit, bottom-leading inside the slot.
             // No fixed height — a 500×120 logo renders at 500×120.
@@ -364,10 +357,10 @@ final class MediaDetailChromeView: UIView {
             // Cap height at slot height; prefer to fill it. The
             // priority-999 equality lets the inequality + aspect
             // constraints drive height down when an extra-wide asset
-            // would push width past the 620pt slot.
-            titleLogoImageView.heightAnchor.constraint(lessThanOrEqualToConstant: 138),
+            // would push width past the 420pt cap.
+            titleLogoImageView.heightAnchor.constraint(lessThanOrEqualToConstant: 126),
             {
-                let c = titleLogoImageView.heightAnchor.constraint(equalToConstant: 138)
+                let c = titleLogoImageView.heightAnchor.constraint(equalToConstant: 126)
                 c.priority = .init(999)
                 return c
             }(),
@@ -379,11 +372,11 @@ final class MediaDetailChromeView: UIView {
 
             descMaxWidth,
 
-            // Metadata block capped at 760pt wide. Block height is
+            // Metadata block capped at 860pt wide. Block height is
             // natural (content-driven); chromeStack pins it above the
             // action row from below. With .leading alignment it sits at the
             // leading edge at its natural width — no trailing-pin conflict.
-            metadataBlock.widthAnchor.constraint(lessThanOrEqualToConstant: 760),
+            metadataBlock.widthAnchor.constraint(lessThanOrEqualToConstant: Self.episodeDescriptionMaxWidth),
 
             // The action+cast row spans the full chrome width (the stack is
             // .leading now, so this must be explicit) — buttons leading, cast
@@ -400,16 +393,15 @@ final class MediaDetailChromeView: UIView {
             // (54pt circle/pill height).
             actionAndCastRow.heightAnchor.constraint(greaterThanOrEqualTo: actionButtonsStack.heightAnchor),
 
-            // Cast label pins to trailing + centerY, capped at 460pt.
+            // Cast box: 410pt on the trailing margin, bottom on the buttons'
+            // bottom. It may grow upward past the row; nothing sits there.
             castLabel.trailingAnchor.constraint(equalTo: actionAndCastRow.trailingAnchor),
-            castLabel.centerYAnchor.constraint(equalTo: actionAndCastRow.centerYAnchor),
-            castLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 460),
+            castLabel.bottomAnchor.constraint(equalTo: actionButtonsStack.bottomAnchor),
+            castWidth,
 
-            // Min 40pt gap between buttons and cast label. The cast
-            // can compress its width down to 0 (lessThanOrEqual width
-            // cap) when needed, but the action buttons keep their
-            // intrinsic widths.
-            castLabel.leadingAnchor.constraint(greaterThanOrEqualTo: actionButtonsStack.trailingAnchor, constant: 40)
+            // Min 10pt gap between buttons and cast box: a very long button
+            // row narrows the box, the buttons keep their widths.
+            castLabel.leadingAnchor.constraint(greaterThanOrEqualTo: actionButtonsStack.trailingAnchor, constant: 10)
         ])
 
         applyMode()
@@ -487,8 +479,8 @@ final class MediaDetailChromeView: UIView {
     /// Deliberately NOT `self.item = refreshed`: that `didSet` runs the full
     /// `applyItem()`, which tears down and rebuilds the action row — and the
     /// Play pill is very often the focused view when the player dismisses back
-    /// onto the hero. Only the watched glyph and the Next Up / Resume label
-    /// depend on watch state, so both are updated in place.
+    /// onto the hero. Only the watched glyph and the Play pill's title and
+    /// bar depend on watch state, so both are updated in place.
     func refreshWatchState(from refreshed: MediaItem) {
         guard let current = item, current.ref == refreshed.ref else { return }
         // Keep the stored item current so a later toggle/Play reads fresh state.
@@ -499,13 +491,8 @@ final class MediaDetailChromeView: UIView {
         heroWatched = refreshed.isWatched
         updateWatchedIcon()
         setPlayTarget(refreshed)
-
-        // Shows/seasons: the "Next Up: S1E3 · Title" line moves to the next
-        // unwatched episode. Clear it first so a show that just finished isn't
-        // left promising the episode the user has now watched.
-        nextUpLabel.isHidden = true
-        nextUpLabel.text = nil
-        resolveNextUpLabel(for: refreshed, token: loadToken)
+        // Shows/seasons: the pill moves to the next unwatched episode.
+        resolvePlayTarget(for: refreshed, token: loadToken)
     }
 
     /// Set while `refreshWatchState` swaps the re-fetched item in, so the
@@ -523,15 +510,15 @@ final class MediaDetailChromeView: UIView {
         resolvedGenres = []
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        nextUpLabel.isHidden = true
-        nextUpLabel.text = nil
 
         guard let item = item else { return }
 
+        descriptionMaxWidth?.constant = item.kind == .episode
+            ? Self.episodeDescriptionMaxWidth : Self.descriptionMaxWidth
         rebuildGenreRow(item: item, detail: nil)
         rebuildQualityRow(item: item, detail: nil)
         rebuildActionButtons(item: item)
-        resolveNextUpLabel(for: item, token: token)
+        resolvePlayTarget(for: item, token: token)
 
         // Clear any aspect constraint from the previous item — a stale
         // ratio would size the new image wrong while it's loading.
@@ -619,11 +606,11 @@ final class MediaDetailChromeView: UIView {
 
     private var resolvedGenres: [String] = []
 
-    /// Resolve the episode Play will start on a show/season card and show it as
-    /// "Next Up: S1E3 · Title" (or "Resume:" mid-episode). Uses the same
-    /// `EpisodePicker.resolvePlayTarget` the Play button does, so the label can
-    /// never promise a different episode than the one that plays.
-    private func resolveNextUpLabel(for item: MediaItem, token: UInt64) {
+    /// Resolve the episode Play will start on a show/season card and point the
+    /// pill at it ("Play S1, E3"). Uses the same `EpisodePicker.resolvePlayTarget`
+    /// the Play button does, so the title can never promise a different episode
+    /// than the one that plays.
+    private func resolvePlayTarget(for item: MediaItem, token: UInt64) {
         guard item.kind == .show || item.kind == .season else { return }
         Task { @MainActor [weak self] in
             guard let self,
@@ -631,13 +618,7 @@ final class MediaDetailChromeView: UIView {
                   let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider),
                   self.loadToken == token
             else { return }
-            // The pill tracks the episode Play will start, not the show — a show
-            // has no runtime of its own, so this is also where its pill stops
-            // saying "Play" and starts saying how long that episode runs.
             self.setPlayTarget(episode)
-            guard let text = EpisodePicker.nextUpLabel(for: episode) else { return }
-            self.nextUpLabel.text = text
-            self.nextUpLabel.isHidden = false
         }
     }
 
@@ -666,22 +647,25 @@ final class MediaDetailChromeView: UIView {
             // Episode: bold "S1, E1:" prefix before the synopsis.
             let color = UIColor.white.withAlphaComponent(0.85)
             let attr = NSMutableAttributedString(string: "S\(s), E\(e): ", attributes: [
-                .font: UIFont.systemFont(ofSize: 24, weight: .bold), .foregroundColor: color])
+                .font: UIFont.systemFont(ofSize: 23, weight: .bold), .foregroundColor: color])
             attr.append(NSAttributedString(string: overview, attributes: [
-                .font: UIFont.systemFont(ofSize: 24, weight: .regular), .foregroundColor: color]))
+                .font: Self.descriptionFont, .foregroundColor: color]))
             descriptionLabel.attributedText = attr
         } else if let tagline = detail.tagline, !tagline.isEmpty {
             descriptionLabel.text = tagline
-            descriptionLabel.font = UIFont.italicSystemFont(ofSize: 24)
+            descriptionLabel.font = UIFont.italicSystemFont(ofSize: 23)
         } else if let overview = detail.item.overview, !overview.isEmpty {
             descriptionLabel.text = overview
-            descriptionLabel.font = .systemFont(ofSize: 24, weight: .regular)
+            descriptionLabel.font = Self.descriptionFont
         }
         let topCast = detail.cast.prefix(3).map { $0.name }
         if !topCast.isEmpty {
-            castLabel.text = "Starring \(topCast.joined(separator: ", "))"
+            let attr = NSMutableAttributedString(string: "Starring ", attributes: [
+                .foregroundColor: UIColor.white.withAlphaComponent(Self.rolesLabelAlpha)])
+            attr.append(NSAttributedString(string: topCast.joined(separator: ", ")))
+            castLabel.attributedText = attr
         } else {
-            castLabel.text = nil
+            castLabel.attributedText = nil
         }
         addVersionsButton(detail)
     }
@@ -722,9 +706,8 @@ final class MediaDetailChromeView: UIView {
         // detail content — we don't surface those in the carousel.
         let play = makePlayPill(item: item)
         play.onPrimaryAction = { [weak self] in self?.onPlay?() }
-        // Movie/episode: the item's own progress and runtime. Show/season: reads
-        // "Play" with an empty bar until the Play target resolves async in
-        // `resolveNextUpLabel`, which sets it from that episode.
+        // Movie/episode: the item's own state. Show/season: reads "Play" until
+        // the Play target resolves async in `resolvePlayTarget`.
         setPlayTarget(item)
 
         let watched = makeCircleButton(systemImage: "checkmark")
@@ -813,25 +796,19 @@ final class MediaDetailChromeView: UIView {
 
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .systemFont(ofSize: 24, weight: .semibold)
+        label.font = HeroPillButton.titleFont
         label.textColor = .white
 
         let contentStack = UIStackView(arrangedSubviews: [icon, label])
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.axis = .horizontal
         contentStack.alignment = .center
-        contentStack.spacing = 12
+        contentStack.spacing = HeroPillButton.iconGap
 
         pill.addSubview(contentStack)
-        NSLayoutConstraint.activate([
-            pill.widthAnchor.constraint(equalToConstant: Self.actionPillWidth),
-            pill.heightAnchor.constraint(equalToConstant: Self.actionButtonHeight),
-            contentStack.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
-            contentStack.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: pill.leadingAnchor, constant: 20),
-            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: pill.trailingAnchor, constant: -18),
-            icon.widthAnchor.constraint(equalToConstant: 20),
-            icon.heightAnchor.constraint(equalToConstant: 20)
+        NSLayoutConstraint.activate(Self.pillConstraints(pill, content: contentStack) + [
+            icon.widthAnchor.constraint(equalToConstant: 24),
+            icon.heightAnchor.constraint(equalToConstant: 24)
         ])
         pill.invertOnFocus = [icon, label]
 
@@ -952,26 +929,20 @@ final class MediaDetailChromeView: UIView {
     private func rebuildGenreRow(item: MediaItem, detail: MediaItemDetail?) {
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
-        var parts: [String] = []
-        parts.append(Self.kindLabel(item.kind))
         // resolvedGenres includes the parent show's genres for episodes (an
         // episode's own detail has none).
-        for genre in resolvedGenres.prefix(2) {
-            parts.append(genre)
-        }
-        parts.removeAll(where: { $0.isEmpty })
-
-        for (i, part) in parts.enumerated() {
-            if i > 0 {
-                genreRow.addArrangedSubview(Self.makeCaptionLabel("·", alpha: 0.5, bold: true))
-            }
-            genreRow.addArrangedSubview(Self.makeCaptionLabel(part, alpha: 0.85, bold: true))
+        let parts = ([Self.kindLabel(item.kind)] + resolvedGenres.prefix(2)).filter { !$0.isEmpty }
+        if !parts.isEmpty {
+            genreRow.addArrangedSubview(Self.makeCaptionLabel(parts.joined(separator: " · "), alpha: 1))
         }
 
         if let contentRating = detail?.contentRating, !contentRating.isEmpty {
-            genreRow.addArrangedSubview(Self.makeContentRatingBadge(contentRating))
+            genreRow.addArrangedSubview(Self.makeBadge(contentRating, alpha: 1))
         }
     }
+
+    /// Apple dims the whole metadata row, text and badges alike.
+    private static let qualityRowAlpha: CGFloat = 0.75
 
     private func rebuildQualityRow(item: MediaItem, detail: MediaItemDetail?) {
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -987,15 +958,13 @@ final class MediaDetailChromeView: UIView {
         if let runtime = item.runtime, runtime > 0 { parts.append(Self.formatRuntime(runtime)) }
         if let edition = detail?.item.editionTitle ?? item.editionTitle, !edition.isEmpty { parts.append(edition) }
 
-        for (i, part) in parts.enumerated() {
-            if i > 0 {
-                qualityRow.addArrangedSubview(Self.makeCaptionLabel("·", alpha: 0.7, bold: true))
-            }
-            qualityRow.addArrangedSubview(Self.makeCaptionLabel(part, alpha: 1, bold: true))
+        if !parts.isEmpty {
+            qualityRow.addArrangedSubview(
+                Self.makeCaptionLabel(parts.joined(separator: " · "), alpha: Self.qualityRowAlpha))
         }
 
         if let rating = detail?.rating {
-            let ratingLabel = Self.makeCaptionLabel(rating.badgeText, alpha: 1, bold: true)
+            let ratingLabel = Self.makeCaptionLabel(rating.badgeText, alpha: Self.qualityRowAlpha)
             let starStack = UIStackView(arrangedSubviews: [ratingLabel])
             if rating.showsStar {
                 let star = UIImageView(image: UIImage(systemName: "star.fill"))
@@ -1016,7 +985,7 @@ final class MediaDetailChromeView: UIView {
 
         if let badges = detail?.primarySource?.qualityBadges(), !badges.isEmpty {
             for badge in badges {
-                qualityRow.addArrangedSubview(Self.makeQualityBadge(badge))
+                qualityRow.addArrangedSubview(Self.makeBadge(badge, alpha: Self.qualityRowAlpha))
             }
         }
     }
@@ -1034,20 +1003,21 @@ final class MediaDetailChromeView: UIView {
         playIcon.tintColor = .white
         playIcon.contentMode = .scaleAspectFit
 
-        let timeLabel = UILabel()
-        timeLabel.translatesAutoresizingMaskIntoConstraints = false
-        timeLabel.font = .systemFont(ofSize: 24, weight: .semibold)
-        timeLabel.textColor = .white
+        let titleLabel = UILabel()
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = HeroPillButton.titleFont
+        titleLabel.textColor = .white
         // Text is set by `setPlayTarget`, called right after this returns (and
         // again on every refresh) — building it here too would just be a second
         // rule to keep in sync.
-        playTimeLabel = timeLabel
+        playTitleLabel = titleLabel
 
         let progressTrack = UIView()
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
-        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
-        progressTrack.layer.cornerRadius = 1.5
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.5)
+        progressTrack.layer.cornerRadius = Self.playProgressTrackHeight / 2
         progressTrack.clipsToBounds = true
+        playProgressTrack = progressTrack
 
         let progressFill = UIView()
         progressFill.translatesAutoresizingMaskIntoConstraints = false
@@ -1056,32 +1026,21 @@ final class MediaDetailChromeView: UIView {
         let fillWidth = progressFill.widthAnchor.constraint(equalToConstant: 0)
         playProgressFillWidth = fillWidth
 
-        // Content is centered in the pill (not leading-anchored) so a
-        // hardcoded pill width wider than the content doesn't leave it
-        // stranded on the left.
-        let contentStack = UIStackView(arrangedSubviews: [playIcon, progressTrack, timeLabel])
+        // Content is centered in the pill (not leading-anchored) so a pill
+        // wider than its content doesn't leave it stranded on the left.
+        let contentStack = UIStackView(arrangedSubviews: [playIcon, progressTrack, titleLabel])
         contentStack.translatesAutoresizingMaskIntoConstraints = false
         contentStack.axis = .horizontal
         contentStack.alignment = .center
-        contentStack.spacing = 12
+        contentStack.spacing = HeroPillButton.iconGap
 
         pill.addSubview(contentStack)
 
-        // Pill width is hardcoded (Self.actionPillWidth), shared with the
-        // hero's play pill — not derived from icon/progress/label content.
-        NSLayoutConstraint.activate([
-            pill.widthAnchor.constraint(equalToConstant: Self.actionPillWidth),
-            pill.heightAnchor.constraint(equalToConstant: Self.actionButtonHeight),
+        NSLayoutConstraint.activate(Self.pillConstraints(pill, content: contentStack) + [
+            playIcon.widthAnchor.constraint(equalToConstant: 24),
+            playIcon.heightAnchor.constraint(equalToConstant: 24),
 
-            contentStack.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
-            contentStack.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
-            contentStack.leadingAnchor.constraint(greaterThanOrEqualTo: pill.leadingAnchor, constant: 20),
-            contentStack.trailingAnchor.constraint(lessThanOrEqualTo: pill.trailingAnchor, constant: -18),
-
-            playIcon.widthAnchor.constraint(equalToConstant: 20),
-            playIcon.heightAnchor.constraint(equalToConstant: 20),
-
-            progressTrack.heightAnchor.constraint(equalToConstant: 3),
+            progressTrack.heightAnchor.constraint(equalToConstant: Self.playProgressTrackHeight),
             progressTrack.widthAnchor.constraint(equalToConstant: Self.playProgressTrackWidth),
 
             progressFill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
@@ -1090,52 +1049,39 @@ final class MediaDetailChromeView: UIView {
             fillWidth
         ])
 
-        pill.invertOnFocus = [playIcon, timeLabel]
+        pill.invertOnFocus = [playIcon, titleLabel]
         pill.invertBackgroundOnFocus = [progressTrack]
         pill.invertFillOnFocus = [progressFill]
         return pill
     }
 
-    /// Point the Play pill at what pressing it would actually play: `item` is the
-    /// hero item for a movie/episode, and the resolved Next Up / Resume episode
-    /// for a show.
-    ///
-    /// The bar: the track always stays — unstarted, watched and finished all show
-    /// the empty stub; only the fill comes and goes. Same 0 < fraction < 1 render
-    /// rule the episode cells use (see `WatchProgressPolicy`: the DISPLAY
-    /// question, not the resume decision), so a finished item reads as empty
-    /// rather than full.
-    ///
-    /// The label: REMAINING time on a part-watched item, total runtime otherwise.
-    /// It used to be total runtime unconditionally, so a movie 8 minutes in read
-    /// "1h 38m" on the detail while its Continue Watching tile read "1h 30m"
-    /// beside it (issue #279). The tile's rule is the one to match — it is the
-    /// same question asked of the same item.
-    private func setPlayTarget(_ item: MediaItem) {
-        let fraction = item.watchProgress
-        let partial = (fraction.map { $0 > 0 && $0 < 1 }) ?? false
-
-        if let fillWidth = playProgressFillWidth {
-            fillWidth.constant = partial
-                ? Self.playProgressTrackWidth * CGFloat(fraction ?? 0)
-                : 0
-        }
-
-        playTimeLabel?.text = Self.playPillTime(
-            runtime: item.runtime,
-            viewOffset: item.userState.viewOffset,
-            partiallyWatched: partial)
+    /// Pill geometry shared with `HeroPillButton`: fixed height, the shared
+    /// width as a floor, content centred inside Apple's side padding.
+    private static func pillConstraints(_ pill: UIView, content: UIView) -> [NSLayoutConstraint] {
+        let restingWidth = pill.widthAnchor.constraint(equalToConstant: actionPillWidth)
+        restingWidth.priority = .defaultLow
+        return [
+            pill.widthAnchor.constraint(greaterThanOrEqualToConstant: actionPillWidth),
+            restingWidth,
+            pill.heightAnchor.constraint(equalToConstant: actionButtonHeight),
+            content.centerXAnchor.constraint(equalTo: pill.centerXAnchor),
+            content.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+            content.leadingAnchor.constraint(
+                greaterThanOrEqualTo: pill.leadingAnchor, constant: HeroPillButton.sidePadding),
+            content.trailingAnchor.constraint(
+                lessThanOrEqualTo: pill.trailingAnchor, constant: -HeroPillButton.sidePadding)
+        ]
     }
 
-    /// The Play pill's readout. Pure, so the rule is unit-testable without
-    /// building a view.
-    static func playPillTime(runtime: TimeInterval?, viewOffset: TimeInterval, partiallyWatched: Bool) -> String {
-        guard let runtime, runtime > 0 else { return "Play" }
-        guard partiallyWatched else { return formatRuntime(runtime) }
-        let remaining = max(0, runtime - viewOffset)
-        // A sub-minute remainder formats as "0m", which reads as broken; the
-        // total is the honest fallback there.
-        return formatRuntime(remaining >= 60 ? remaining : runtime)
+    /// Point the Play pill at what pressing it would actually play: `target` is
+    /// the hero item for a movie/episode, and the resolved episode for a show.
+    /// The bar shows only while the title says Resume, so the two never disagree.
+    private func setPlayTarget(_ target: MediaItem) {
+        let resumes = target.isInProgress
+        playProgressTrack?.isHidden = !resumes
+        playProgressFillWidth?.constant = resumes
+            ? Self.playProgressTrackWidth * CGFloat(target.watchProgress ?? 0) : 0
+        playTitleLabel?.text = EpisodePicker.playTitle(for: target, on: item?.kind ?? target.kind)
     }
 
     private func makeCircleButton(systemImage: String) -> FocusableActionButton {
@@ -1202,55 +1148,34 @@ final class MediaDetailChromeView: UIView {
         }
     }
 
-    private static func makeCaptionLabel(_ text: String, alpha: CGFloat, bold: Bool = false) -> UILabel {
+    private static func makeCaptionLabel(_ text: String, alpha: CGFloat) -> UILabel {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.text = text
-        l.font = bold ? .systemFont(ofSize: 24, weight: .bold) : .systemFont(ofSize: 24, weight: .regular)
+        l.font = captionFont
         l.textColor = UIColor.white.withAlphaComponent(alpha)
         return l
     }
 
-    private static func makeContentRatingBadge(_ text: String) -> UIView {
+    /// Bordered rating / quality badge, 22pt tall in total (Apple's badge cap).
+    private static func makeBadge(_ text: String, alpha: CGFloat) -> UIView {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
         label.text = text
-        label.font = .systemFont(ofSize: 24, weight: .bold)
-        label.textColor = UIColor.white.withAlphaComponent(0.85)
+        label.font = .systemFont(ofSize: 15, weight: .bold)
+        label.textColor = UIColor.white.withAlphaComponent(alpha)
         let container = UIView()
         container.translatesAutoresizingMaskIntoConstraints = false
         container.layer.borderWidth = 1
-        container.layer.borderColor = UIColor.white.withAlphaComponent(0.5).cgColor
+        container.layer.borderColor = UIColor.white.withAlphaComponent(alpha * 0.7).cgColor
         container.layer.cornerRadius = 4
         container.layer.cornerCurve = .continuous
         container.addSubview(label)
         NSLayoutConstraint.activate([
+            container.heightAnchor.constraint(equalToConstant: 22),
             label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
             label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
-            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
-            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2)
-        ])
-        return container
-    }
-
-    private static func makeQualityBadge(_ text: String) -> UIView {
-        let label = UILabel()
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.text = text
-        label.font = .systemFont(ofSize: 21, weight: .bold)
-        label.textColor = .white
-        let container = UIView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.layer.borderWidth = 1
-        container.layer.borderColor = UIColor.white.withAlphaComponent(0.7).cgColor
-        container.layer.cornerRadius = 4
-        container.layer.cornerCurve = .continuous
-        container.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
-            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -6),
-            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
-            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2)
+            label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
         ])
         return container
     }

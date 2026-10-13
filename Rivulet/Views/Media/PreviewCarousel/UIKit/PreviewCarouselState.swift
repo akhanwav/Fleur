@@ -6,55 +6,63 @@
 //  Rivulet
 //
 //  Geometry constants and lightweight types for the UIKit preview
-//  carousel. Mirrors the SwiftUI `PreviewOverlayHost` constants verbatim
-//  (see perf-spike/DETAIL_AUDIT.md section 2.1).
+//  carousel. The card shell follows Apple's TV app (read from its
+//  binary, tvOS 26.5); see Docs/PREVIEW_CAROUSEL_REFERENCE_LAYOUT.md.
 //
 
 import UIKit
 
-/// Constants that govern the 3-slot preview carousel layout.
-///
-/// Numbers were copied verbatim from the SwiftUI source so the UIKit
-/// host renders pixel-identical card frames during paging. Do not
-/// change without re-grounding against the audit doc.
+/// Constants that govern the preview carousel layout. Card shell values
+/// are Apple's own; change them only against a fresh reading.
 enum PreviewCarouselGeometry {
-    /// Distance from the top of the screen to the top edge of each
-    /// card. SwiftUI uses 52pt; matches the inset on every card slot.
-    static let topInset: CGFloat = 52
+    /// Distance from the top of the screen to the top edge of each card.
+    static let topInset: CGFloat = 40
 
     /// Card corner radius. Applied to the center slot, the side
     /// peeks, and the expanded hero (which lerps to 0 as it grows
     /// into the fullscreen detail surface).
-    static let cornerRadius: CGFloat = 28
+    static let cornerRadius: CGFloat = 36
 
     /// Horizontal inset used to compute the centered card's frame.
     /// `centeredFrame.width = screenWidth - 2 * centeredHorizontalInset`.
-    static let centeredHorizontalInset: CGFloat = 88
+    static let centeredHorizontalInset: CGFloat = 120
 
     /// Gap between the centered card and either side peek.
-    static let sideCardGap: CGFloat = 14
+    static let sideCardGap: CGFloat = 20
 
-    /// Multiplier applied to a side peek's inner image translation so
-    /// the artwork parallaxes as the user pages.
-    static let carouselParallaxFactor: CGFloat = 0.70
+    /// Share of a card's travel its artwork counter-shifts inside the window,
+    /// so the art moves at about a fifth of the card's speed on screen.
+    static let parallaxFactor: CGFloat = 0.8
+
+    /// Black dim over a card, scaled by its distance from centre (0 centred,
+    /// about 0.76 on a resting neighbour).
+    static let neighbourDimAlpha: CGFloat = 0.8
+
+    /// Travel (in normalized position) over which a card's chrome fades out
+    /// as it pages away from centre.
+    static let contentFadeDistance: CGFloat = 0.3
+
+    /// Card position relative to the viewport centre, -1...1 (0 centred,
+    /// about 0.95 on a resting neighbour). Drives parallax, dim and hairline.
+    static func normalizedPosition(cardMidX: CGFloat, cardWidth: CGFloat, in bounds: CGRect) -> CGFloat {
+        let reach = (bounds.width + cardWidth) / 2
+        guard reach > 0 else { return 0 }
+        return max(-1, min(1, (cardMidX - bounds.midX) / reach * 1.005))
+    }
 
     /// Horizontal inset applied to the chrome content (logo / metadata
-    /// / action row) inside the card. Carousel inset 40 so the metadata left
-    /// edge (card 88 + 40 = screen-x 128) sits near the card edge and
-    /// left-aligns with the first of the 4 centered episode thumbs. Expanded
-    /// mode 140pt (refined with the expanded episode layout in Step 3).
+    /// / action row) inside the card: card 120 + 40 puts the metadata left
+    /// edge at screen-x 160.
     static let carouselChromeInset: CGFloat = 40
-    /// That edge in screen space: the collapsed card's content margin.
+    /// That edge in screen space (160): the collapsed card's content margin.
     static var collapsedChromeInset: CGFloat { centeredHorizontalInset + carouselChromeInset }
-    /// Expanded-state content margin — the single app-wide content-left edge.
-    /// Everything in the fullscreen detail aligns here: the chrome (logo /
-    /// metadata / action row), the seasons header, every below-fold row, the
-    /// standalone detail page, and the info popup padding. Sourced from
-    /// `MediaRowMetrics.rowLeading` so the expanded detail, the home shelves,
-    /// and the hero all share ONE margin (40pt). Changing that one constant
-    /// moves the whole app's content margin; the expand morph's pull is
-    /// derived from this (see ExpandedDetailContainerView.belowFoldExpandPull),
-    /// so it stays consistent automatically.
+    /// Expanded-state content margin: the single app-wide content-left edge
+    /// (80, Apple's). Everything in the fullscreen detail aligns here: the
+    /// chrome (logo / metadata / action row), the seasons header, every
+    /// below-fold row, the standalone detail page, and the info popup padding.
+    /// Sourced from `MediaRowMetrics.rowLeading` so the expanded detail, the
+    /// home shelves, and the hero all share ONE margin; the expand morph's pull
+    /// is derived from it (ExpandedDetailContainerView.belowFoldExpandPull).
     static var expandedChromeInset: CGFloat { MediaRowMetrics.rowLeading }
 
     /// Vertical reserve below the chrome — sets BOTH the chrome's bottom inset
@@ -65,11 +73,9 @@ enum PreviewCarouselGeometry {
     /// episodes a shallow strip beneath it).
     static let carouselChromeShelfPeek: CGFloat = 110
 
-    /// Duration of the expand/collapse morph. Matches SwiftUI's
-    /// `previewExpandAnimation = .easeInOut(duration: 0.35)`
-    /// (PreviewOverlayHost.swift:17). Card frame + chrome insets +
-    /// corner radius all run on this curve.
-    static let expandAnimationDuration: TimeInterval = 0.35
+    /// Duration of the expand/collapse morph (ease-in-out). Card frame,
+    /// chrome insets, corner radius and hairline all run on this curve.
+    static let expandAnimationDuration: TimeInterval = 0.25
 
     /// The collapsed card is inset left/right/top and bleeds off the SCREEN
     /// BOTTOM (Apple TV+ look — the episode strip overlaps the artwork rather
@@ -114,9 +120,7 @@ enum PreviewCarouselSlot: Int, CaseIterable {
 
 /// Computes the carousel frame for a card at the given slot.
 ///
-/// Mirrors `PreviewOverlayHost.carouselFrame(for:)` from the SwiftUI
-/// source for the three visible slots, and extends symmetrically for
-/// the two off-screen slots.
+/// The three visible slots plus the two off-screen ones, one stride apart.
 func previewCarouselFrame(
     slot: PreviewCarouselSlot,
     in bounds: CGRect

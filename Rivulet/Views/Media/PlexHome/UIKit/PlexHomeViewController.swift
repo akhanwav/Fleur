@@ -5654,19 +5654,67 @@ final class PlexHomeViewController: UIViewController {
                 self?.preparePreviewRestoreForPendingDismiss(sourceTarget)
             },
             onDismiss: { [weak self] sourceTarget in
+                self?.showPreviewTiles()
                 if let sourceTarget {
                     self?.pendingPreviewRestore = sourceTarget
                 }
                 self?.applyPendingPreviewRestoreIfNeeded()
             }
         )
+        carouselVC.onTeardown = { [weak self] in self?.showPreviewTiles() }
+        // The row's tiles as they are now, for the exit after paging: shown
+        // for the capture, hidden again under the still-opaque carousel.
+        carouselVC.freshEntrySnapshots = { [weak self] target in
+            guard let self, let path = target.flatMap(self.indexPath(for:)) else { return [] }
+            // The row may have changed under the carousel: pair tiles to cards by ID.
+            var indexMap = sourceIndexMap
+            if let sourceItemIDs {
+                let cardIndex = Dictionary(
+                    sourceItemIDs.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+                indexMap = [:]
+                for (row, id) in self.sourceItemIDs(for: self.sectionsSnapshot[path.section]).enumerated() {
+                    indexMap?[row] = cardIndex[id]
+                }
+            }
+            let hiddenRow = self.previewHiddenRowID
+            self.showPreviewTiles()
+            let fresh = self.previewEntrySnapshots(
+                at: path, itemIndexMap: indexMap, afterScreenUpdates: true)
+            self.previewHiddenRowID = hiddenRow
+            self.applyPreviewTileHiding()
+            return fresh
+        }
         var topVC: UIViewController = self
         while let presented = topVC.presentedViewController { topVC = presented }
         // animated: false — the carousel's spring morph IS the
         // transition. Modal transitions would compose on top.
-        topVC.present(carouselVC, animated: false) { [weak self] in
+        topVC.present(carouselVC, animated: false) { [weak self, weak carouselVC] in
             self?.resetVisibleFocusAppearance(except: nil)
+            // The flying cards are on screen now and stand in for the tiles.
+            guard let self, carouselVC?.presentingViewController != nil, !entrySnapshots.isEmpty else { return }
+            self.previewHiddenRowID = sourceRowID
+            self.applyPreviewTileHiding()
         }
+    }
+
+    // MARK: - Tiles hidden under the preview carousel
+
+    /// Row whose tiles are hidden while the carousel flies them (nil: none).
+    private var previewHiddenRowID: String?
+
+    /// Apply `previewHiddenRowID` to the realized shelf rows.
+    private func applyPreviewTileHiding() {
+        for case let row as ShelfRowCell in collectionView.visibleCells {
+            let section = collectionView.indexPath(for: row)?.section ?? -1
+            row.tilesHiddenForPreview = previewHiddenRowID != nil
+                && sectionsSnapshot.indices.contains(section)
+                && sectionsSnapshot[section].id.raw == previewHiddenRowID
+        }
+    }
+
+    private func showPreviewTiles() {
+        previewHiddenRowID = nil
+        applyPreviewTileHiding()
     }
 
     // MARK: - Focus restoration after preview dismiss
@@ -5686,6 +5734,8 @@ final class PlexHomeViewController: UIViewController {
             collectionView.remembersLastFocusedIndexPath = false
         }
         _ = preparePreviewRestoreLayout(for: target, routeFocus: false)
+        // The restore scroll may have realized the row afresh.
+        applyPreviewTileHiding()
         resetVisibleFocusAppearance(except: target)
     }
 
@@ -5700,6 +5750,9 @@ final class PlexHomeViewController: UIViewController {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             guard self.pendingPreviewRestore == target else { return }
+            // Let the dismissal's own focus restore finish first: a request
+            // made while it is pending loses to the tile the carousel opened from.
+            self.updateFocusIfNeeded()
             guard self.preparePreviewRestoreLayout(for: target, routeFocus: true) else {
                 self.finishPendingPreviewRestore()
                 return
@@ -5781,18 +5834,16 @@ final class PlexHomeViewController: UIViewController {
 
     private func previewEntrySnapshots(
         at indexPath: IndexPath,
-        itemIndexMap: [Int: Int]? = nil
+        itemIndexMap: [Int: Int]? = nil,
+        afterScreenUpdates: Bool = false
     ) -> [PreviewEntrySnapshot] {
         guard indexPath.section < sectionsSnapshot.count else { return [] }
         if isShelfKind(sectionsSnapshot[indexPath.section].kind) {
             let rowPath = IndexPath(item: 0, section: indexPath.section)
             guard let row = collectionView.cellForItem(at: rowPath) as? ShelfRowCell else { return [] }
-            return row.visibleEntrySnapshots(itemIndexMap: itemIndexMap)
+            return row.visibleEntrySnapshots(itemIndexMap: itemIndexMap, afterScreenUpdates: afterScreenUpdates)
         }
-        guard let frame = tileFrameInWindow(at: indexPath),
-              let cell = collectionView.cellForItem(at: indexPath),
-              let snapshot = cell.snapshotView(afterScreenUpdates: false)
-        else { return [] }
+        guard let cell = collectionView.cellForItem(at: indexPath), let window = view.window else { return [] }
         let targetIndex: Int
         if let itemIndexMap {
             guard let mappedIndex = itemIndexMap[indexPath.item] else { return [] }
@@ -5800,13 +5851,8 @@ final class PlexHomeViewController: UIViewController {
         } else {
             targetIndex = indexPath.item
         }
-        return [
-            PreviewEntrySnapshot(
-                itemIndex: targetIndex,
-                sourceFrame: frame,
-                snapshotView: snapshot
-            )
-        ]
+        return [PreviewEntrySnapshot.capture(
+            cell, itemIndex: targetIndex, in: window, afterScreenUpdates: afterScreenUpdates)].compactMap { $0 }
     }
 
     private func sourceItemIDs(for section: HomeSectionData) -> [String] {
@@ -6276,6 +6322,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                         forItemAt indexPath: IndexPath) {
         guard indexPath.section < sectionsSnapshot.count else { return }
         let section = sectionsSnapshot[indexPath.section]
+        // A row coming back on screen follows the carousel's current state.
+        (cell as? ShelfRowCell)?.tilesHiddenForPreview =
+            previewHiddenRowID != nil && section.id.raw == previewHiddenRowID
         switch section.kind {
         case .hero, .recommendationsLoading, .recommendationsError, .sortHeader,
              .searchPrompt, .searchState, .searchGrid, .watchlistGrid:

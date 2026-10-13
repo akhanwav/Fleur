@@ -19,7 +19,7 @@
 //  construction.)
 //
 //  During expand, the centered panel's container grows from its card
-//  window to fullscreen and its corner radius lerps 28 -> 0 — both driven
+//  window to fullscreen and its corner radius lerps to 0, both driven
 //  by the morph controller's single animator (see CarouselMorphController).
 //  The cell no longer owns any backdrop. See
 //  docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md.
@@ -35,6 +35,8 @@ final class BackdropPlaneView: UIView {
     private final class Panel {
         let container = UIView()
         let imageView = UIImageView()
+        /// Black wash above the artwork; alpha follows the card's distance from centre.
+        let dimView = UIView()
         var index: Int
         var loadToken: UInt64 = 0
         init(index: Int) {
@@ -51,6 +53,9 @@ final class BackdropPlaneView: UIView {
             imageView.isOpaque = true
             imageView.backgroundColor = .black
             container.addSubview(imageView)
+            dimView.backgroundColor = .black
+            dimView.alpha = 0
+            container.addSubview(dimView)
         }
     }
 
@@ -69,7 +74,8 @@ final class BackdropPlaneView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .black
+        // Apple's surround grey; shows in the top strip and the gaps between cards.
+        backgroundColor = UIColor(white: 0.16, alpha: 1)
     }
 
     @available(*, unavailable)
@@ -113,24 +119,26 @@ final class BackdropPlaneView: UIView {
             // Container = the window. It clips its oversized image.
             panel.container.frame = cardWindow
             panel.container.layer.cornerRadius = windowCornerRadius
+            // The dim follows horizontal position only, never the morph: a
+            // morph-timed fade on the peeks is what ripped (see expandPanel).
+            panel.dimView.frame = CGRect(origin: .zero, size: cardWindow.size)
+            panel.dimView.alpha = PreviewCarouselGeometry.neighbourDimAlpha
+                * abs(layout.normalizedPosition(for: idx))
 
             // Image is full-stage sized. The two axes are positioned
             // DIFFERENTLY on purpose:
             //
             //  • X = window-centered + parallax: (W-S)/2 + parallax. The
-            //    image's screen-x = container.x + localX = Wx + (W-S)/2 +
-            //    parallax, so it TRAVELS WITH the card during paging (the Wx
-            //    term) with a parallax lag. This is the correct carousel
-            //    feel; screen-pinning X instead cancels the Wx term and the
-            //    artwork slides in from the wrong side.
+            //    parallax cancels about 80 percent of the card's travel, so
+            //    the art drifts across the screen at a fifth of the card's
+            //    speed and the window slides over it (Apple's formula).
             //
             //  • Y = screen-pinned: -window.origin.y, so screen-y = Wy +
-            //    (-Wy) = 0. The card is inset 52pt from the top but the
+            //    (-Wy) = 0. The card is inset from the top but the
             //    artwork sits at screen-y 0 (full-bleed), the window crops
             //    the top. This makes the expand morph VERTICALLY driftless:
             //    as the window grows to fullscreen the image stays at
-            //    screen-y 0 the whole time. (Window-centering Y instead
-            //    drifts ~26pt vertically during expand.)
+            //    screen-y 0 the whole time.
             //
             // For the centered card (parallax 0) screen-x is also 0, so
             // expand is horizontally driftless too — both axes converge on
@@ -174,6 +182,9 @@ final class BackdropPlaneView: UIView {
         }
     }
 
+    /// The artwork already loaded for `index`, for the shelf flight's cards.
+    func image(for index: Int) -> UIImage? { panels[index]?.imageView.image }
+
     // MARK: - Morph hooks (driven by CarouselMorphController)
 
     /// Current viewport frame of the panel container at `index`. Used by
@@ -197,6 +208,7 @@ final class BackdropPlaneView: UIView {
         bringSubviewToFront(panel.container)
         panel.container.frame = rect
         panel.imageView.frame = CGRect(origin: .zero, size: rect.size)
+        panel.dimView.frame = panel.imageView.frame
     }
 
     /// Reverse of expandPanel: shrink the centered panel's container back
@@ -221,13 +233,14 @@ final class BackdropPlaneView: UIView {
             width: stage.width,
             height: stage.height
         )
+        panel.dimView.frame = CGRect(origin: .zero, size: window.size)
         // Peeks were never alpha-hidden (see expandPanel) — they sit at their
         // carousel frames and are revealed geometrically as the centered card
         // shrinks. Nothing to restore here.
     }
 
     /// Set the container corner radius for the panel at `index` (lerped
-    /// 28<->0 by the morph controller's display-link tick). Disables CA
+    /// to and from 0 by the morph controller's display-link tick). Disables CA
     /// actions so the per-frame ticks don't each spawn an implicit
     /// animation.
     func setWindowCornerRadius(_ radius: CGFloat, for index: Int) {

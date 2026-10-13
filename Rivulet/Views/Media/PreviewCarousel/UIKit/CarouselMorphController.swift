@@ -8,7 +8,8 @@
 //  Owns the SINGLE UIViewPropertyAnimator + CADisplayLink that drive the
 //  carousel expand/collapse morph. One clock owns: the collection-view
 //  layout swap (carousel <-> expanded), the backdrop panel container
-//  grow/shrink, the chrome inset tween, and the corner-radius lerp.
+//  grow/shrink, the chrome inset tween, the hairline fade, and the
+//  corner-radius lerp.
 //  Because there is exactly one timeline, nothing can drift. See
 //  docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md
 //  and perf-spike/UIKIT_FOUNDATIONS.md §1, §5.
@@ -32,6 +33,8 @@ final class CarouselMorphController {
 
     /// Index being morphed.
     private var morphingIndex: Int = 0
+    /// Its cell; hairline and scrim follow the window's radius on each tick.
+    private weak var morphingCell: PreviewCardView?
     /// Corner-radius lerp endpoints for the current morph.
     private var radiusFrom: CGFloat = 0
     private var radiusTo: CGFloat = 0
@@ -68,6 +71,7 @@ final class CarouselMorphController {
     ) {
         guard let cv = collectionView, let plane = backdropPlane else { return }
         morphingIndex = centeredIndex
+        morphingCell = cell
 
         plane.isMorphing = true
         expandedLayout.itemCount = carouselLayout.itemCount
@@ -87,7 +91,8 @@ final class CarouselMorphController {
             cv.layoutIfNeeded()
             // b) Backdrop centered panel container grows to fullscreen.
             plane.expandPanel(centeredIndex, to: viewBounds)
-            // c) Chrome insets 40 -> 100 (metadata pulled to the sides).
+            // c) Chrome insets to the expanded margin (metadata pulled to
+            //    the sides) and the hairline out.
             cell?.setExpanded(true)
             cell?.contentView.layoutIfNeeded()
             // d) Below-fold peek: clip widens to full-bleed (n-1/n+1 edges
@@ -115,6 +120,8 @@ final class CarouselMorphController {
     ) {
         guard let cv = collectionView, let plane = backdropPlane else { return }
         morphingIndex = centeredIndex
+        morphingCell = cell
+        radiusTo = 0
         plane.isMorphing = true
         expandedLayout.itemCount = carouselLayout.itemCount
         expandedLayout.expandedIndex = centeredIndex
@@ -122,7 +129,6 @@ final class CarouselMorphController {
         cv.setCollectionViewLayout(expandedLayout, animated: false)
         cv.layoutIfNeeded()
         plane.expandPanel(centeredIndex, to: viewBounds)
-        plane.setWindowCornerRadius(0, for: centeredIndex)
         cell?.setExpanded(true)
         cell?.contentView.layoutIfNeeded()
         detailContainer?.setExpanded(true)
@@ -141,6 +147,7 @@ final class CarouselMorphController {
     ) {
         guard let cv = collectionView, let plane = backdropPlane else { return }
         morphingIndex = centeredIndex
+        morphingCell = cell
 
         // If an expand is mid-flight, reverse it instead of starting fresh.
         if let animator, animator.isRunning {
@@ -195,16 +202,22 @@ final class CarouselMorphController {
     }
 
     @objc private func tickRadius() {
-        guard let animator, let plane = backdropPlane else { return }
+        guard let animator else { return }
         let raw = animator.fractionComplete
         let t = animator.isReversed ? (1 - raw) : raw
-        let r = radiusFrom + (radiusTo - radiusFrom) * t
-        plane.setWindowCornerRadius(r, for: morphingIndex)
+        setRadius(radiusFrom + (radiusTo - radiusFrom) * t)
+    }
+
+    private func setRadius(_ radius: CGFloat) {
+        backdropPlane?.setWindowCornerRadius(radius, for: morphingIndex)
+        morphingCell?.setCornerRadius(radius)
     }
 
     private func endMorph() {
         displayLink?.invalidate()
         displayLink = nil
+        // The last tick can stop just short of the end value.
+        setRadius(radiusTo)
         backdropPlane?.isMorphing = false
         animator = nil
     }

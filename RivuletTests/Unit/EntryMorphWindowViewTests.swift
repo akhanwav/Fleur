@@ -18,8 +18,9 @@ final class EntryMorphWindowViewTests: XCTestCase {
 
     /// MediaRowMetrics poster tile.
     private let tile = CGSize(width: 296, height: 444)
-    /// PreviewCarouselGeometry.centeredCardFrame at 1920x1080.
-    private let card = CGSize(width: 1744, height: 1028)
+    /// The carousel card at 1920x1080 (1680 x 1040).
+    private let card = PreviewCarouselGeometry.centeredCardSize(
+        in: CGRect(x: 0, y: 0, width: 1920, height: 1080))
 
     private var posterAspect: CGFloat { tile.width / tile.height }
 
@@ -43,17 +44,17 @@ final class EntryMorphWindowViewTests: XCTestCase {
 
     func test_atCard_contentOverflowsBottomInsteadOfSquashing() {
         let r = fit(card, posterAspect)
-        XCTAssertEqual(r.width, 1744, accuracy: 0.5)
-        // NOT the card's 1028, which is what squashed it.
-        XCTAssertEqual(r.height, 2616, accuracy: 0.5)
-        XCTAssertEqual(r.height - card.height, 1588, accuracy: 0.5,
+        XCTAssertEqual(r.width, 1680, accuracy: 0.5)
+        // NOT the card's 1040, which is what squashed it.
+        XCTAssertEqual(r.height, 2520, accuracy: 0.5)
+        XCTAssertEqual(r.height - card.height, 1480, accuracy: 0.5,
                        "the cropped remainder should run off the bottom edge")
     }
 
     func test_scaleIsUniformOnBothAxes() {
         let r = fit(card, posterAspect)
         XCTAssertEqual(r.width / tile.width, r.height / tile.height, accuracy: 0.001)
-        XCTAssertEqual(r.width / tile.width, 5.89, accuracy: 0.01)
+        XCTAssertEqual(r.width / tile.width, 5.68, accuracy: 0.01)
     }
 
     func test_contentIsTopAnchoredAtBothEnds() {
@@ -84,19 +85,19 @@ final class EntryMorphWindowViewTests: XCTestCase {
     func test_oldBehaviour_didDistort() {
         let mid = CGSize(width: lerp(tile.width, card.width, 0.5),
                          height: lerp(tile.height, card.height, 0.5))
-        XCTAssertEqual(mid.width, 1020, accuracy: 0.5)
-        XCTAssertEqual(mid.height, 736, accuracy: 0.5)
-        XCTAssertEqual(mid.width / mid.height / posterAspect, 2.08, accuracy: 0.01)
+        XCTAssertEqual(mid.width, 988, accuracy: 0.5)
+        XCTAssertEqual(mid.height, 742, accuracy: 0.5)
+        XCTAssertEqual(mid.width / mid.height / posterAspect, 2.00, accuracy: 0.01)
 
         let peak = (card.width / card.height) / posterAspect
-        XCTAssertEqual(peak, 2.54, accuracy: 0.01, "end-of-morph distortion")
+        XCTAssertEqual(peak, 2.42, accuracy: 0.01, "end-of-morph distortion")
     }
 
     func test_fixedMidpointStaysProportional() {
         let start = fit(tile, posterAspect)
         let end = fit(card, posterAspect)
-        XCTAssertEqual(lerp(start.width, end.width, 0.5), 1020, accuracy: 0.5)
-        XCTAssertEqual(lerp(start.height, end.height, 0.5), 1530, accuracy: 0.5)
+        XCTAssertEqual(lerp(start.width, end.width, 0.5), 988, accuracy: 0.5)
+        XCTAssertEqual(lerp(start.height, end.height, 0.5), 1482, accuracy: 0.5)
     }
 
     // MARK: - Other tile shapes
@@ -125,6 +126,60 @@ final class EntryMorphWindowViewTests: XCTestCase {
         XCTAssertEqual(r.minY, 0, "top-anchored in both directions")
     }
 
+    // MARK: - Card artwork under the tile
+
+    /// The stage-sized artwork as the backdrop plane places it in the card.
+    private let artInCard = CGRect(x: -120, y: -40, width: 1920, height: 1080)
+
+    private func backdrop(_ size: CGSize) -> CGRect {
+        EntryMorphWindowView.backdropFrame(inWindowOfSize: size, cardSize: card, artInCard: artInCard)
+    }
+
+    func test_backdrop_atCard_matchesThePlane() {
+        let r = backdrop(card)
+        XCTAssertEqual(r.minX, -120, accuracy: 0.01)
+        XCTAssertEqual(r.minY, -40, accuracy: 0.01)
+        XCTAssertEqual(r.width, 1920, accuracy: 0.01)
+        XCTAssertEqual(r.height, 1080, accuracy: 0.01)
+    }
+
+    /// Apple's miniature for a 260x390 poster: 720x405, centred, 15 above the top.
+    func test_backdrop_inPortraitTile_isHeightDrivenAndCovers() {
+        let r = backdrop(CGSize(width: 260, height: 390))
+        XCTAssertEqual(r.width, 720, accuracy: 0.5)
+        XCTAssertEqual(r.height, 405, accuracy: 0.5)
+        XCTAssertEqual(r.midX, 130, accuracy: 0.5)
+        XCTAssertEqual(r.minY, -15, accuracy: 0.5)
+    }
+
+    func test_backdrop_inLandscapeTile_isWidthDrivenAndCovers() {
+        let size = CGSize(width: 410, height: 231)
+        let r = backdrop(size)
+        XCTAssertLessThanOrEqual(r.minX, 0)
+        XCTAssertLessThanOrEqual(r.minY, 0)
+        XCTAssertGreaterThanOrEqual(r.maxX, size.width)
+        XCTAssertGreaterThanOrEqual(r.maxY, size.height)
+        XCTAssertEqual(r.width / r.height, 16.0 / 9.0, accuracy: 0.001)
+    }
+
+    func test_windowWithBackdrop_keepsTileOnTopAndLaysOutArtwork() {
+        let tileView = UIView()
+        let art = UIImageView()
+        let window = EntryMorphWindowView(
+            content: tileView, sourceSize: tile,
+            backdrop: .init(imageView: art, cardSize: card, artInCard: artInCard))
+
+        XCTAssertEqual(window.subviews.first, art)
+        XCTAssertEqual(window.subviews.last, tileView)
+
+        window.setWindow(CGRect(x: 120, y: 40, width: card.width, height: card.height))
+        XCTAssertEqual(art.frame, artInCard)
+
+        window.tileAlpha = 0
+        XCTAssertEqual(tileView.alpha, 0)
+        XCTAssertEqual(window.alpha, 1, "the window stays opaque; only the tile fades")
+    }
+
     // MARK: - Degenerate input
 
     func test_degenerateInputsStayFinite() {
@@ -150,12 +205,12 @@ final class EntryMorphWindowViewTests: XCTestCase {
         XCTAssertTrue(window.clipsToBounds, "the window must crop the overflow")
         XCTAssertEqual(content.frame.size, tile, "starts filling its source frame")
 
-        let target = CGRect(x: 88, y: 52, width: card.width, height: card.height)
+        let target = CGRect(x: 120, y: 40, width: card.width, height: card.height)
         window.setWindow(target)
 
         XCTAssertEqual(window.frame, target)
-        XCTAssertEqual(content.frame.width, 1744, accuracy: 0.5)
-        XCTAssertEqual(content.frame.height, 2616, accuracy: 0.5)
+        XCTAssertEqual(content.frame.width, 1680, accuracy: 0.5)
+        XCTAssertEqual(content.frame.height, 2520, accuracy: 0.5)
         XCTAssertEqual(content.frame.minY, 0, "content stays pinned to the top")
     }
 

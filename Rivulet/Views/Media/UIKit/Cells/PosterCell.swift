@@ -384,6 +384,14 @@ final class PosterCell: UICollectionViewCell {
             return
         }
         currentURL = url
+        // Memory hit paints in this pass, so a tile realized for a carousel
+        // exit has artwork to fly to.
+        if let cached = ImageCacheManager.shared.cachedImage(for: url) {
+            posterView.image = cached
+            hasArtwork = true
+            hidePlaceholder()
+            return
+        }
         // Glass panel up immediately (covers the bare gray); the load now
         // retries transient failures internally, so the spinner simply rides
         // the single await until the artwork resolves or genuinely fails.
@@ -717,4 +725,10 @@ final class PosterWatchedBadge: UIView {
             pillLabel.text = "\(count)"
         }
     }
+}
+
+extension PosterCell: PreviewSourceTile {
+    var previewArtworkView: UIView { overlayContainer }
+    var previewCornerRadius: CGFloat { cornerRadius }
+    var previewArtworkLoaded: Bool { hasArtwork }
 }

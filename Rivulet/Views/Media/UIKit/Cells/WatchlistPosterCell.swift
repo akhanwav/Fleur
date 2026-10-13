@@ -152,6 +152,14 @@ final class WatchlistPosterCell: UICollectionViewCell {
             return
         }
         currentURL = url
+        // Memory hit paints in this pass, so a tile realized for the carousel
+        // exit has artwork to fly to.
+        if let cached = ImageCacheManager.shared.cachedImage(for: url) {
+            posterView.image = cached
+            hasArtwork = true
+            placeholderView.isHidden = true
+            return
+        }
         placeholderView.isHidden = false  // visible while loading
         let key = url.absoluteString as AnyHashable
         imageLoadTask = Task { [weak self] in
@@ -191,4 +199,10 @@ final class WatchlistPosterCell: UICollectionViewCell {
         return UIImage(systemName: name)?
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 32, weight: .light))
     }
+}
+
+extension WatchlistPosterCell: PreviewSourceTile {
+    var previewArtworkView: UIView { posterView.imageView }
+    var previewCornerRadius: CGFloat { cornerRadius }
+    var previewArtworkLoaded: Bool { hasArtwork }
 }

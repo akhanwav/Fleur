@@ -9,7 +9,7 @@ final class PreviewFlowStateTests: XCTestCase {
         let machine = PreviewStateMachine()
 
         XCTAssertEqual(machine.phase, .entryMorph)
-        XCTAssertTrue(machine.isCarouselInputEnabled)
+        XCTAssertFalse(machine.isCarouselInputEnabled)
         XCTAssertFalse(machine.isExpanded)
         XCTAssertTrue(machine.motionLocked)
     }

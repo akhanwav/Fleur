@@ -26,14 +26,14 @@ enum ImageQuality: Sendable {
     /// Large surfaces that fill much of the screen: home hero, carousel, detail backdrops.
     case full
 
-    var maxPixelSize: CGFloat {
+    nonisolated var maxPixelSize: CGFloat {
         switch self {
         case .thumb: return 900
         case .full:  return 3840
         }
     }
 
-    fileprivate var keySuffix: String {
+    nonisolated fileprivate var keySuffix: String {
         switch self {
         case .thumb: return "t"
         case .full:  return "f"
@@ -64,8 +64,9 @@ actor ImageCacheManager: NSObject {
 
     // MARK: - Caches
 
-    private let memoryCache = NSCache<NSString, UIImage>()
-    private let keyCache = NSCache<NSString, NSString>()
+    // NSCache is thread-safe, which is what lets `cachedImage` be nonisolated.
+    nonisolated(unsafe) private let memoryCache = NSCache<NSString, UIImage>()
+    nonisolated(unsafe) private let keyCache = NSCache<NSString, NSString>()
     private var cacheMetadata: [String: ImageCacheEntry] = [:]
     private var metadataLoaded = false
 
@@ -115,13 +116,14 @@ actor ImageCacheManager: NSObject {
     // MARK: - Public API
 
     /// Check memory cache only (for instant display without loading state).
-    func cachedImage(for url: URL, quality: ImageQuality = .thumb) -> UIImage? {
+    /// Synchronous from any thread.
+    nonisolated func cachedImage(for url: URL, quality: ImageQuality = .thumb) -> UIImage? {
         memoryCache.object(forKey: memoryKey(diskKey: cacheKey(for: url), quality: quality))
     }
 
     /// Disk cache key (per URL). The on-disk file is the original downloaded bytes,
     /// independent of decode size, so the key does not include quality.
-    private func cacheKey(for url: URL) -> String {
+    nonisolated private func cacheKey(for url: URL) -> String {
         let urlKey = url.absoluteString as NSString
         if let cachedKey = keyCache.object(forKey: urlKey) {
             return cachedKey as String
@@ -133,7 +135,7 @@ actor ImageCacheManager: NSObject {
 
     /// Memory cache key (per URL *and* decode size). A poster shown as a small card and
     /// the same poster shown full-screen must not evict each other's decoded bitmap.
-    private func memoryKey(diskKey: String, quality: ImageQuality) -> NSString {
+    nonisolated private func memoryKey(diskKey: String, quality: ImageQuality) -> NSString {
         "\(diskKey)#\(quality.keySuffix)" as NSString
     }
 

@@ -145,6 +145,17 @@ final class ShelfRowCell: UICollectionViewCell {
     private var headerHeightConstraint: NSLayoutConstraint!
     private var rowWidthConstraint: NSLayoutConstraint!
 
+    /// True while the preview carousel covers this row: its tiles fly as the
+    /// cards, so the real ones stay hidden. `willDisplay` covers reused cells.
+    var tilesHiddenForPreview = false {
+        didSet { rowCollectionView.visibleCells.forEach(applyPreviewHiding) }
+    }
+
+    /// `contentView`, so the cell stays laid out and focusable.
+    private func applyPreviewHiding(to cell: UICollectionViewCell) {
+        cell.contentView.isHidden = tilesHiddenForPreview && !(cell is PosterSkeletonCell)
+    }
+
     /// Item index to route focus to on the next focus update (preview-dismiss
     /// restoration). One-shot.
     private var pendingFocusIndex: Int?
@@ -273,6 +284,7 @@ final class ShelfRowCell: UICollectionViewCell {
         // different row would restore focus to an unrelated tile index.
         lastFocusedItemIndex = nil
         hasBoundContent = false
+        tilesHiddenForPreview = false
         // A deferred reload belongs to the row this cell WAS showing.
         deferredApply = nil
         batchUpdateInFlight = false
@@ -468,7 +480,8 @@ final class ShelfRowCell: UICollectionViewCell {
     /// Snapshots of every realized, visible source tile. The owning controller
     /// maps row item indices to preview item indices before presenting the
     /// carousel so the modal can animate the row into carousel geometry.
-    func visibleEntrySnapshots(itemIndexMap: [Int: Int]? = nil) -> [PreviewEntrySnapshot] {
+    func visibleEntrySnapshots(itemIndexMap: [Int: Int]? = nil,
+                               afterScreenUpdates: Bool = false) -> [PreviewEntrySnapshot] {
         guard let window else { return [] }
         rowCollectionView.layoutIfNeeded()
 
@@ -486,16 +499,10 @@ final class ShelfRowCell: UICollectionViewCell {
                 }
                 guard indexPath.item < realCount,
                       let cell = rowCollectionView.cellForItem(at: indexPath),
-                      let snapshot = cell.snapshotView(afterScreenUpdates: false)
+                      cell.convert(cell.bounds, to: window).intersects(visibleBounds)
                 else { return nil }
-
-                let frame = cell.convert(cell.bounds, to: window)
-                guard frame.intersects(visibleBounds), frame.width > 1, frame.height > 1 else { return nil }
-                return PreviewEntrySnapshot(
-                    itemIndex: targetIndex,
-                    sourceFrame: frame,
-                    snapshotView: snapshot
-                )
+                return PreviewEntrySnapshot.capture(
+                    cell, itemIndex: targetIndex, in: window, afterScreenUpdates: afterScreenUpdates)
             }
     }
 
@@ -621,6 +628,7 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView,
                         willDisplay cell: UICollectionViewCell,
                         forItemAt indexPath: IndexPath) {
+        applyPreviewHiding(to: cell)
         onWillDisplayItem?(indexPath.item)
     }
 

@@ -89,17 +89,20 @@ final class PreviewCarouselLayout: UICollectionViewLayout {
         return cellFrame(for: index)
     }
 
-    /// The artwork parallax offset (in points) for the card at `index`,
-    /// given the current contentOffset. Mirrors the `parallaxOffsetX`
-    /// computed in `layoutAttributesForItem`. Positive contentOffset to
-    /// the card's left yields negative offset (artwork lags the card).
-    func parallaxOffset(for index: Int) -> CGFloat {
+    /// Card position relative to the viewport centre, -1...1 (0 centred).
+    func normalizedPosition(for index: Int) -> CGFloat {
         guard let cv = collectionView else { return 0 }
         let frame = cellFrame(for: index)
-        let viewportCenterX = cv.bounds.midX
-        let distancePx = frame.midX - viewportCenterX
-        let distanceUnits = distancePx / stride
-        return -distanceUnits * stride * 0.30
+        return PreviewCarouselGeometry.normalizedPosition(
+            cardMidX: frame.midX, cardWidth: frame.width, in: cv.bounds)
+    }
+
+    /// Artwork shift (points) inside the card window at `index`: against the
+    /// card's travel, so the art moves at about a fifth of the card's speed.
+    func parallaxOffset(for index: Int) -> CGFloat {
+        guard let cv = collectionView else { return 0 }
+        let reach = (cv.bounds.width + cellFrame(for: index).width) / 2
+        return -PreviewCarouselGeometry.parallaxFactor * reach * normalizedPosition(for: index)
     }
 
     /// Indices whose card frames intersect the current viewport, widened

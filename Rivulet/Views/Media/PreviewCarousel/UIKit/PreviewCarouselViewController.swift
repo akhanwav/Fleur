@@ -26,7 +26,7 @@
 //   - Smooth 60fps paging with parallax (artwork lags the card).
 //   - No content swap mid-animation — every cell shows its item
 //     throughout its visible lifetime.
-//   - Entry + dismiss spring morphs match SwiftUI baseline timing.
+//   - Entry + dismiss morphs run on Apple's shelf-tile spring.
 //
 
 import Combine
@@ -50,6 +50,10 @@ final class PreviewCarouselViewController: UIViewController {
     private let onPrepareDismiss: (PreviewSourceTarget?) -> Void
     private let onDismiss: (PreviewSourceTarget?) -> Void
     private var dismissSourceTarget: PreviewSourceTarget?
+    /// The source row's tiles as they are now, for the exit after paging.
+    var freshEntrySnapshots: ((PreviewSourceTarget?) -> [PreviewEntrySnapshot])?
+    /// Runs once however the carousel goes away: the presenter un-hides its tiles.
+    var onTeardown: (() -> Void)?
 
     // MARK: - State
 
@@ -131,7 +135,7 @@ final class PreviewCarouselViewController: UIViewController {
     /// Sits BELOW the chrome (blurs the artwork; chrome fades on top of it).
     /// Intensity is scrubbed via a paused property animator's
     /// `fractionComplete` (Iter 3) — NOT alpha (Apple: alpha on an effect
-    /// view artifacts). `.regular` style matches HeroButtonRowView precedent.
+    /// view artifacts).
     private let blurOverlay = UIVisualEffectView(effect: nil)
     /// Paused animator whose `fractionComplete` is the blur intensity. Built
     /// lazily when the blur is first armed (Iter 3).
@@ -143,6 +147,12 @@ final class PreviewCarouselViewController: UIViewController {
         // sits in .active (paused) for the controller's whole life — it must be
         // stopped before the controller is torn down or the app aborts on dismiss.
         if blurAnimator?.state == .active { blurAnimator?.stopAnimation(true) }
+        onTeardown?()
+    }
+
+    private func teardown() {
+        onTeardown?()
+        onTeardown = nil
     }
 
     /// Whether the centered card is currently in expanded layout.
@@ -150,8 +160,8 @@ final class PreviewCarouselViewController: UIViewController {
     /// true. Drives the custom layout (see `PreviewCarouselLayout`)
     /// to size the centered cell to fullscreen and hide side peeks.
     /// The cell's existing `chromeView` is the SAME view in both
-    /// states — only its constraint constants animate (118→140 inset)
-    /// and the contentView's corner radius animates (28→0). No
+    /// states: only its constraint constants animate (the chrome inset)
+    /// and the panel's corner radius animates to 0. No
     /// reparenting, no second view tree, true visual continuity.
     private(set) var isExpanded: Bool = false
 
@@ -232,7 +242,8 @@ final class PreviewCarouselViewController: UIViewController {
         view.backgroundColor = .clear
 
         backdrop.translatesAutoresizingMaskIntoConstraints = false
-        backdrop.backgroundColor = .black
+        // Apple's surround grey; shows in the top strip and the gaps between cards.
+        backdrop.backgroundColor = UIColor(white: 0.16, alpha: 1)
         backdrop.alpha = entrySnapshots.isEmpty ? 1 : 0
 
         view.addSubview(backdrop)
@@ -513,7 +524,7 @@ final class PreviewCarouselViewController: UIViewController {
         collectionView.contentOffset = offset
 
         if !isExpanded {
-            backdropPlane.sync(to: layout, offset: collectionView.contentOffset)
+            syncCards()
         }
 
         // Position the morph snapshot. Pre-entry: at the source
@@ -632,20 +643,7 @@ final class PreviewCarouselViewController: UIViewController {
 
         let targetFrame = centeredFrameInWindow()
 
-        // Spring: SwiftUI baseline (response 0.45, dampingRatio 0.88).
-        // Translated to UISpringTimingParameters physics initializer
-        // because tvOS lacks the dampingRatio:frequencyResponse:
-        // convenience initializer (iOS 17+).
-        //   mass = 1, ω = 2π/0.45 ≈ 13.96
-        //   stiffness = ω² ≈ 195
-        //   damping = 2 × 0.88 × √195 ≈ 24.58
-        let timing = UISpringTimingParameters(
-            mass: 1.0,
-            stiffness: 195.0,
-            damping: 24.58,
-            initialVelocity: .zero
-        )
-        let morpher = UIViewPropertyAnimator(duration: 0.45, timingParameters: timing)
+        let morpher = Self.makeShelfTransitionAnimator()
         morpher.addAnimations { [weak self] in
             guard let self else { return }
             self.morphSnapshot.frame = targetFrame
@@ -667,10 +665,8 @@ final class PreviewCarouselViewController: UIViewController {
     /// center one (at `selectedIndex`) gets its chrome cascade and
     /// the peeks stay bare.
     ///
-    /// `animated: true` runs the page-cascade timing (140ms delay +
-    /// 260ms easeOut for vignette, 210ms delay + 480ms easeOut for
-    /// chrome). `animated: false` snaps the cell to invisible
-    /// chrome — used on paging start to clear the outgoing center.
+    /// `animated: true` fades the centre's chrome in (0.5s ease-in-out);
+    /// `animated: false` snaps it.
     private func updateCurrentCellChrome(animated: Bool) {
         for cell in collectionView.visibleCells {
             guard let card = cell as? PreviewCardView else { continue }
@@ -708,9 +704,10 @@ final class PreviewCarouselViewController: UIViewController {
             for entry in entrySnapshots.sorted(by: { $0.itemIndex < $1.itemIndex }) {
                 let window = EntryMorphWindowView(
                     content: entry.snapshotView,
-                    sourceSize: entry.sourceFrame.size
+                    sourceSize: entry.sourceFrame.size,
+                    backdrop: items.indices.contains(entry.itemIndex) ? flightBackdrop(for: entry.itemIndex) : nil
                 )
-                window.layer.cornerRadius = 16
+                window.layer.cornerRadius = entry.cornerRadius
                 window.layer.zPosition = entry.itemIndex == selectedIndex
                     ? 100
                     : CGFloat(50 - abs(entry.itemIndex - selectedIndex))
@@ -723,6 +720,50 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
+    /// The card's artwork for a flying window, placed as the backdrop plane
+    /// places it so the swap to the live carousel shows nothing.
+    private func flightBackdrop(for index: Int) -> EntryMorphWindowView.Backdrop {
+        let imageView = UIImageView(image: backdropPlane.image(for: index))
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.backgroundColor = .black
+        if imageView.image == nil, let url = items[index].artwork.backdrop ?? items[index].artwork.poster {
+            Task { [weak imageView] in
+                imageView?.image = await ImageCacheManager.shared.image(for: url, quality: .full)
+            }
+        }
+        let card = carouselFrameInView(for: index)
+        return EntryMorphWindowView.Backdrop(
+            imageView: imageView,
+            cardSize: card.size,
+            artInCard: CGRect(
+                x: (card.width - view.bounds.width) / 2 + layout.parallaxOffset(for: index),
+                y: -card.minY,
+                width: view.bounds.width,
+                height: view.bounds.height))
+    }
+
+    private func flightDim(for index: Int) -> CGFloat {
+        PreviewCarouselGeometry.neighbourDimAlpha * abs(layout.normalizedPosition(for: index))
+    }
+
+    /// Windows for the two peeks that have no tile to fly from or to: they
+    /// hold the card's frame and only fade, on the same spring.
+    private func tilelessPeekWindows(flying: Set<Int>) -> [EntryMorphWindowView] {
+        [selectedIndex - 1, selectedIndex + 1]
+            .filter { items.indices.contains($0) && !flying.contains($0) }
+            .map { index in
+                let card = carouselFrameInView(for: index)
+                let window = EntryMorphWindowView(
+                    content: UIView(), sourceSize: card.size, backdrop: flightBackdrop(for: index))
+                window.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
+                window.setWindow(card)
+                window.dimAlpha = flightDim(for: index)
+                entrySnapshotContainer.addSubview(window)
+                return window
+            }
+    }
+
     private func runRowEntryMorph() {
         prepareEntrySnapshotsIfNeeded()
 
@@ -730,19 +771,18 @@ final class PreviewCarouselViewController: UIViewController {
         // the source snapshots before it fades in.
         collectionView.layoutIfNeeded()
         collectionView.contentOffset = layout.contentOffsetCentered(index: selectedIndex)
-        backdropPlane.sync(to: layout, offset: collectionView.contentOffset)
+        syncCards()
         backdrop.alpha = 0
         backdropPlane.alpha = 0
         collectionView.alpha = 0
         entrySnapshotContainer.alpha = 1
 
-        let timing = UISpringTimingParameters(
-            mass: 1.0,
-            stiffness: 195.0,
-            damping: 24.58,
-            initialVelocity: .zero
-        )
-        let morpher = UIViewPropertyAnimator(duration: 0.45, timingParameters: timing)
+        let peeks = tilelessPeekWindows(flying: Set(entryMorphWindows.map(\.itemIndex)))
+        peeks.forEach { $0.alpha = 0 }
+
+        // One spring moves and fades everything; the live carousel is swapped
+        // in under the settled windows at the end.
+        let morpher = Self.makeShelfTransitionAnimator()
         morpher.addAnimations { [weak self] in
             guard let self else { return }
             for entry in self.entryMorphWindows {
@@ -752,30 +792,44 @@ final class PreviewCarouselViewController: UIViewController {
                 }
                 entry.window.setWindow(self.carouselFrameInView(for: entry.itemIndex))
                 entry.window.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
+                entry.window.tileAlpha = 0
+                entry.window.dimAlpha = self.flightDim(for: entry.itemIndex)
             }
+            peeks.forEach { $0.alpha = 1 }
+            self.backdrop.alpha = 1
         }
         morpher.addCompletion { [weak self] _ in
             guard let self else { return }
+            self.backdropPlane.alpha = 1
+            self.collectionView.alpha = 1
             for entry in self.entryMorphWindows {
                 entry.window.removeFromSuperview()
             }
+            peeks.forEach { $0.removeFromSuperview() }
             self.entryMorphWindows.removeAll()
             self.entrySnapshotContainer.isHidden = true
             self.state.completeEntryMorph()
             self.updateCurrentCellChrome(animated: true)
         }
         morpher.startAnimation()
+    }
 
-        UIView.animate(
-            withDuration: 0.45,
-            delay: 0,
-            options: [.curveEaseInOut, .allowUserInteraction]
-        ) { [weak self] in
-            guard let self else { return }
-            self.entrySnapshotContainer.alpha = 0
-            self.backdrop.alpha = 1
-            self.backdropPlane.alpha = 1
-            self.collectionView.alpha = 1
+    /// Apple's shelf-tile transition spring (damping ratio 1.22, no overshoot),
+    /// shared by entry and exit. UIKit ignores the duration for a physical
+    /// spring and runs it for its settling time, about 0.75s.
+    private static func makeShelfTransitionAnimator() -> UIViewPropertyAnimator {
+        UIViewPropertyAnimator(
+            duration: 0,
+            timingParameters: UISpringTimingParameters(
+                mass: 1, stiffness: 150, damping: 30, initialVelocity: .zero))
+    }
+
+    /// Place the artwork panels and set each card's hairline for the current offset.
+    private func syncCards() {
+        backdropPlane.sync(to: layout, offset: collectionView.contentOffset)
+        for case let card as PreviewCardView in collectionView.visibleCells {
+            guard let index = collectionView.indexPath(for: card)?.item else { continue }
+            card.setHairline(position: layout.normalizedPosition(for: index))
         }
     }
 
@@ -804,6 +858,16 @@ final class PreviewCarouselViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         previewCarouselLog.info("[Lifecycle] viewWillDisappear isExpanded=\(self.isExpanded) presentingVC=\(self.presentingViewController != nil)")
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        // Torn down from outside (deep link, profile switch): no dismiss ran.
+        // Covered by a player, the carousel is still presented and stays as is.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.presentingViewController == nil else { return }
+            self.teardown()
+        }
     }
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -1354,17 +1418,6 @@ final class PreviewCarouselViewController: UIViewController {
         // Release the expand offset-pin so paging can move the carousel.
         collectionView.pinnedOffsetX = nil
 
-        // Snap the outgoing center cell's chrome to invisible — no
-        // fade-out. Matches SwiftUI behavior (vignette + metadata
-        // snap to alpha 0 the moment paging begins).
-        if let oldCenterCell = collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0))
-            as? PreviewCardView {
-            oldCenterCell.setIsCurrent(false, animated: false)
-        }
-        // Snap the below-fold peek out too; it re-cascades for the new centered
-        // item on paging completion (updateCurrentCellChrome).
-        expandedDetail.setCurrent(false, animated: false)
-
         // Pre-warm the image for the new far-edge cell so the display
         // link's per-frame layout pass doesn't have to wait on an
         // async fetch when the cell scrolls into view. Without this,
@@ -1414,11 +1467,24 @@ final class PreviewCarouselViewController: UIViewController {
         // cell and queries layoutAttributesForElements with the new
         // viewport.
         collectionView.setContentOffset(CGPoint(x: x, y: 0), animated: false)
-        backdropPlane.sync(to: layout, offset: collectionView.contentOffset)
+        syncCards()
+
+        // The outgoing card's chrome and the below-fold peek fade against its
+        // travel, gone well before the card leaves.
+        let outgoingCell = collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0)) as? PreviewCardView
+        let fade = max(0, 1 - abs(layout.normalizedPosition(for: selectedIndex)) / PreviewCarouselGeometry.contentFadeDistance)
+        outgoingCell?.setPagingFade(fade)
+        expandedDetail.alpha = fade
 
         if t >= 1.0 {
             link.invalidate()
             displayLink = nil
+            // Hand the fade back: both are at 0 by now, and the new centre
+            // fades in from updateCurrentCellChrome.
+            outgoingCell?.setIsCurrent(false, animated: false)
+            outgoingCell?.setPagingFade(1)
+            expandedDetail.setCurrent(false, animated: false)
+            expandedDetail.alpha = 1
             selectedIndex = anim.targetIndex
             dismissSourceTarget = makeSourceTarget(for: selectedIndex)
             pagingAnimation = nil
@@ -1475,6 +1541,8 @@ final class PreviewCarouselViewController: UIViewController {
             returnToHeroFromBelowFold()
             return
         }
+        // The entry flight is not interruptible.
+        if state.phase == .entryMorph { return }
         let action = state.exitAction(standaloneDetail: standaloneDetail)
         previewCarouselLog.info("[Menu] action=\(String(describing: action), privacy: .public)")
         switch action {
@@ -1498,9 +1566,9 @@ final class PreviewCarouselViewController: UIViewController {
     /// transitions through `.expandingHero` → `.expandedHero`. The
     /// custom layout reshapes the centered cell's frame to the
     /// collection view's full bounds; the cell's chromeView mutates
-    /// its constraint constants (inset 118 → 140); the cell's
-    /// `contentView.layer.cornerRadius` snaps 28 → 0. All happen
-    /// inside one `UIView.animate(duration: 0.35, .curveEaseInOut)`.
+    /// its constraint constants; the panel's corner radius lerps to 0.
+    /// All happen on the morph controller's one ease-in-out animator
+    /// (`PreviewCarouselGeometry.expandAnimationDuration`).
     ///
     /// Critical: the cell view and the chrome view are the SAME
     /// instances throughout — no second view tree, no reparenting,
@@ -1508,10 +1576,10 @@ final class PreviewCarouselViewController: UIViewController {
     /// existing views. This is what gives true visual continuity
     /// matching SwiftUI's persistent-view-tree model.
     ///
-    /// Iter B (this commit): instant (duration: 0). Iter C will add
-    /// the 0.35s ease-in-out curve + 4-step cascade.
     private func expandCurrentCard() {
         guard !isExpanded else { return }
+        // A page in flight still owns selectedIndex and the outgoing card's chrome.
+        guard pagingAnimation == nil else { return }
         guard items.indices.contains(selectedIndex) else { return }
         let item = items[selectedIndex]
 
@@ -1522,8 +1590,8 @@ final class PreviewCarouselViewController: UIViewController {
 
         // Single-animator morph (CarouselMorphController): the cell window
         // (layout swap to PreviewExpandedLayout), the backdrop panel
-        // container grow to fullscreen, the chrome insets 118->140, and the
-        // corner-radius lerp 28->0 ALL run on one UIViewPropertyAnimator
+        // container grow to fullscreen, the chrome insets, and the
+        // corner-radius lerp to 0 ALL run on one UIViewPropertyAnimator
         // curve. Nothing can drift. See
         // docs/superpowers/specs/2026-05-31-two-layout-carousel-morph-design.md.
         let cell = collectionView.cellForItem(at: IndexPath(item: selectedIndex, section: 0)) as? PreviewCardView
@@ -1633,8 +1701,9 @@ final class PreviewCarouselViewController: UIViewController {
     private func blurAnimatorIfNeeded() -> UIViewPropertyAnimator {
         if let a = blurAnimator { return a }
         let a = UIViewPropertyAnimator(duration: 1, curve: .linear) { [weak self] in
-            // ATV+ detail backdrop is a LIGHT frosted grey, not a dark blur.
-            self?.blurOverlay.effect = UIBlurEffect(style: .regular)
+            // Pinned dark like Apple's detail backdrop: `.regular` follows
+            // the system appearance and turns into a white frost under Light.
+            self?.blurOverlay.effect = UIBlurEffect(style: .dark)
         }
         a.pausesOnCompletion = true
         a.startAnimation()
@@ -1645,7 +1714,7 @@ final class PreviewCarouselViewController: UIViewController {
 
     /// Reverse of `expandCurrentCard`. Returns the centered cell to
     /// its carousel slot, restores chrome insets, restores corner
-    /// radius — all on the same 0.35s ease-in-out curve.
+    /// radius, all on the same ease-in-out curve.
     private func collapseExpandedCard() {
         guard isExpanded else { return }
         previewCarouselLog.info("[Collapse] BEGIN idx=\(self.selectedIndex)")
@@ -1661,7 +1730,7 @@ final class PreviewCarouselViewController: UIViewController {
         morphController.collapse(centeredIndex: selectedIndex, cell: cell) { [weak self] in
             guard let self else { return }
             // Restore carousel-mode backdrop panels after collapse.
-            self.backdropPlane.sync(to: self.layout, offset: self.collectionView.contentOffset)
+            self.syncCards()
             // Focus update AFTER the morph so a focus-driven animation never
             // runs concurrently with the morph curve.
             self.setNeedsFocusUpdate()
@@ -1679,15 +1748,23 @@ final class PreviewCarouselViewController: UIViewController {
     /// and the black backdrop — on ONE animator, so everything leaves in
     /// lockstep.
     private func performDismissMorph() {
+        guard state.phase != .exiting else { return }
+        // The exit flight starts from settled geometry: not mid-page, not mid-collapse.
+        guard pagingAnimation == nil, !morphController.isAnimating else { return }
+        state.beginExit()
         onPrepareDismiss(dismissSourceTarget)
+        // Fly only when the centred card has a tile on screen to land on.
         if !entrySnapshots.isEmpty {
-            runRowExitMorph()
-            return
+            let tiles = freshEntrySnapshots?(dismissSourceTarget) ?? []
+            if tiles.contains(where: { $0.itemIndex == selectedIndex }) {
+                runRowExitMorph(to: tiles)
+                return
+            }
         }
-        let animator = UIViewPropertyAnimator(
-            duration: PreviewCarouselGeometry.expandAnimationDuration,
-            curve: .easeInOut
-        )
+        teardown()
+        // Rivulet's own fade (Apple always has a tile to return to), so it
+        // keeps its timing instead of following the expand morph.
+        let animator = UIViewPropertyAnimator(duration: 0.35, curve: .easeInOut)
         animator.addAnimations { [weak self] in
             guard let self else { return }
             self.backdropPlane.alpha = 0
@@ -1704,74 +1781,51 @@ final class PreviewCarouselViewController: UIViewController {
         animator.startAnimation()
     }
 
-    /// Reverse of `runRowEntryMorph()`: re-snapshot the live carousel cards
-    /// at their current carousel frames, then animate those snapshots back
-    /// to their source row frames while the real backdrop/collection/detail
-    /// layers fade out underneath — the exact inverse of the entry morph.
-    private func runRowExitMorph() {
+    /// Reverse of `runRowEntryMorph()`: each card flies to its tile's current
+    /// frame as a window of its artwork, the tile fading in above it. The
+    /// chrome is gone from the first frame; everything rides one spring.
+    private func runRowExitMorph(to tiles: [PreviewEntrySnapshot]) {
         entrySnapshotContainer.isHidden = false
         entrySnapshotContainer.alpha = 1
 
-        // `PreviewCardView` is intentionally transparent — its artwork is
-        // composited from the VC-owned `backdropPlane`, not drawn in the
-        // cell itself (see PreviewCardView.swift). Snapshotting
-        // `cellForItem(at:)` alone would capture chrome over nothing,
-        // reading as empty/black. Render the full composited stack once
-        // (backdrop + backdropPlane artwork + collection chrome) and crop
-        // a piece per card instead.
-        let compositeRenderer = UIGraphicsImageRenderer(bounds: view.bounds)
-        let composite = compositeRenderer.image { _ in
-            view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
-        }
-
-        // Same clipping window as the entry morph, so shrinking back into a
-        // portrait tile crops the composite instead of squashing it.
-        var liveWindows: [(window: EntryMorphWindowView, sourceFrame: CGRect)] = []
-        for entry in entrySnapshots {
-            guard items.indices.contains(entry.itemIndex) else { continue }
-            let cardFrame = carouselFrameInView(for: entry.itemIndex)
-            guard cardFrame.width > 1, cardFrame.height > 1 else { continue }
-            guard let cropped = composite.cgImage?.cropping(to: CGRect(
-                x: cardFrame.minX * composite.scale,
-                y: cardFrame.minY * composite.scale,
-                width: cardFrame.width * composite.scale,
-                height: cardFrame.height * composite.scale
-            )) else { continue }
-            let snapshot = UIImageView(image: UIImage(cgImage: cropped, scale: composite.scale, orientation: composite.imageOrientation))
-            // Safe: the window keeps this box at the composite's aspect ratio.
-            snapshot.contentMode = .scaleToFill
-            let window = EntryMorphWindowView(content: snapshot, sourceSize: cardFrame.size)
+        var windows: [(window: EntryMorphWindowView, tile: PreviewEntrySnapshot)] = []
+        for tile in tiles where items.indices.contains(tile.itemIndex) {
+            let window = EntryMorphWindowView(
+                content: tile.snapshotView,
+                sourceSize: tile.sourceFrame.size,
+                backdrop: flightBackdrop(for: tile.itemIndex))
             window.layer.cornerRadius = PreviewCarouselGeometry.cornerRadius
-            window.layer.zPosition = entry.itemIndex == selectedIndex
+            window.layer.zPosition = tile.itemIndex == selectedIndex
                 ? 100
-                : CGFloat(50 - abs(entry.itemIndex - selectedIndex))
-            window.setWindow(cardFrame)
+                : CGFloat(50 - abs(tile.itemIndex - selectedIndex))
+            window.setWindow(carouselFrameInView(for: tile.itemIndex))
+            window.tileAlpha = 0
+            window.dimAlpha = flightDim(for: tile.itemIndex)
             entrySnapshotContainer.addSubview(window)
-            liveWindows.append((window, entry.sourceFrame))
+            windows.append((window, tile))
         }
+        let peeks = tilelessPeekWindows(flying: Set(windows.map(\.tile.itemIndex)))
 
         backdropPlane.alpha = 0
         collectionView.alpha = 0
         expandedDetail.alpha = 0
 
-        let timing = UISpringTimingParameters(
-            mass: 1.0,
-            stiffness: 195.0,
-            damping: 24.58,
-            initialVelocity: .zero
-        )
-        let morpher = UIViewPropertyAnimator(duration: 0.45, timingParameters: timing)
+        let morpher = Self.makeShelfTransitionAnimator()
         morpher.addAnimations { [weak self] in
             guard let self else { return }
-            for live in liveWindows {
-                live.window.setWindow(self.view.convert(live.sourceFrame, from: nil))
-                live.window.layer.cornerRadius = 16
-                live.window.alpha = 0
+            for (window, tile) in windows {
+                window.setWindow(self.view.convert(tile.sourceFrame, from: nil))
+                window.layer.cornerRadius = tile.cornerRadius
+                window.tileAlpha = 1
+                window.dimAlpha = 0
             }
+            peeks.forEach { $0.alpha = 0 }
             self.backdrop.alpha = 0
         }
         morpher.addCompletion { [weak self] _ in
             guard let self else { return }
+            // The real tiles take over from the snapshots resting on them.
+            self.teardown()
             self.dismiss(animated: false) {
                 self.onDismiss(self.dismissSourceTarget)
             }
@@ -1840,6 +1894,7 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
         // updateCurrentCellChrome.
         cell.setIsCurrent(indexPath.item == selectedIndex && hasRunEntryMorph,
                           animated: false)
+        cell.setHairline(position: layout.normalizedPosition(for: indexPath.item))
         return cell
     }
 

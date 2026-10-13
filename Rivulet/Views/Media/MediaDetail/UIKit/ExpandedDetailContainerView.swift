@@ -611,8 +611,8 @@ final class ExpandedDetailContainerView: UIView {
 
     /// Cascade the episode peek in/out to match the centered card. The VC calls
     /// this alongside the cell chrome cascade: `true` on page-settle (cascade
-    /// in), `false` on page-start (snap out). Mirrors the chrome's 0.21s/0.48s
-    /// timing so the episodes "load in with the metadata".
+    /// in), `false` once it has paged away (snap out). Mirrors the chrome's
+    /// 0.5s fade so the episodes "load in with the metadata".
     func setCurrent(_ current: Bool, animated: Bool) {
         cascadeToken &+= 1
         let token = cascadeToken
@@ -627,7 +627,7 @@ final class ExpandedDetailContainerView: UIView {
             return
         }
         belowFoldCollection.alpha = 0
-        UIView.animate(withDuration: 0.48, delay: 0.21, options: [.curveEaseOut, .allowUserInteraction]) { [weak self] in
+        UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) { [weak self] in
             guard let self, self.cascadeToken == token else { return }
             self.belowFoldCollection.alpha = 1
         }

@@ -502,3 +502,9 @@ private final class ContinueWatchingTitleLogoView: UIView {
 // Info bar moved to `Rivulet/Views/Media/UIKit/Cells/MediaProgressInfoBar.swift`
 // for reuse by PosterCell (in-progress items in Recently Added /
 // Personalized Recommendations rows render the same composition).
+
+extension ContinueWatchingCell: PreviewSourceTile {
+    var previewArtworkView: UIView { card.contentView }
+    var previewCornerRadius: CGFloat { cornerRadius }
+    var previewArtworkLoaded: Bool { artworkImageView.image != nil }
+}
