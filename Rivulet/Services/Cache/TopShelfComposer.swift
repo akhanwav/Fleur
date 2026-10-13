@@ -19,6 +19,20 @@ enum TopShelfComposer {
     /// composite was produced. Prunes composite files to the current set.
     @MainActor
     static func composite(items: [TopShelfItem], serverURL: String, token: String) async -> [TopShelfItem] {
+        // One run at a time, in call order: a prune never sees another run's files.
+        let previous = inFlight
+        let task = Task { @MainActor in
+            _ = await previous?.value
+            return await run(items: items, serverURL: serverURL, token: token)
+        }
+        inFlight = task
+        return await task.value
+    }
+
+    @MainActor private static var inFlight: Task<[TopShelfItem], Never>?
+
+    @MainActor
+    private static func run(items: [TopShelfItem], serverURL: String, token: String) async -> [TopShelfItem] {
         var result: [TopShelfItem] = []
         var keptFiles: Set<String> = []
 
@@ -32,22 +46,28 @@ enum TopShelfComposer {
                 logoURLString = TopShelfLogoResolver.logoURLString(from: full, serverURL: serverURL, token: token)
             }
 
-            // 2. Compose only when we have both a backdrop and a logo.
+            // 2. Compose only when we have both a backdrop and a logo, and only
+            //    when this item's file is not already there. Off the main thread:
+            //    the compositor analyses the backdrop.
             let backdropURLString = item.wideImageURL.isEmpty ? item.imageURL : item.wideImageURL
-            if !logoURLString.isEmpty,
-               let backdropURL = URL(string: backdropURLString),
-               let logoURL = URL(string: logoURLString),
-               let backdrop = await ImageCacheManager.shared.image(for: backdropURL, quality: .full),
-               let logo = await ImageCacheManager.shared.image(for: logoURL, quality: .full) {
-
-                let composed = TopShelfImageCompositor.compose(backdrop: backdrop, logo: logo)
-                if let data = composed.jpegData(compressionQuality: 0.9) {
-                    let fileName = "\(item.ratingKey).jpg"
-                    if TopShelfCache.shared.writeComposite(data, fileName: fileName) {
-                        compositeFileName = fileName
-                        keptFiles.insert(fileName)
-                    }
+            if !logoURLString.isEmpty {
+                let fileName = TopShelfImageCompositor.fileName(
+                    ratingKey: item.ratingKey, backdropURL: backdropURLString, logoURL: logoURLString)
+                if let url = TopShelfCache.shared.compositeFileURL(fileName: fileName),
+                   FileManager.default.fileExists(atPath: url.path) {
+                    compositeFileName = fileName
+                } else if let backdropURL = URL(string: backdropURLString),
+                          let logoURL = URL(string: logoURLString),
+                          let backdrop = await ImageCacheManager.shared.image(for: backdropURL, quality: .full),
+                          let logo = await ImageCacheManager.shared.image(for: logoURL, quality: .full),
+                          let data = await Task.detached(priority: .utility, operation: {
+                              TopShelfImageCompositor.compose(backdrop: backdrop, logo: logo)
+                                  .jpegData(compressionQuality: 0.9)
+                          }).value,
+                          TopShelfCache.shared.writeComposite(data, fileName: fileName) {
+                    compositeFileName = fileName
                 }
+                if let compositeFileName { keptFiles.insert(compositeFileName) }
             }
 
             result.append(TopShelfItem(

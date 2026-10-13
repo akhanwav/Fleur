@@ -143,6 +143,7 @@ struct TVSidebarView: View {
             // Clear watchlist state on logout.
             if old && !new {
                 PlexWatchlistService.shared.reset()
+                deepLinkHandler.dropHeldLink()
             }
         }
         // Reset tab selection when live TV source mode changes
@@ -185,6 +186,7 @@ struct TVSidebarView: View {
             if wantsPicker || authManager.isContentWithheld {
                 // Block content immediately; profile data must load before the picker shows
                 isAwaitingProfileSelection = true
+                deepLinkHandler.isShellReady = false
                 await profileManager.fetchHomeUsers()
                 hasCheckedProfilePicker = true
 
@@ -223,6 +225,8 @@ struct TVSidebarView: View {
                 }
             }
 
+            // Past the profile gate: a deep link held since launch may open now.
+            deepLinkHandler.isShellReady = true
             await loadLaunchContent()
         }
         .task {
@@ -231,8 +235,8 @@ struct TVSidebarView: View {
         }
         .onChange(of: deepLinkHandler.pendingPlayback) { _, metadata in
             guard let metadata else { return }
-            presentPlayerForDeepLink(metadata)
             deepLinkHandler.pendingPlayback = nil
+            playForDeepLink(metadata)
         }
         // Handle detail deep links from Siri search results
         .onChange(of: deepLinkHandler.pendingDetail) { _, metadata in
@@ -272,6 +276,7 @@ struct TVSidebarView: View {
                 // Profile selected, unblock content
                 isAwaitingProfileSelection = false
                 profileManager.isPresentingLaunchPicker = false
+                deepLinkHandler.isShellReady = true
 
                 // Load content if not already loaded (profile switch handles its own reload)
                 if dataStore.hubs.isEmpty {
@@ -286,6 +291,7 @@ struct TVSidebarView: View {
         .onChange(of: profileManager.needsProfileSelection) { _, needed in
             if needed {
                 isAwaitingProfileSelection = true
+                deepLinkHandler.isShellReady = false
                 profileManager.isPresentingLaunchPicker = true
                 // The picker cannot present over a player, and nothing may keep playing.
                 MusicQueue.shared.stop()
@@ -652,12 +658,48 @@ struct TVSidebarView: View {
     /// seasons get the title-first detail page, everything else the standalone
     /// expanded detail. Both are the UIKit surfaces normal in-app navigation uses.
     private func presentDetailForDeepLink(_ metadata: PlexMetadata) {
-        guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken,
-              let top = Self.topPresentedViewController() else { return }
-        let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
-        let item = PlexMediaMapper.item(metadata, providerID: providerID, serverURL: serverURL, authToken: token)
+        guard let item = deepLinkItem(metadata) else { return }
+        presentReplacingStack { top in
+            presentDetail(item, from: top)
+        }
+    }
 
+    private func deepLinkItem(_ metadata: PlexMetadata) -> MediaItem? {
+        guard let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return nil }
+        let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
+        return PlexMediaMapper.item(metadata, providerID: providerID, serverURL: serverURL, authToken: token)
+    }
+
+    /// A deep link replaces whatever is presented: stacking it would leave a
+    /// player running underneath.
+    private func presentReplacingStack(_ present: @escaping (UIViewController) -> Void) {
+        // A profile prompt came up while the link was resolving: it owns the screen.
+        guard deepLinkHandler.isShellReady else { return }
+        guard let root = Self.rootViewController() else { return }
+        showProfileSwitcher = false
+        guard root.presentedViewController != nil else { return present(root) }
+        root.dismiss(animated: false) { present(root) }
+    }
+
+    /// Play for a `rivulet://play` link. A show or a season resolves to the
+    /// episode its own Play button means; with none to play, its detail opens.
+    private func playForDeepLink(_ metadata: PlexMetadata) {
+        guard let item = deepLinkItem(metadata), item.kind == .show || item.kind == .season,
+              let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
+            presentPlayerForDeepLink(metadata)
+            return
+        }
+        Task { @MainActor in
+            if let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider) {
+                playDeepLinkItem(episode)
+            } else {
+                presentDetailForDeepLink(metadata)
+            }
+        }
+    }
+
+    private func presentDetail(_ item: MediaItem, from top: UIViewController) {
         if item.kind == .episode || item.kind == .season {
             let page = MediaItemDetailPageViewController(
                 item: item,
@@ -719,8 +761,7 @@ struct TVSidebarView: View {
                     loadingThumbImage: thumbImage,
                     preferredMediaID: mediaID
                 )
-                if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                   let rootVC = scene.windows.first?.rootViewController {
+                presentReplacingStack { rootVC in
                     PlayerPresenter.present(viewModel: viewModel, from: rootVC)
                 }
             }

@@ -12,48 +12,10 @@ import SwiftUI
 import SwiftData
 import Sentry
 
-// MARK: - App Delegate
-
-class RivuletAppDelegate: NSObject, UIApplicationDelegate {
-
-    func application(_ app: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
-        Task {
-            await DeepLinkHandler.shared.handle(url: url)
-        }
-        return true
-    }
-
-    func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([any UIUserActivityRestoring]?) -> Void) -> Bool {
-        guard let ratingKey = userActivity.userInfo?["ratingKey"] as? String,
-              !ratingKey.isEmpty else { return false }
-
-        switch userActivity.activityType {
-        case "com.rivulet.viewMedia":
-            Task {
-                await DeepLinkHandler.shared.handle(
-                    url: URL(string: "rivulet://detail?ratingKey=\(ratingKey)")!
-                )
-            }
-            return true
-        case "com.rivulet.playMedia":
-            Task {
-                await DeepLinkHandler.shared.handle(
-                    url: URL(string: "rivulet://play?ratingKey=\(ratingKey)")!
-                )
-            }
-            return true
-        default:
-            return false
-        }
-    }
-}
-
 // MARK: - App
 
 @main
 struct RivuletApp: App {
-    @UIApplicationDelegateAdaptor(RivuletAppDelegate.self) var appDelegate
-
     init() {
         StartupTimer.arm()
         StartupTimer.mark("RivuletApp.init")
@@ -159,6 +121,17 @@ struct RivuletApp: App {
             ContentView()
                 .environment(MediaProviderRegistry.shared)
                 .environment(MetadataSourceRegistry.shared)
+                // A scene-based app gets URLs and activities here; UIKit never
+                // calls the app delegate's open-URL methods for it.
+                .onOpenURL { DeepLinkHandler.shared.handle(url: $0) }
+                .onContinueUserActivity("com.rivulet.viewMedia") { activity in
+                    guard let key = activity.userInfo?["ratingKey"] as? String, !key.isEmpty else { return }
+                    DeepLinkHandler.shared.handleDetail(ratingKey: key)
+                }
+                .onContinueUserActivity("com.rivulet.playMedia") { activity in
+                    guard let key = activity.userInfo?["ratingKey"] as? String, !key.isEmpty else { return }
+                    DeepLinkHandler.shared.handlePlay(ratingKey: key)
+                }
         }
         .modelContainer(sharedModelContainer)
     }

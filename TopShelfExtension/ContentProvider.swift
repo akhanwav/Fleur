@@ -53,17 +53,12 @@ class ContentProvider: TVTopShelfContentProvider {
                 }
             }
 
-            // Deep link to resume playback.
-            var components = URLComponents()
-            components.scheme = "rivulet"
-            components.host = "play"
-            components.queryItems = [
-                URLQueryItem(name: "ratingKey", value: item.ratingKey),
-                URLQueryItem(name: "server", value: item.serverIdentifier)
-            ]
-            guard let actionURL = components.url else { return nil }
-            cItem.playAction = TVTopShelfAction(url: actionURL)
-            cItem.displayAction = cItem.playAction
+            // Play resumes the item; Select / More Info opens its detail.
+            guard let playURL = RivuletLink(.play, ratingKey: item.ratingKey, server: item.serverIdentifier).url,
+                  let detailURL = RivuletLink(.detail, ratingKey: item.ratingKey, server: item.serverIdentifier).url
+            else { return nil }
+            cItem.playAction = TVTopShelfAction(url: playURL)
+            cItem.displayAction = TVTopShelfAction(url: detailURL)
 
             return cItem
         }

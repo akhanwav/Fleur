@@ -18,99 +18,92 @@ final class DeepLinkHandler: ObservableObject {
     @Published var pendingPlayback: PlexMetadata?
     @Published var pendingDetail: PlexMetadata?
 
-    private init() {}
+    /// The link waiting for the app to be ready. A newer link replaces it.
+    private(set) var heldLink: RivuletLink?
 
-    // MARK: - URL Handling
-
-    func handle(url: URL) async {
-        guard url.scheme == "rivulet" else { return }
-
-        switch url.host {
-        case "play":
-            await handlePlayURL(url)
-        case "detail":
-            await handleDetailURL(url)
-        default:
-            break
-        }
+    /// Set by the shell: true once the launch profile gate has passed, false
+    /// while a profile picker or PIN prompt withholds content.
+    var isShellReady = false {
+        didSet { if isShellReady { deliverHeldLink() } }
     }
 
-    // MARK: - Direct Intent Handlers
+    // Seams for tests.
+    var credentials: () -> (serverURL: String, token: String)? = {
+        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
+              let token = PlexAuthManager.shared.selectedServerToken else { return nil }
+        return (serverURL, token)
+    }
+    var fetch: (_ ratingKey: String, _ serverURL: String, _ token: String) async throws -> PlexMetadata = {
+        try await PlexNetworkManager.shared.getMetadata(serverURL: $1, authToken: $2, ratingKey: $0)
+    }
+    var reconnect: () async -> Void = { await PlexAuthManager.shared.verifyAndFixConnection() }
+    var isSignedIn: () -> Bool = { PlexAuthManager.shared.hasCredentials }
+
+    init() {}
+
+    // MARK: - Entry points
+
+    func handle(url: URL) {
+        guard let link = RivuletLink(url: url) else { return }
+        handle(link)
+    }
 
     func handlePlay(ratingKey: String) {
-        Task {
-            await fetchAndSetPlayback(ratingKey: ratingKey)
-        }
+        handle(RivuletLink(.play, ratingKey: ratingKey))
     }
 
     func handleDetail(ratingKey: String) {
-        Task {
-            await fetchAndSetDetail(ratingKey: ratingKey)
-        }
+        handle(RivuletLink(.detail, ratingKey: ratingKey))
     }
 
-    // MARK: - Play URL
+    @discardableResult
+    func handle(_ link: RivuletLink) -> Task<Void, Never>? {
+        // Signed out there is nothing to wait for: holding it would fire at the next sign-in.
+        guard isSignedIn() else { return nil }
+        heldLink = link
+        return deliverHeldLink()
+    }
 
-    private func handlePlayURL(_ url: URL) async {
-        guard let ratingKey = extractRatingKey(from: url) else {
-            print("DeepLinkHandler: Missing ratingKey in play URL")
+    /// Sign-out: a link held behind the profile prompt must not fire for the next account.
+    func dropHeldLink() { heldLink = nil }
+
+    // MARK: - Delivery
+
+    /// Resolves the held link once the shell is ready and a content token
+    /// exists. Until then it stays held; the shell calls this again.
+    @discardableResult
+    func deliverHeldLink() -> Task<Void, Never>? {
+        guard isShellReady, let link = heldLink, credentials() != nil else { return nil }
+        heldLink = nil
+        return Task { await resolve(link) }
+    }
+
+    private func resolve(_ link: RivuletLink) async {
+        let token = credentials()?.token
+        var metadata = await metadata(for: link)
+        if metadata == nil {
+            // A saved server address that stopped answering (cold launch): reconnect, retry once.
+            await reconnect()
+            metadata = await self.metadata(for: link)
+        }
+        // A profile prompt or switch happened while fetching: fetch again as the current profile.
+        guard isShellReady, credentials()?.token == token else {
+            if heldLink == nil { heldLink = link }
+            deliverHeldLink()
             return
         }
-        await fetchAndSetPlayback(ratingKey: ratingKey)
-    }
-
-    // MARK: - Detail URL
-
-    private func handleDetailURL(_ url: URL) async {
-        guard let ratingKey = extractRatingKey(from: url) else {
-            print("DeepLinkHandler: Missing ratingKey in detail URL")
+        guard let metadata else {
+            print("DeepLinkHandler: could not resolve ratingKey \(link.ratingKey)")
             return
         }
-        await fetchAndSetDetail(ratingKey: ratingKey)
-    }
-
-    // MARK: - Shared Helpers
-
-    private func extractRatingKey(from url: URL) -> String? {
-        URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?.first(where: { $0.name == "ratingKey" })?.value
-    }
-
-    private func fetchAndSetPlayback(ratingKey: String) async {
-        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-              let authToken = PlexAuthManager.shared.selectedServerToken else {
-            print("DeepLinkHandler: No Plex credentials available")
-            return
-        }
-
-        do {
-            let metadata = try await PlexNetworkManager.shared.getMetadata(
-                serverURL: serverURL,
-                authToken: authToken,
-                ratingKey: ratingKey
-            )
-            pendingPlayback = metadata
-        } catch {
-            print("DeepLinkHandler: Failed to fetch metadata for ratingKey \(ratingKey): \(error)")
+        switch link.action {
+        case .play: pendingPlayback = metadata
+        case .detail: pendingDetail = metadata
         }
     }
 
-    private func fetchAndSetDetail(ratingKey: String) async {
-        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-              let authToken = PlexAuthManager.shared.selectedServerToken else {
-            print("DeepLinkHandler: No Plex credentials available")
-            return
-        }
-
-        do {
-            let metadata = try await PlexNetworkManager.shared.getMetadata(
-                serverURL: serverURL,
-                authToken: authToken,
-                ratingKey: ratingKey
-            )
-            pendingDetail = metadata
-        } catch {
-            print("DeepLinkHandler: Failed to fetch metadata for ratingKey \(ratingKey): \(error)")
-        }
+    private func metadata(for link: RivuletLink) async -> PlexMetadata? {
+        guard let (serverURL, token) = credentials() else { return nil }
+        return try? await fetch(link.ratingKey, serverURL, token)
     }
 }

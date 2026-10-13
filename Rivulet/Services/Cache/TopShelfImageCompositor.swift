@@ -6,19 +6,31 @@
 //  Rivulet
 //
 //  Draws Top Shelf carousel image: backdrop aspect-filled to 16:9 canvas,
-//  subtle bottom gradient for caption legibility, (optionally) shows a
-//  clearLogo top-center — Apple TV+ carousel look. Pure UIImage in/out.
+//  subtle bottom gradient for caption legibility, and (optionally) a clearLogo
+//  in the top band, where the backdrop leaves it the most room. Pure UIImage in/out.
 //
 
 import UIKit
 
-enum TopShelfImageCompositor {
+nonisolated enum TopShelfImageCompositor {
 
+    /// Bump when the drawing changes, so files composed the old way are rebuilt.
+    static let version = 2
+
+    /// A composite's file name, from what it is built from: an unchanged item keeps its file.
+    static func fileName(ratingKey: String, backdropURL: String, logoURL: String) -> String {
+        "\(ratingKey)-\("\(version)|\(backdropURL)|\(logoURL)".sha256Hash().prefix(16)).jpg"
+    }
+
+    /// Analyses the backdrop to place the logo, so call off the main thread.
     static func compose(
         backdrop: UIImage,
         logo: UIImage?,
         canvasSize: CGSize = CGSize(width: 1920, height: 1080)
     ) -> UIImage {
+        let place = logo.map {
+            placement(logoSize: $0.size, signals: backdrop.cgImage.map(Artwork.analyse) ?? .none, canvas: canvasSize)
+        }
         let renderer = UIGraphicsImageRenderer(size: canvasSize)
         return renderer.image { ctx in
             let canvasRect = CGRect(origin: .zero, size: canvasSize)
@@ -39,10 +51,14 @@ enum TopShelfImageCompositor {
                     options: [])
             }
 
-            // Logo top-center, target-area sized with clamps.
-            if let logo {
-                let rect = logoRect(for: logo.size, canvas: canvasSize)
-                logo.draw(in: rect)
+            if let logo, let place {
+                // The card's strong title shadow, at this canvas's scale.
+                if place.strongShadow {
+                    ctx.cgContext.setShadow(offset: CGSize(width: 0, height: canvasSize.height / 270),
+                                            blur: canvasSize.height / 54,
+                                            color: UIColor.black.withAlphaComponent(0.6).cgColor)
+                }
+                logo.draw(in: place.rect)
             }
         }
     }
@@ -80,10 +96,24 @@ enum TopShelfImageCompositor {
         image.draw(in: drawRect)
         cgContext.restoreGState()
     }
+}
 
-    /// Computes the logo's draw rect: top-center, area-budgeted to the logo's own aspect ratio,
-    /// clamped to 55% canvas width / 28% canvas height, with ~6% top inset.
-    private static func logoRect(for logoSize: CGSize, canvas: CGSize) -> CGRect {
+// MARK: - Placement
+
+/// The Continue Watching card's artwork analysis and scoring.
+private typealias Artwork = ContinueWatchingCardCompositor
+
+nonisolated extension TopShelfImageCompositor {
+
+    /// The system's own title and buttons sit on the image from here down, as a share of its height.
+    static let systemOverlayTop: CGFloat = 0.55
+    /// What leaving top centre costs, per candidate: the logo moves only off a clearly worse spot.
+    static let moveCosts = [0, 0.25, 0.25, 0.35]
+
+    /// Where the logo may go: top centre (the default), top left, top right, middle left.
+    /// Area-budgeted to the logo's own aspect ratio, clamped to 55% canvas width /
+    /// 28% canvas height, ~6% top inset, inside the title-safe side margin.
+    static func logoCandidates(for logoSize: CGSize, canvas: CGSize) -> [CGRect] {
         let ratio = logoSize.height > 0 ? logoSize.width / logoSize.height : 3.0
         let targetArea = (canvas.width * 0.35) * (canvas.height * 0.14) // area budget
         var w = (targetArea * ratio).squareRoot()
@@ -92,8 +122,21 @@ enum TopShelfImageCompositor {
         let maxH = canvas.height * 0.28
         if w > maxW { w = maxW; h = w / ratio }
         if h > maxH { h = maxH; w = h * ratio }
-        let x = canvas.width / 2 - w / 2
-        let y = canvas.height * 0.06
-        return CGRect(x: x, y: y, width: w, height: h)
+        let top = canvas.height * 0.06, margin = canvas.width / 24
+        return [
+            CGRect(x: canvas.width / 2 - w / 2, y: top, width: w, height: h),
+            CGRect(x: margin, y: top, width: w, height: h),
+            CGRect(x: canvas.width - margin - w, y: top, width: w, height: h),
+            CGRect(x: margin, y: canvas.height * 0.5 - h, width: w, height: h)
+        ]
+    }
+
+    /// The logo's rect on the canvas for a backdrop's signals, and whether it needs the strong shadow.
+    static func placement(logoSize: CGSize, signals: ContinueWatchingCardCompositor.Signals,
+                          canvas: CGSize) -> (rect: CGRect, strongShadow: Bool) {
+        let candidates = logoCandidates(for: logoSize, canvas: canvas)
+        let choice = Artwork.choose(among: candidates, on: CGRect(origin: .zero, size: canvas),
+                                    signals: signals, surcharge: moveCosts)
+        return (candidates[choice.index], choice.strongShadow)
     }
 }
