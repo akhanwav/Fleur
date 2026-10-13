@@ -81,7 +81,17 @@ final class MusicQueue: ObservableObject {
     /// also toggled the paused song underneath it, and this queue's progress
     /// timer kept writing the song's position and a zero rate into the film's
     /// entry, so the system scrubber showed the wrong time.
-    private(set) var videoOwnsNowPlaying = false
+    var videoOwnsNowPlaying: Bool { filmOwnsNowPlaying || !liveTVSessions.isEmpty }
+    private var filmOwnsNowPlaying = false
+    /// Live TV screens up (full-screen player, multiview); the two overlap during a hand-off.
+    private var liveTVSessions: Set<ObjectIdentifier> = []
+
+    func liveTVSessionBegan(_ owner: ObjectIdentifier) {
+        liveTVSessions.insert(owner)
+        if playbackState == .playing { pause() }  // A channel does not play over a song.
+    }
+
+    func liveTVSessionEnded(_ owner: ObjectIdentifier) { liveTVSessions.remove(owner) }
 
     // MARK: - Private State
 
@@ -110,7 +120,7 @@ final class MusicQueue: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.videoOwnsNowPlaying = true
+                self?.filmOwnsNowPlaying = true
                 // A film does not play over a song.
                 if self?.playbackState == .playing { self?.pause() }
             }
@@ -122,7 +132,7 @@ final class MusicQueue: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.videoOwnsNowPlaying = false
+                self?.filmOwnsNowPlaying = false
             }
         }
     }
@@ -136,7 +146,8 @@ final class MusicQueue: ObservableObject {
 
     // MARK: - Queue Operations
 
-    /// Reset queue state and modes without stopping playback. For tests.
+    /// Reset queue state and modes without stopping playback (a profile switch
+    /// or sign-out calls `stop()` first).
     func clear() {
         currentTrack = nil
         queue = []

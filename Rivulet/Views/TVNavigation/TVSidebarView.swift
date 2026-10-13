@@ -5,7 +5,7 @@
 //  TVSidebarView.swift
 //  Rivulet
 //
-//  Main tvOS navigation using system TabView with sidebarAdaptable style
+//  Main tvOS navigation state, hosting the UIKit shell (RootShellViewController)
 //
 
 import SwiftUI
@@ -45,6 +45,10 @@ struct TVSidebarView: View {
     /// The last profile entered, and the sidebar close a switch away from it asks for.
     @State private var lastProfileId: Int?
     @State private var sidebarCollapseRequest = 0
+    /// The profile the switcher opened on, and the sidebar reopen that closing
+    /// it on the same profile asks for.
+    @State private var switcherProfileId: Int?
+    @State private var sidebarProfileRowRequest = 0
     @State private var hasCheckedProfilePicker = false
     @State private var isAwaitingProfileSelection = false
     @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
@@ -104,6 +108,7 @@ struct TVSidebarView: View {
             liveTVAbove: liveTVAboveLibraries,
             serverName: authManager.savedServerName,
             profileName: profileName,
+            profileAvatar: profileManager.selectedUser?.thumb.flatMap { URL(string: $0) },
             jellyfinServerName: jellyfinStore.account?.serverName,
             jellyfinLibraries: jellyfinStore.visibleLibraries)
     }
@@ -139,6 +144,8 @@ struct TVSidebarView: View {
             interactionBlocked: nestedNavState.isNested || nestedNavState.isSettingsSubPage,
             pillSuppressed: isMusicLibrarySelected || isLiveTVSelected || isSearchSelected,
             collapseRequest: sidebarCollapseRequest,
+            profilePanelOpen: showProfileSwitcher,
+            profileRowRequest: sidebarProfileRowRequest,
             sections: shellSections,
             content: { tab in contentViewController(for: tab) })
         .ignoresSafeArea()
@@ -161,6 +168,14 @@ struct TVSidebarView: View {
                 sidebarCollapseRequest += 1
             }
             lastProfileId = newId
+        }
+        // The panel closed on the profile it opened on: back to the open sidebar.
+        .onChange(of: showProfileSwitcher) { _, shown in
+            if shown {
+                switcherProfileId = profileManager.selectedUser?.id
+            } else if switcherProfileId == profileManager.selectedUser?.id {
+                sidebarProfileRowRequest += 1
+            }
         }
         // Reset tab selection when live TV source mode changes
         .onChange(of: combineLiveTVSources) { _, combined in
@@ -314,6 +329,9 @@ struct TVSidebarView: View {
                 profileManager.isPresentingLaunchPicker = true
                 // The picker cannot present over a player, and nothing may keep playing.
                 MusicQueue.shared.stop()
+                MusicQueue.shared.clear()
+                // The Home screen row is the locked profile's too.
+                TopShelfCache.shared.clear()
                 Self.rootViewController()?.dismiss(animated: false)
             }
             // Withheld content only clears when a profile is entered.

@@ -87,11 +87,15 @@ struct IOSRootView: View {
                 // The one foreground trigger: re-test a connection left for a while, then refetch stale content.
                 let longAway = backgroundedAt.map { Date.now.timeIntervalSince($0) > 5 * 60 } ?? false
                 Task {
-                    if longAway { await plex.verifyConnection() }
+                    if longAway {
+                        await plex.verifyConnection()
+                        // The list may have loaded just now and found the profile locked.
+                        if profiles.needsProfileSelection, profiles.hasLoadedProfiles { choosingProfile = true }
+                    }
                     await plex.refreshIfStale()
                 }
                 // A dismissed picker leaves content locked; ask again on return.
-                if profiles.needsProfileSelection { choosingProfile = true }
+                if profiles.needsProfileSelection, profiles.hasLoadedProfiles { choosingProfile = true }
                 backgroundedAt = nil
             default:
                 break

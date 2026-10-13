@@ -5,12 +5,8 @@
 //  ShellSidebarViewController.swift
 //  Rivulet
 //
-//  The custom shell sidebar: Rivulet's own recreation of the tvOS
-//  `.sidebarAdaptable` chrome, built so the shell owns expansion, collapse,
-//  and the pill (which the system version cannot hide; see the pill research
-//  notes). Currently reachable only through the `--sidebar-preview` launch
-//  argument for visual evaluation; the shell integration comes after the
-//  look is approved.
+//  The custom shell sidebar, embedded in RootShellViewController. Sizes and
+//  type come from the Apple TV app's own sidebar.
 //
 
 import UIKit
@@ -18,21 +14,11 @@ import UIKit
 // MARK: - Metrics
 
 private enum Metrics {
-    /// MEASURED from the live system sidebar (SidebarMeasure dump,
-    /// 2026-07-31): rows are 78pt pitch, zero spacing; content leading x 54
-    /// in window coords; every section break is a 70pt gap with the header
-    /// drawn inside it; list top inset 55, bottom 51. The focused capsule is
-    /// the 302pt-wide hosted content, ~54pt tall centered in the 78pt cell
-    /// (capsule height read from the screenshot against the cell frames).
-    ///
-    /// MEASURED from the presentation-layer trace of the system morph
-    /// (SidebarAnim bursts, 2026-07-31, simulator): the glass card animates
-    /// frame AND corner radius between panel (35,35 340x1010) r52 and pill
-    /// (50,50 ~160x60) r30 over ~450ms, settling ~97% by 240ms (high-damping
-    /// spring). Sim-captured; re-verify timing on device.
+    /// Values are the Apple TV app's own sidebar where one was read; the panel
+    /// frame, pill origin and morph timing are still the system sidebar's.
     static let panelWidth: CGFloat = 340
     static let panelInset: CGFloat = 35
-    /// The TV app's panel radius (VideosUI), not the system tab sidebar's 52.
+    /// The Apple TV app's panel radius, not the system tab sidebar's 52.
     static let panelCornerRadius: CGFloat = 40
     /// The TV app's section insets: rows sit 10pt inside the glass.
     static let contentLeading: CGFloat = 10
@@ -57,6 +43,8 @@ private enum Metrics {
     static let pillDiscSize: CGFloat = 46
     static var pillDiscInset: CGFloat { (pillHeight - pillDiscSize) / 2 }
     static let pillTrailing: CGFloat = 24
+    /// The TV app's sidebar avatar.
+    static let avatarSize: CGFloat = 50
     /// USER-VERIFIED on screen: the single spring crossfade reads nearly
     /// identical to the system morph; a literal three-phase re-timing from
     /// the 120fps frame analysis read distinctly WORSE and was reverted.
@@ -97,6 +85,33 @@ private func emphasizedFont(_ style: UIFont.TextStyle) -> UIFont {
     return base.fontDescriptor.withSymbolicTraits(.traitBold).map { UIFont(descriptor: $0, size: 0) } ?? base
 }
 
+/// A round profile picture drawn over a glyph, which shows until it loads.
+private final class SidebarAvatarView: UIImageView {
+    var url: URL? {
+        didSet {
+            guard url != oldValue else { return }
+            image = url.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
+            guard let url, image == nil else { return }
+            Task { [weak self] in
+                let loaded = await ImageCacheManager.shared.image(for: url)
+                if self?.url == url { self?.image = loaded }
+            }
+        }
+    }
+
+    init(diameter: CGFloat) {
+        super.init(frame: .zero)
+        contentMode = .scaleAspectFill
+        clipsToBounds = true
+        layer.cornerRadius = diameter / 2
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([widthAnchor.constraint(equalToConstant: diameter),
+                                     heightAnchor.constraint(equalToConstant: diameter)])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 // MARK: - Collection view
 
 /// Directs its opening focus at a specific row. `remembersLastFocusedIndexPath`
@@ -107,7 +122,7 @@ final class SidebarCollectionView: UICollectionView {
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         // The cell must exist right now, or the engine ignores this and falls
-        // back to its own pick (realized in aimInitialFocusAtSelectedTab).
+        // back to its own pick (realized in aimInitialFocus).
         if let indexPath = preferredFocusIndexPath, let cell = cellForItem(at: indexPath) {
             return [cell]
         }
@@ -122,7 +137,7 @@ final class SidebarCollectionView: UICollectionView {
         // resolved back through it to the selected row — so the expand
         // animator's completion, which requests focus ~0.3s after opening,
         // yanked the user back from whatever row they had already moved to.
-        // The next open re-aims via `aimInitialFocusAtSelectedTab`.
+        // The next open re-aims via `aimInitialFocus`.
         if let next = context.nextFocusedItem as? UIView, next.isDescendant(of: self) {
             preferredFocusIndexPath = nil
         }
@@ -136,6 +151,7 @@ final class ShellSidebarRowCell: UICollectionViewCell {
 
     private let backgroundPill = UIView()
     private let iconView = UIImageView()
+    private let avatarView = SidebarAvatarView(diameter: Metrics.avatarSize)
     private let titleLabel = UILabel()
     private var isSelectedTab = false
 
@@ -153,7 +169,11 @@ final class ShellSidebarRowCell: UICollectionViewCell {
             contentView.addSubview(view)
         }
 
+        contentView.addSubview(avatarView)
+
         NSLayoutConstraint.activate([
+            avatarView.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
+            avatarView.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
             backgroundPill.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             backgroundPill.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             backgroundPill.topAnchor.constraint(equalTo: contentView.topAnchor,
@@ -177,6 +197,7 @@ final class ShellSidebarRowCell: UICollectionViewCell {
     func configure(item: ShellSidebarItem, isSelectedTab: Bool) {
         self.isSelectedTab = isSelectedTab
         iconView.image = UIImage(systemName: item.icon)
+        avatarView.url = item.avatarURL
         titleLabel.text = item.title
         applyAppearance(focused: isFocused)
     }
@@ -252,6 +273,7 @@ final class ShellSidebarViewController: UIViewController {
         withConfiguration: UIImage.SymbolConfiguration(textStyle: .callout)))
     private let pillIcon = UIImageView()
     private let pillIconDisc = UIView()
+    private let pillAvatar = SidebarAvatarView(diameter: Metrics.pillDiscSize)
     private let pillLabel = UILabel()
     private let pillStack = UIStackView()
     private var collectionView: SidebarCollectionView!
@@ -265,12 +287,20 @@ final class ShellSidebarViewController: UIViewController {
     var onTabSelected: ((SidebarTab) -> Void)?
     var onCollapseRequested: (() -> Void)?
     private var pillHidden = false
+    /// While the profile panel is up the pill names the user, not the tab.
+    private var pillShowsProfile = false
 
     var isExpanded: Bool { state == .expanded }
     var focusTarget: UIView { collectionView }
 
-    func setExpanded(_ expanded: Bool, animated: Bool) {
-        if expanded { aimInitialFocusAtSelectedTab() }
+    func setPillShowsProfile(_ shows: Bool) {
+        pillShowsProfile = shows
+        configurePill()
+    }
+
+    /// `aimAt` opens on that row instead of the selected tab's.
+    func setExpanded(_ expanded: Bool, animated: Bool, aimAt tab: SidebarTab? = nil) {
+        if expanded { aimInitialFocus(at: tab ?? selectedTab) }
         setState(expanded ? .expanded : .collapsed)
         if !animated {
             transitionAnimator?.stopAnimation(false)
@@ -282,8 +312,8 @@ final class ShellSidebarViewController: UIViewController {
     /// row (Home opens on Home, Settings on Settings). The cell must be
     /// realized before the focus engine reads `preferredFocusEnvironments`,
     /// so unhide + lay out + scroll it into view first.
-    private func aimInitialFocusAtSelectedTab() {
-        guard let indexPath = indexPath(for: selectedTab) else {
+    private func aimInitialFocus(at tab: SidebarTab) {
+        guard let indexPath = indexPath(for: tab) else {
             collectionView.preferredFocusIndexPath = nil
             return
         }
@@ -307,7 +337,7 @@ final class ShellSidebarViewController: UIViewController {
     func setSelectedTabExternal(_ tab: SidebarTab) {
         guard tab != selectedTab else { return }
         selectedTab = tab
-        configurePill(item(for: tab))
+        configurePill()
         collectionView.reloadData()
     }
 
@@ -319,7 +349,7 @@ final class ShellSidebarViewController: UIViewController {
         sections = new
         guard isViewLoaded else { return }
         collectionView.reloadData()
-        configurePill(item(for: selectedTab))
+        configurePill()
     }
 
     /// Collapsed-state pill visibility, driven by the below-top focus signal.
@@ -339,7 +369,7 @@ final class ShellSidebarViewController: UIViewController {
         view.backgroundColor = .clear
         sections = Self.liveSections()
         buildViews()
-        configurePill(item(for: selectedTab))
+        configurePill()
         applyState(expanded: true, animated: false)
     }
 
@@ -426,6 +456,8 @@ final class ShellSidebarViewController: UIViewController {
         }
         animator.addCompletion { _ in
             self.transitionAnimator = nil
+            // The pill's title can change mid-morph (Menu to Home): fit it now.
+            self.view.setNeedsLayout()
             if self.state == .collapsed {
                 // A hidden list is invisible to the focus engine; alpha 0 is not.
                 self.collectionView.isHidden = true
@@ -468,7 +500,7 @@ final class ShellSidebarViewController: UIViewController {
         collectionView.dataSource = self
         collectionView.delegate = self
         // Off: initial focus is directed at the selected tab, not the last
-        // one the user happened to touch (see aimInitialFocusAtSelectedTab).
+        // one the user happened to touch (see aimInitialFocus).
         collectionView.remembersLastFocusedIndexPath = false
         collectionView.register(ShellSidebarRowCell.self,
                                 forCellWithReuseIdentifier: ShellSidebarRowCell.reuseIdentifier)
@@ -491,6 +523,7 @@ final class ShellSidebarViewController: UIViewController {
         pillIconDisc.backgroundColor = UIColor.white.withAlphaComponent(0.16)
         pillIconDisc.layer.cornerRadius = Metrics.pillDiscSize / 2
         pillIconDisc.addSubview(pillIcon)
+        pillIconDisc.addSubview(pillAvatar)
         pillLabel.font = emphasizedFont(.body)
         pillLabel.textColor = .white
         pillStack.addArrangedSubview(pillIconDisc)
@@ -506,6 +539,8 @@ final class ShellSidebarViewController: UIViewController {
             pillIconDisc.heightAnchor.constraint(equalToConstant: Metrics.pillDiscSize),
             pillIcon.centerXAnchor.constraint(equalTo: pillIconDisc.centerXAnchor),
             pillIcon.centerYAnchor.constraint(equalTo: pillIconDisc.centerYAnchor),
+            pillAvatar.centerXAnchor.constraint(equalTo: pillIconDisc.centerXAnchor),
+            pillAvatar.centerYAnchor.constraint(equalTo: pillIconDisc.centerYAnchor),
             pillStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor,
                                                constant: Metrics.pillDiscInset),
             pillStack.centerYAnchor.constraint(equalTo: cardView.topAnchor,
@@ -530,9 +565,13 @@ final class ShellSidebarViewController: UIViewController {
             height: panelFrame.height - Metrics.contentTop - Metrics.contentBottom)
     }
 
-    private func configurePill(_ item: ShellSidebarItem) {
+    private func configurePill() {
+        let item = item(for: pillShowsProfile ? .account : selectedTab)
         pillIcon.image = UIImage(systemName: item.icon)
+        pillAvatar.url = item.avatarURL
         pillLabel.text = item.title
+        // The pill is as wide as its title: resize it when it is at rest.
+        view.setNeedsLayout()
     }
 
     private func makeLayout() -> UICollectionViewLayout {
@@ -646,7 +685,7 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
 
     private func select(tab: SidebarTab) {
         selectedTab = tab
-        configurePill(item(for: tab))
+        configurePill()
         collectionView.reloadData()
     }
 }

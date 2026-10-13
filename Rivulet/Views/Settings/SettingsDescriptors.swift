@@ -370,7 +370,7 @@ enum SettingsDescriptorStore {
         ),
         "cf_profanity": SettingDescriptor(
             icon: "exclamationmark.bubble.fill",
-            description: "Mutes profane words in the dialogue. Rivulet reads the title's subtitle file even when subtitles are off; a title whose only subtitles are inside the video file needs them turned on. Use Profanity Strength to choose how much is filtered."
+            description: "Mutes profane words in the dialogue. Rivulet reads the title's subtitles even when they are off, including ones inside the video file. Use Profanity Strength to choose how much is filtered."
         ),
         "cf_strength": SettingDescriptor(
             icon: "dial.medium.fill",

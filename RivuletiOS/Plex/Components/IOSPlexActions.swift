@@ -136,7 +136,8 @@ struct IOSPlexItemMenu: View {
                 item.isWatched ? "Mark as Unwatched" : "Mark as Watched",
                 systemImage: item.isWatched ? "circle" : "checkmark.circle"
             ) { actions.setWatched(item, !item.isWatched) }
-            if showsWatchlist, ["movie", "show", "season", "episode"].contains(item.type ?? "") {
+            if showsWatchlist, PlexAuthManager.shared.accountContentToken != nil,
+               ["movie", "show", "season", "episode"].contains(item.type ?? "") {
                 let onList = plex.isOnWatchlist(item)
                 let standsForShow = item.type == "episode" || item.type == "season"
                 Button(

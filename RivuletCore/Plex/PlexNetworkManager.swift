@@ -2948,7 +2948,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
     /// Get the access token for a specific server URL using the user's auth token
     /// This is used after switching users to get a server-specific access token
-    func getServerAccessToken(authToken: String, serverURL: String) async -> String? {
+    func getServerAccessToken(authToken: String, serverURL: String, serverName: String? = nil) async -> String? {
         do {
             let servers = try await getServers(authToken: authToken)
 
@@ -3010,6 +3010,18 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
                 // If we found a server with accessToken (last resort - only 1 server in list)
                 if servers.count == 1, let accessToken = server.accessToken {
+                    return accessToken
+                }
+            }
+
+            // A raw-address fallback URL matches no advertised uri: match address and port,
+            // only when one server has them (two LANs can share a private address)
+            // and it carries the selected server's name.
+            if let url = URL(string: serverURL), let host = url.host {
+                let matches = servers.filter { server in
+                    (server.connections ?? []).contains { $0.address == host && $0.port == url.port }
+                }
+                if matches.count == 1, matches[0].name == serverName, let accessToken = matches[0].accessToken {
                     return accessToken
                 }
             }

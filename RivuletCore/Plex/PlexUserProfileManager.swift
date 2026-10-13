@@ -202,7 +202,8 @@ class PlexUserProfileManager: ObservableObject {
             // Now get the server-specific access token using the user's plex.tv token
             guard let serverAccessToken = await networkManager.getServerAccessToken(
                 authToken: userPlexToken,
-                serverURL: serverURL
+                serverURL: serverURL,
+                serverName: PlexAuthManager.shared.savedServerName
             ) else {
                 print("👤 PlexUserProfileManager: Could not get server access token")
                 return .unavailable
@@ -382,6 +383,8 @@ class PlexUserProfileManager: ObservableObject {
                     await contentOwnerDidChange()
                 } else if wasWithheld {
                     LiveTVDataStore.shared.plexContentTokenChanged()
+                    // The token arrived without an entry: the host loads under it.
+                    Self.onInitialProfileSelected?()
                 }
             case .lock:
                 await lock()

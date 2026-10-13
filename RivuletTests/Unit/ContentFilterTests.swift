@@ -526,6 +526,10 @@ final class ContentFilterTranscriptTests: XCTestCase {
         XCTAssertEqual(notice(mixed, shown: 2), "Use English Subtitles")
         // An English image track on screen is read too.
         XCTAssertNil(notice(mixed, shown: 1))
+        // A forced track on screen is no source while a full one sits unread.
+        let forced = [track(1, "eng", "srt", forced: true), track(2, "eng", "srt")]
+        XCTAssertEqual(notice(forced, shown: 1), "Use English Subtitles")
+        XCTAssertNil(notice([track(1, "eng", "srt", forced: true)], shown: 1))
         // Image-only English: read unseen, like text.
         XCTAssertEqual(silent([track(1, "spa", "pgs"), track(2, "eng", "pgs")]), 2)
         XCTAssertNil(notice([track(2, "eng", "pgs")]))
@@ -995,8 +999,16 @@ final class ContentFilterManagerTests: XCTestCase {
         manager.applyList(regions([(10, 20, .violence, .skip)]))
         XCTAssertFalse(manager.hasLanguageSource)
         XCTAssertTrue(manager.hasSceneSkips)
+        // A muted scene is no language source either; an uncategorised mute is.
+        manager.applyList(regions([(10, 20, .violence, .mute)]))
+        XCTAssertFalse(manager.hasLanguageSource)
+        manager.applyList(regions([(10, 20, .other, .mute)]))
+        XCTAssertTrue(manager.hasLanguageSource)
         manager.applyList(regions([(10, 20, .profanity, .mute)]))
         XCTAssertTrue(manager.hasLanguageSource)
+        // A mute the settings ignore is no source.
+        manager.applyList(regions([(10, 20, .profanity, .mute)], severity: .mild))
+        XCTAssertFalse(manager.hasLanguageSource)
         manager.applyList(.empty)
         XCTAssertFalse(manager.hasLanguageSource)
         XCTAssertFalse(manager.hasSceneSkips)

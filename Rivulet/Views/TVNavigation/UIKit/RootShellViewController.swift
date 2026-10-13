@@ -41,7 +41,40 @@ final class RootShellViewController: UIViewController {
     /// A counter: each bump closes the sidebar (a profile switch lands on Home
     /// with the sidebar closed, as the TV app's relaunch does).
     var collapseRequest = 0 {
-        didSet { if collapseRequest != oldValue, isViewLoaded { collapseSidebar() } }
+        didSet {
+            guard collapseRequest != oldValue, isViewLoaded else { return }
+            evictCachedContent()
+            // The switch emptied the mounted page: once it reloads, focus has to
+            // be driven into it again, as on a fresh mount.
+            contentHasHadFocus = false
+            collapseSidebar()
+            updateChromeVisibility()
+        }
+    }
+
+    /// Drops every cached page but Home: they hold the previous profile's items.
+    private func evictCachedContent() {
+        for (tab, vc) in contentVCs where tab != .home {
+            vc.willMove(toParent: nil)
+            vc.view.removeFromSuperview()
+            vc.removeFromParent()
+            contentVCs[tab] = nil
+        }
+    }
+
+    /// The profile panel is up: the sidebar folds to its pill, which names the user.
+    var profilePanelOpen = false {
+        didSet {
+            guard profilePanelOpen != oldValue, isViewLoaded else { return }
+            sidebar.setPillShowsProfile(profilePanelOpen)
+            if profilePanelOpen { collapseSidebar() }
+            updateChromeVisibility()
+        }
+    }
+    /// A counter: each bump reopens the sidebar on the profile row (the panel
+    /// closed with no switch, back to where Select was pressed).
+    var profileRowRequest = 0 {
+        didSet { if profileRowRequest != oldValue, isViewLoaded { expandSidebar(aimAt: .account) } }
     }
 
     private(set) var currentTab: SidebarTab = .home
@@ -237,9 +270,9 @@ final class RootShellViewController: UIViewController {
 
     // MARK: Sidebar chrome
 
-    private func expandSidebar() {
+    private func expandSidebar(aimAt tab: SidebarTab? = nil) {
         guard !sidebar.isExpanded, !interactionBlocked else { return }
-        sidebar.setExpanded(true, animated: true)
+        sidebar.setExpanded(true, animated: true, aimAt: tab)
         updateChromeVisibility()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
@@ -259,7 +292,8 @@ final class RootShellViewController: UIViewController {
     private func updateChromeVisibility() {
         guard isViewLoaded else { return }
         if interactionBlocked, sidebar.isExpanded { collapseSidebar() }
-        sidebar.setPillHidden(belowTop || pillSuppressed || interactionBlocked)
+        // The profile panel hangs under the pill, so the pill shows on every page.
+        sidebar.setPillHidden(!profilePanelOpen && (belowTop || pillSuppressed || interactionBlocked))
         // `sidebar.view` is full-screen, transparent and the LAST subview here,
         // so while collapsed it is an interactive layer painted over every
         // content view. `UIFocusDebugger` names it as the occluder for every
@@ -349,6 +383,13 @@ final class RootShellViewController: UIViewController {
                 setNeedsFocusUpdate()
                 updateFocusIfNeeded()
             }
+            return
+        }
+        // The profile panel hands focus back to the content it left it in, after
+        // the sidebar has reopened: pull it into the sidebar.
+        if sidebar.isExpanded, isInsideContent(next) {
+            setNeedsFocusUpdate()
+            updateFocusIfNeeded()
             return
         }
         if !contentHasHadFocus, isInsideContent(next) {

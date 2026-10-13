@@ -5,8 +5,8 @@
 //  ContinueWatchingCell.swift
 //  Rivulet
 //
-//  Continue Watching tile, a clone of the Apple TV app's Up Next card
-//  (Docs/atv_ref/rea_findings/tv-continue-watching.md), sized by MediaRowMetrics:
+//  Continue Watching tile, a clone of the Apple TV app's Up Next card,
+//  sized by MediaRowMetrics:
 //
 //    one bitmap from `ContinueWatchingCardCompositor`: the 16:9 still, then
 //      its mirrored, blurred continuation in the bottom 48pt
@@ -277,7 +277,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
 /// The item's clearLogo (the show's, for episodes) in the slot the still's
 /// analysis picks: either edge, any height. Falls back to the title as text.
-/// Nothing shows until the slot is known, so the title never moves.
+/// Nothing shows until the slot is known or a second passes, so the title never moves.
 @MainActor
 private final class ContinueWatchingTitleLogoView: UIView {
     private typealias Compositor = ContinueWatchingCardCompositor
@@ -288,6 +288,7 @@ private final class ContinueWatchingTitleLogoView: UIView {
     private var labelCenterY: NSLayoutConstraint!
 
     private var fetchTask: Task<Void, Never>?
+    private var deadlineTask: Task<Void, Never>?
     private var currentItemKey: String?
 
     override init(frame: CGRect) {
@@ -349,6 +350,7 @@ private final class ContinueWatchingTitleLogoView: UIView {
         // Same item: shown already, or on its way.
         guard key != currentItemKey else { return }
         fetchTask?.cancel()
+        deadlineTask?.cancel()
         imageView.image = nil
         imageView.alpha = 0
         titleLabel.alpha = 0
@@ -372,6 +374,13 @@ private final class ContinueWatchingTitleLogoView: UIView {
             guard !Task.isCancelled, let self, self.currentItemKey == key else { return }
             self.show(image, logoSize: logo?.size, placement: placement)
         }
+        // Slow server: show the text in the default slot rather than nothing.
+        deadlineTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled, let self, self.currentItemKey == key,
+                  self.imageView.alpha == 0, self.titleLabel.alpha == 0 else { return }
+            self.show(nil, logoSize: nil, placement: Compositor.Placement())
+        }
     }
 
     private static func signals(for artworkURL: URL?) async -> Compositor.Signals {
@@ -382,6 +391,7 @@ private final class ContinueWatchingTitleLogoView: UIView {
     func prepareForReuse() {
         fetchTask?.cancel()
         fetchTask = nil
+        deadlineTask?.cancel()
         currentItemKey = nil
         imageView.image = nil
         imageView.alpha = 0
@@ -401,9 +411,12 @@ private final class ContinueWatchingTitleLogoView: UIView {
         let geometry = ContinueWatchingCell.geometry
         let box = geometry.titleBox.offsetBy(dx: 0, dy: placement.offset)
         imageTop.constant = box.minY - Compositor.titleShadowPad
-        labelCenterY.constant = box.midY
-        titleLabel.textAlignment = placement.side == .leading ? .left : .right
-        titleLabel.shadowColor = UIColor.black.withAlphaComponent(placement.strongShadow ? 0.8 : 0.5)
+        // A title already on screen keeps its slot.
+        if titleLabel.alpha == 0 {
+            labelCenterY.constant = box.midY
+            titleLabel.textAlignment = placement.side == .leading ? .left : .right
+            titleLabel.shadowColor = UIColor.black.withAlphaComponent(placement.strongShadow ? 0.8 : 0.5)
+        }
         imageView.image = image
         // The bitmap holds the logo on the box's leading edge: carry it to its
         // slot, so a smaller or trailing logo keeps the edge it sits on.
@@ -414,7 +427,8 @@ private final class ContinueWatchingTitleLogoView: UIView {
             .scaledBy(x: placement.scale, y: placement.scale)
         layoutIfNeeded()
         UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut]) {
-            (image == nil ? self.titleLabel : self.imageView).alpha = 1
+            self.imageView.alpha = image == nil ? 0 : 1
+            self.titleLabel.alpha = image == nil ? 1 : 0
         }
     }
 

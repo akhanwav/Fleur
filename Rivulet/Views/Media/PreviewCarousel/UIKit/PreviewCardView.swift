@@ -86,8 +86,7 @@ final class PreviewCardView: UICollectionViewCell {
         return v
     }()
 
-    // Apple's product-page scrim (VideosUI MediaShowcasingGradientLayout,
-    // type canonical): three black layers, each filling the card.
+    // The Apple TV app's product-page scrim: three black layers, each filling the card.
     // GRADIENT-BACKED UIVIEWS (not CAGradientLayer sublayers) so their bounds
     // animate with the morph's UIViewPropertyAnimator; unit coordinates fill
     // the view at any size, so nothing sets frames in layoutSubviews.

@@ -2207,6 +2207,12 @@ class PlexDataStore: ObservableObject {
     /// Update the Top Shelf cache with Continue Watching items
     /// Called after hubs are fetched to keep Top Shelf in sync
     private func updateTopShelfCache() async {
+        // The Home screen row sits outside the PIN gate (a remembered PIN reopens it unasked).
+        let profiles = PlexUserProfileManager.shared
+        guard !authManager.relocksOnLaunch || profiles.selectedUser.map(profiles.hasRememberedPin(for:)) ?? false else {
+            TopShelfCache.shared.clear()
+            return
+        }
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else {
             print("TopShelf: No server URL or token available")
@@ -2223,7 +2229,8 @@ class PlexDataStore: ObservableObject {
         // only reads the finished files. Never throws; falls back to the plain
         // backdrop per item when no logo or on any failure.
         let items = await TopShelfComposer.composite(items: baseItems, serverURL: serverURL, token: token)
-
+        // The profile may have changed, locked or signed out during the composite.
+        guard authManager.selectedServerToken == token else { return }
         TopShelfCache.shared.writeItems(items)
     }
 

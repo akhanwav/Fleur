@@ -33,9 +33,18 @@ struct RivuletApp: App {
         // latches to "empty" on a fresh sign-in, and without the second, a
         // sign-out leaves the previous server's hubs on screen.
         PlexAuthManager.onAuthenticated = { await PlexDataStore.shared.loadLibrariesIfNeeded() }
-        PlexAuthManager.onSignedOut = { PlexDataStore.shared.reset() }
+        PlexAuthManager.onSignedOut = {
+            MusicQueue.shared.stop()
+            MusicQueue.shared.clear()
+            PlexDataStore.shared.reset()
+        }
         JellyfinSession.onChanged = { JellyfinDataStore.shared.reload() }
-        PlexUserProfileManager.onProfileChanged = { await PlexDataStore.shared.onProfileSwitched() }
+        PlexUserProfileManager.onProfileChanged = {
+            // The queue reports progress with whichever token is current.
+            MusicQueue.shared.stop()
+            MusicQueue.shared.clear()
+            await PlexDataStore.shared.onProfileSwitched()
+        }
         PlexUserProfileManager.onInitialProfileSelected = { LibrarySettingsManager.shared.onProfileSwitched() }
 
         #if !DEBUG

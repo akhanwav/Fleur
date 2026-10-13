@@ -22,7 +22,7 @@ struct ProfileSwitcherPopup: View {
     @State private var isLoading = false
     @FocusState private var focusedUserId: Int?
 
-    // The TV app's profile panel (TVSystemUI): 384 wide, insets 14 / 14 / 34,
+    // The Apple TV app's profile panel: 384 wide, insets 14 / 14 / 34,
     // two columns that overlap 4pt, rows 10 apart, 160pt avatars growing to 180.
     private let columns = [
         GridItem(.fixed(180), spacing: -4),
@@ -51,7 +51,14 @@ struct ProfileSwitcherPopup: View {
         .onExitCommand {
             isPresented = false
         }
-        .sheet(isPresented: $showPinEntry) {
+        // Close as soon as the profile is entered: by the time this runs its token
+        // is installed and the old content dropped, so Home loads in view.
+        // A PIN sheet closes first and its onDismiss closes the panel.
+        .onChange(of: profileManager.selectedUser?.id) { _, _ in
+            guard didEnterRequestedProfile else { return }
+            if showPinEntry { showPinEntry = false } else { isPresented = false }
+        }
+        .sheet(isPresented: $showPinEntry, onDismiss: { if didEnterRequestedProfile { isPresented = false } }) {
             if let user = selectedUserForPin {
                 PinEntrySheet(
                     user: user,
@@ -69,6 +76,10 @@ struct ProfileSwitcherPopup: View {
                 )
             }
         }
+    }
+
+    private var didEnterRequestedProfile: Bool {
+        selectedUserForPin != nil && selectedUserForPin?.id == profileManager.selectedUser?.id
     }
 
     private func profileButton(for user: PlexHomeUser) -> some View {
@@ -200,12 +211,11 @@ struct ProfileSwitcherPopup: View {
             Task {
                 isLoading = true
                 selectedUserForPin = user
+                // Usually closed already by the selectedUser change above; this is the fallback.
                 let success = await profileManager.selectUser(user, pin: nil)
                 isLoading = false
                 selectedUserForPin = nil
-                if success {
-                    isPresented = false
-                }
+                if success { isPresented = false }
             }
         }
     }

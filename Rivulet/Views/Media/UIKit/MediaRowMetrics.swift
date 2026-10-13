@@ -11,8 +11,7 @@
 //  must read from here — the sizes drifting apart across copies is exactly
 //  the bug class this file exists to kill.
 //
-//  Margin, gap and tile widths are the Apple TV app's grid (tvOS 26.5, read
-//  from its binary: Docs/atv_ref/REA_NOTES.md Q2).
+//  Margin, gap and tile widths are the Apple TV app's grid (tvOS 26.5).
 //
 
 import UIKit

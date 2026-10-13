@@ -14,6 +14,8 @@ struct ShellSidebarItem: Hashable {
     let title: String
     /// SF Symbol name.
     let icon: String
+    /// The profile row's picture; the symbol stays where there is none.
+    var avatarURL: URL?
 }
 
 /// A group of rows. `title` renders as a small section header; nil means the
@@ -40,13 +42,15 @@ enum ShellSidebarModel {
         liveTVAbove: Bool,
         serverName: String?,
         profileName: String,
+        profileAvatar: URL? = nil,
         jellyfinServerName: String? = nil,
         jellyfinLibraries: [MediaLibrary] = []
     ) -> [ShellSidebarSection] {
         var sections: [ShellSidebarSection] = []
 
         var top: [ShellSidebarItem] = [
-            ShellSidebarItem(tab: .account, title: profileName, icon: "person.crop.circle.fill"),
+            ShellSidebarItem(tab: .account, title: profileName, icon: "person.crop.circle.fill",
+                            avatarURL: profileAvatar),
             ShellSidebarItem(tab: .search, title: "Search", icon: "magnifyingglass"),
             ShellSidebarItem(tab: .home, title: "Home", icon: "house.fill"),
         ]

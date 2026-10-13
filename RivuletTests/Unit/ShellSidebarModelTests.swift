@@ -27,6 +27,18 @@ final class ShellSidebarModelTests: XCTestCase {
         XCTAssertEqual(jf?.items.first?.tab, .providerLibrary(providerID: "jellyfin:srv", libraryID: "lib-m"))
     }
 
+    func test_profileRow_carriesTheUsersNameAndAvatar() {
+        let avatar = URL(string: "https://plex.tv/users/abc/avatar")
+        let top = ShellSidebarModel.sections(
+            libraries: [], liveTVSources: [], combineLiveTV: true,
+            showDiscover: false, discoverAbove: true, showWatchlist: false,
+            liveTVAbove: false, serverName: nil, profileName: "Bain", profileAvatar: avatar)[0].items
+
+        XCTAssertEqual(top.first?.tab, .account)
+        XCTAssertEqual(top.first?.title, "Bain")
+        XCTAssertEqual(top.map(\.avatarURL), [avatar, nil, nil])
+    }
+
     func test_noJellyfin_noJellyfinSection() {
         XCTAssertEqual(sections(jellyfinName: nil, jellyfin: []).map(\.title), [nil, nil])
     }

@@ -348,6 +348,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
 
         inputCoordinator.target = self
         NowPlayingService.shared.attachLive(inputCoordinator: inputCoordinator)
+        MusicQueue.shared.liveTVSessionBegan(ObjectIdentifier(self))
         // Live TV is watched lean-back for long stretches with no input; the
         // screensaver must not take over mid-programme.
         UIApplication.shared.isIdleTimerDisabled = true
@@ -516,6 +517,12 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         LiveHandoffCover.hide(in: view.window)
     }
 
+    // Safety net: a dismissal the guard below misses must not leave Music stood down.
+    deinit {
+        let session = ObjectIdentifier(self)
+        Task { @MainActor in MusicQueue.shared.liveTVSessionEnded(session) }
+    }
+
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         guard isBeingDismissed || isMovingFromParent else { return }
@@ -540,6 +547,7 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         timelineHideTimer = nil
         stopTimelineTicker()
         NowPlayingService.shared.detachLive(inputCoordinator: inputCoordinator)
+        MusicQueue.shared.liveTVSessionEnded(ObjectIdentifier(self))
         inputCoordinator.invalidate()
         UIApplication.shared.isIdleTimerDisabled = false
         onDismiss?(channel)

@@ -172,6 +172,7 @@ final class MultiStreamViewModel: ObservableObject {
     /// no new tune, then optionally adds `channel` beside it.
     init(adopting session: LiveTVSessionHandoff?, adding channel: UnifiedChannel?) {
         Self.activeSessionCount += 1
+        MusicQueue.shared.liveTVSessionBegan(ObjectIdentifier(self))
         UIApplication.shared.isIdleTimerDisabled = true
 
         if let session { adoptStream(session) }
@@ -439,6 +440,7 @@ final class MultiStreamViewModel: ObservableObject {
         // Decrement session count and only re-enable screensaver when no sessions remain
         if !didDecrementSessionCount {
             didDecrementSessionCount = true
+            MusicQueue.shared.liveTVSessionEnded(ObjectIdentifier(self))
             Self.activeSessionCount = max(0, Self.activeSessionCount - 1)
             if Self.activeSessionCount == 0 {
                 UIApplication.shared.isIdleTimerDisabled = false
@@ -870,7 +872,9 @@ final class MultiStreamViewModel: ObservableObject {
 
         // Only decrement if stopAllStreams wasn't called (safety net)
         let needsDecrement = !didDecrementSessionCount
+        let session = ObjectIdentifier(self)
         Task { @MainActor in
+            if needsDecrement { MusicQueue.shared.liveTVSessionEnded(session) }
             if needsDecrement && Self.activeSessionCount > 0 {
                 Self.activeSessionCount -= 1
                 if Self.activeSessionCount == 0 {

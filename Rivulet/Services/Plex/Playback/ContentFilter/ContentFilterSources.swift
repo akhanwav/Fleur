@@ -238,7 +238,9 @@ nonisolated enum ContentFilterSources {
     /// What the rail says while filtering is on with no language to work
     /// from; nil when it has some. `tracks` is empty on the hls route.
     static func languageNotice(hasLanguageSource: Bool, shown: MediaTrack?, tracks: [MediaTrack]) -> String? {
-        if hasLanguageSource || shown.map(isReadable) ?? false { return nil }
+        // A forced-only track on screen carries almost no dialogue when a full one exists.
+        let hasFull = tracks.contains { isReadable($0) && !$0.isForced }
+        if hasLanguageSource || shown.map({ isReadable($0) && !($0.isForced && hasFull) }) ?? false { return nil }
         guard tracks.contains(where: isReadable) else { return "No Readable Subtitles" }
         // Off, a track is read unseen; only another track on screen blocks that.
         return shown == nil ? nil : "Use English Subtitles"

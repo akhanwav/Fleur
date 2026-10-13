@@ -36,6 +36,8 @@ actor PersonalizedRecommendationService {
         let contentType: RecommendationContentType
         let libraryKey: String?
         let serverURL: String
+        /// The profile the row was built from (0 is the account).
+        let userID: Int
     }
 
     private var cachedResults: [CacheKey: RecommendationResult] = [:]
@@ -54,7 +56,8 @@ actor PersonalizedRecommendationService {
             throw NSError(domain: "PlexAuth", code: 1, userInfo: [NSLocalizedDescriptionKey: "Not authenticated with Plex"])
         }
 
-        let key = CacheKey(contentType: contentType, libraryKey: libraryKey, serverURL: serverURL)
+        let key = CacheKey(contentType: contentType, libraryKey: libraryKey, serverURL: serverURL,
+                           userID: UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey))
 
         if !forceRefresh, let cached = cachedResults[key] {
             if Date().timeIntervalSince(cached.generatedAt) < cacheTTL {

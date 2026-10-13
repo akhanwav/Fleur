@@ -11,8 +11,7 @@
 //
 //    [▶︎]  [▓▓▓░░ progress 34pt]  S1, E2 · 35m
 //
-//  Sizes, gaps and colours are the Apple TV app's Up Next status row
-//  (Docs/atv_ref/rea_findings/tv-continue-watching.md):
+//  Sizes, gaps and colours are the Apple TV app's Up Next status row:
 //   - play.fill glyph (20pt regular, small scale)
 //   - 34 x 6 progress pill, hidden when not in progress
 //   - info text (20pt medium): "S{n}, E{n}" for episodes plus

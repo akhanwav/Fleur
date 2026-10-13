@@ -33,8 +33,7 @@ final class SearchRecentsCell: UICollectionViewCell {
 
     var onRecentSelected: ((MediaItem) -> Void)?
 
-    /// The Apple TV app's SearchEntityCardCell, read from VideosUI
-    /// (Docs/atv_ref/rea_findings/tv-search.md). Card radius was not found.
+    /// The Apple TV app's recent-search card. Its corner radius is our own.
     private enum Metrics {
         static let cardWidth: CGFloat = MediaRowMetrics.gridWidth(columns: 3)
         static let cardHeight: CGFloat = 160
@@ -369,7 +368,7 @@ final class SearchStateCell: UICollectionViewCell {
             iconView.isHidden = false
             iconView.image = UIImage(systemName: "exclamationmark.triangle")?
                 .withConfiguration(UIImage.SymbolConfiguration(pointSize: 48, weight: .light))
-            // Apple's wording (VideosUI NO_CONTENT_VIEW_ERROR_*).
+            // The Apple TV app's wording.
             titleLabel.text = "Search Not Available"
             messageLabel.isHidden = false
             messageLabel.text = "This request wasn’t completed. Wait a moment and try again."

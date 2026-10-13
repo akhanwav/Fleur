@@ -29,6 +29,10 @@ struct RootShellHost: UIViewControllerRepresentable {
     var pillSuppressed: Bool
     /// Bumped to close the sidebar from SwiftUI (after a profile switch).
     var collapseRequest = 0
+    /// The profile panel is up (the pill names the user), and the bump that
+    /// reopens the sidebar on the profile row when it closes with no switch.
+    var profilePanelOpen = false
+    var profileRowRequest = 0
     var sections: [ShellSidebarSection]
     let content: (SidebarTab) -> UIViewController
 
@@ -53,7 +57,9 @@ struct RootShellHost: UIViewControllerRepresentable {
         shell.refreshContentRoots(content)
         shell.interactionBlocked = interactionBlocked
         shell.pillSuppressed = pillSuppressed
+        shell.profilePanelOpen = profilePanelOpen
         shell.collapseRequest = collapseRequest
+        shell.profileRowRequest = profileRowRequest
         shell.updateSections(sections)
         shell.applySelection(selection)
     }

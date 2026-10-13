@@ -271,7 +271,10 @@ final class ContentFilterManager: ObservableObject {
     }
 
     private func refreshLanguageSource() {
-        let has = hasTranscript || regions.contains { $0.action == .mute }
+        // A muted scene (violence=audio) is no language source; uncategorised EDL mutes are.
+        let has = hasTranscript || regions.contains {
+            $0.action == .mute && ($0.category.isTextDetectable || $0.category == .other) && acts(on: $0)
+        }
         if has != hasLanguageSource { hasLanguageSource = has }
         let skips = regions.contains { $0.action == .skip && acts(on: $0) }
         if skips != hasSceneSkips { hasSceneSkips = skips }

@@ -345,7 +345,8 @@ private struct IOSPlexDetailHeader: View {
         return layout {
             playButton.layoutPriority(1)
             HStack(spacing: 12) {
-                if ["movie", "show", "season", "episode"].contains(item.type ?? "") {
+                if PlexAuthManager.shared.accountContentToken != nil,
+                   ["movie", "show", "season", "episode"].contains(item.type ?? "") {
                     let onList = plex.isOnWatchlist(item)
                     circleButton(onList ? "checkmark" : "plus", label: onList ? "Remove from Watchlist" : "Add to Watchlist") {
                         actions.setWatchlisted(item, !onList)

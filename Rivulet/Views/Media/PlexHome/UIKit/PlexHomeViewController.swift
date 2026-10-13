@@ -680,6 +680,8 @@ final class PlexHomeViewController: UIViewController {
 
     /// Recommendations state (latched local copy — service caches itself).
     private var recommendations: [PlexMetadata] = []
+    /// The profile `recommendations` was built for.
+    private var recommendationsUserID = UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey)
     private var isLoadingRecommendations = false
     private var recommendationsError: String?
 
@@ -2670,6 +2672,8 @@ final class PlexHomeViewController: UIViewController {
                     system.updateFocusIfNeeded()
                 }
             } else if wasUnfocusable {
+                // Reloaded from nothing (a profile switch): top of the page, as at launch.
+                aimFocusAtTopRow()
                 NotificationCenter.default.post(name: .contentBecameFocusable, object: nil)
             }
             backdropView.isHidden = !showHomeHero
@@ -3531,6 +3535,13 @@ final class PlexHomeViewController: UIViewController {
                 self.reprojectIfHomeLibrariesChanged()
                 self.selectHeroItemsIfNeeded()
                 if case .home = self.mode {
+                    let userID = UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey)
+                    if userID != self.recommendationsUserID {
+                        self.recommendationsUserID = userID
+                        self.recommendations = []
+                        self.recommendationsError = nil
+                        self.applySnapshot(animated: false)
+                    }
                     if self.enablePersonalizedRecommendations {
                         if self.recommendations.isEmpty {
                             Task { await self.refreshRecommendations(force: false) }
@@ -5040,16 +5051,21 @@ final class PlexHomeViewController: UIViewController {
         guard enablePersonalizedRecommendations else { return }
         if force || recommendations.isEmpty { isLoadingRecommendations = true }
         recommendationsError = nil
+        // A profile switch mid-fetch: the new profile's refresh owns the row.
+        let contentUserID = { UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey) }
+        let userID = contentUserID()
 
         do {
             let items = try await recommendationService.recommendations(
                 forceRefresh: force,
                 contentType: .moviesAndShows
             )
+            guard userID == contentUserID() else { return }
             recommendations = items
             isLoadingRecommendations = false
             applySnapshot(animated: false)
         } catch {
+            guard userID == contentUserID() else { return }
             recommendations = []
             recommendationsError = error.localizedDescription
             isLoadingRecommendations = false

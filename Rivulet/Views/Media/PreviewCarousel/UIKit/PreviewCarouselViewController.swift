@@ -747,10 +747,10 @@ final class PreviewCarouselViewController: UIViewController {
         PreviewCarouselGeometry.neighbourDimAlpha * abs(layout.normalizedPosition(for: index))
     }
 
-    /// Windows for the two peeks that have no tile to fly from or to: they
-    /// hold the card's frame and only fade, on the same spring.
+    /// Windows for the cards with no tile to fly from or to (the two peeks, and the
+    /// centre when its tile had no artwork): they hold the card's frame and only fade.
     private func tilelessPeekWindows(flying: Set<Int>) -> [EntryMorphWindowView] {
-        [selectedIndex - 1, selectedIndex + 1]
+        [selectedIndex - 1, selectedIndex, selectedIndex + 1]
             .filter { items.indices.contains($0) && !flying.contains($0) }
             .map { index in
                 let card = carouselFrameInView(for: index)
@@ -1672,7 +1672,6 @@ final class PreviewCarouselViewController: UIViewController {
         updateFocusIfNeeded()
         expandedDetail.belowFoldCollection.slideToHeroRest(animated: true) { [weak self] in
             guard let self else { return }
-            NSLog("RVCOLLAPSE slide-complete")
             self.expandedDetail.setBelowFoldScrollActive(false)
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
