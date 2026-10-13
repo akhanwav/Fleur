@@ -38,6 +38,12 @@ final class RootShellViewController: UIViewController {
         didSet { updateChromeVisibility() }
     }
 
+    /// A counter: each bump closes the sidebar (a profile switch lands on Home
+    /// with the sidebar closed, as the TV app's relaunch does).
+    var collapseRequest = 0 {
+        didSet { if collapseRequest != oldValue, isViewLoaded { collapseSidebar() } }
+    }
+
     private(set) var currentTab: SidebarTab = .home
     private var contentVCs: [SidebarTab: UIViewController] = [:]
     private let sidebar = ShellSidebarViewController()

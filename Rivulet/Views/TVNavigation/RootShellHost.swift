@@ -27,6 +27,8 @@ struct RootShellHost: UIViewControllerRepresentable {
     @Binding var selection: SidebarTab
     var interactionBlocked: Bool
     var pillSuppressed: Bool
+    /// Bumped to close the sidebar from SwiftUI (after a profile switch).
+    var collapseRequest = 0
     var sections: [ShellSidebarSection]
     let content: (SidebarTab) -> UIViewController
 
@@ -51,6 +53,7 @@ struct RootShellHost: UIViewControllerRepresentable {
         shell.refreshContentRoots(content)
         shell.interactionBlocked = interactionBlocked
         shell.pillSuppressed = pillSuppressed
+        shell.collapseRequest = collapseRequest
         shell.updateSections(sections)
         shell.applySelection(selection)
     }

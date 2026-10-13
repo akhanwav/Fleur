@@ -32,22 +32,31 @@ private enum Metrics {
     /// spring). Sim-captured; re-verify timing on device.
     static let panelWidth: CGFloat = 340
     static let panelInset: CGFloat = 35
-    static let panelCornerRadius: CGFloat = 52
-    /// 54 (window) - 36 (panel inset) = capsule leading inside the panel.
-    static let contentLeading: CGFloat = 18
-    static let contentTrailing: CGFloat = 18
+    /// The TV app's panel radius (VideosUI), not the system tab sidebar's 52.
+    static let panelCornerRadius: CGFloat = 40
+    /// The TV app's section insets: rows sit 10pt inside the glass.
+    static let contentLeading: CGFloat = 10
+    static let contentTrailing: CGFloat = 10
     /// 55 (list top inset, window) - 36 (panel inset).
     static let contentTop: CGFloat = 19
     static let contentBottom: CGFloat = 15
     static let rowPitch: CGFloat = 78
-    /// Video-measured (default.mov, pitch-calibrated): the focused capsule
-    /// nearly fills the 78pt row.
-    static let capsuleHeight: CGFloat = 75
+    /// The TV app's focus platter: 72pt tall, 3pt inside the 78pt row.
+    static let capsuleHeight: CGFloat = 72
+    /// The TV app's row columns: icon centred in a 72pt leading column, title
+    /// 2pt after it, 16pt trailing margin.
+    static let iconCenterX: CGFloat = 36
+    static let titleLeading: CGFloat = 74
+    static let titleTrailing: CGFloat = 16
     static var capsuleRadius: CGFloat { capsuleHeight / 2 }
     static var capsuleVerticalInset: CGFloat { (rowPitch - capsuleHeight) / 2 }
     static let sectionGap: CGFloat = 70
     static let pillOrigin = CGPoint(x: 50, y: 50)
     static let pillHeight: CGFloat = 60
+    /// The TV app's 46pt icon box, centred in the 60pt pill.
+    static let pillDiscSize: CGFloat = 46
+    static var pillDiscInset: CGFloat { (pillHeight - pillDiscSize) / 2 }
+    static let pillTrailing: CGFloat = 24
     /// USER-VERIFIED on screen: the single spring crossfade reads nearly
     /// identical to the system morph; a literal three-phase re-timing from
     /// the 120fps frame analysis read distinctly WORSE and was reverted.
@@ -73,47 +82,20 @@ enum ShellPillMetrics {
 
 /// System row coloring: focused = solid white capsule, dark content; selected
 /// but unfocused = translucent capsule, full-white content; otherwise bare, dim.
+/// Resting 0.7 is the TV app's value; its focused 0.9 / 0.7 pair rides a
+/// PlusL / PlusD layer this sidebar does not have.
 private func sidebarRowColors(focused: Bool, selected: Bool) -> (background: UIColor, content: UIColor) {
     if focused { return (.white, .black) }
     if selected { return (UIColor.white.withAlphaComponent(0.1), .white) }
-    return (.clear, UIColor.white.withAlphaComponent(0.6))
+    return (.clear, UIColor.white.withAlphaComponent(0.7))
 }
 
-/// The collapsed pill's back-chevron. NOT SF `chevron.left`: measured from the
-/// system pill it is tall and narrow (7.5 x 25.7pt, aspect ~1:3.4), a 3.2pt
-/// stroke with rounded caps/join and a sharp ~60deg vertex, drawn so the
-/// proportion matches exactly.
-private final class PillChevronView: UIView {
-    private let shape = CAShapeLayer()
-    private let size = CGSize(width: 8, height: 26)
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        shape.fillColor = nil
-        shape.strokeColor = UIColor.white.cgColor
-        shape.lineWidth = 3.2
-        shape.lineCap = .round
-        shape.lineJoin = .round
-        layer.addSublayer(shape)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override var intrinsicContentSize: CGSize { size }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let inset = shape.lineWidth / 2
-        let w = size.width, h = size.height
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: w - inset, y: inset))          // top-right
-        path.addLine(to: CGPoint(x: inset, y: h / 2))            // vertex (left, mid)
-        path.addLine(to: CGPoint(x: w - inset, y: h - inset))    // bottom-right
-        shape.path = path.cgPath
-        shape.frame = CGRect(origin: CGPoint(x: (bounds.width - w) / 2,
-                                             y: (bounds.height - h) / 2), size: size)
-    }
+/// The text style's font at the emphasized (bold) weight, as the TV app asks
+/// for it: from the style, never a hard-coded size.
+private func emphasizedFont(_ style: UIFont.TextStyle) -> UIFont {
+    let base = UIFont.preferredFont(forTextStyle: style)
+    return base.fontDescriptor.withSymbolicTraits(.traitBold).map { UIFont(descriptor: $0, size: 0) } ?? base
 }
-
 
 // MARK: - Collection view
 
@@ -165,14 +147,11 @@ final class ShellSidebarRowCell: UICollectionViewCell {
 
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 24, weight: .medium)
         iconView.setContentHuggingPriority(.required, for: .horizontal)
-        titleLabel.font = .systemFont(ofSize: 29, weight: .medium)
-
-        let stack = UIStackView(arrangedSubviews: [iconView, titleLabel])
-        stack.axis = .horizontal
-        stack.spacing = 14
-        stack.alignment = .center
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stack)
+        titleLabel.font = .preferredFont(forTextStyle: .caption1)
+        for view in [iconView, titleLabel] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(view)
+        }
 
         NSLayoutConstraint.activate([
             backgroundPill.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -181,9 +160,14 @@ final class ShellSidebarRowCell: UICollectionViewCell {
                                                 constant: Metrics.capsuleVerticalInset),
             backgroundPill.bottomAnchor.constraint(equalTo: contentView.bottomAnchor,
                                                    constant: -Metrics.capsuleVerticalInset),
-            stack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 17),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -17),
-            stack.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            iconView.centerXAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                              constant: Metrics.iconCenterX),
+            iconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                                constant: Metrics.titleLeading),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
+                                                 constant: -Metrics.titleTrailing),
+            titleLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
         ])
         applyAppearance(focused: false)
     }
@@ -227,13 +211,14 @@ final class ShellSidebarHeaderView: UICollectionReusableView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        label.font = .systemFont(ofSize: 21, weight: .semibold)
-        label.textColor = UIColor.white.withAlphaComponent(0.45)
+        label.font = emphasizedFont(.caption2)
+        label.textColor = .tertiaryLabel.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 17),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 15),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 28),
         ])
     }
 
@@ -261,8 +246,12 @@ final class ShellSidebarViewController: UIViewController {
         effect.tintColor = Metrics.glassTint
         return UIVisualEffectView(effect: effect)
     }()
-    private let pillChevron = PillChevronView()
+    /// `chevron.compact.left` at callout size, as the TV app's pill draws it.
+    private let pillChevron = UIImageView(image: UIImage(
+        systemName: "chevron.compact.left",
+        withConfiguration: UIImage.SymbolConfiguration(textStyle: .callout)))
     private let pillIcon = UIImageView()
+    private let pillIconDisc = UIView()
     private let pillLabel = UILabel()
     private let pillStack = UIStackView()
     private var collectionView: SidebarCollectionView!
@@ -394,7 +383,8 @@ final class ShellSidebarViewController: UIViewController {
     private var pillFrame: CGRect {
         let content = pillStack.systemLayoutSizeFitting(UIView.layoutFittingCompressedSize)
         return CGRect(x: Metrics.pillOrigin.x, y: Metrics.pillOrigin.y,
-                      width: content.width + 48, height: Metrics.pillHeight)
+                      width: content.width + Metrics.pillDiscInset + Metrics.pillTrailing,
+                      height: Metrics.pillHeight)
     }
 
     private func setState(_ newState: State) {
@@ -488,17 +478,22 @@ final class ShellSidebarViewController: UIViewController {
         cardView.addSubview(collectionView)
 
         // Back-chevron, as the system pill shows: OUTSIDE the capsule, to its
-        // left, white. Custom-drawn (see PillChevronView) to match the system
-        // pill's tall-narrow proportion. Lives on the main view (not the glass
-        // card) so it sits outside the glass, and fades with the pill.
+        // left, white. Lives on the main view (not the glass card) so it sits
+        // outside the glass, and fades with the pill.
+        pillChevron.tintColor = .white
         pillChevron.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(pillChevron)
 
         pillIcon.tintColor = .white
-        pillIcon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold)
-        pillLabel.font = .systemFont(ofSize: 25, weight: .semibold)
+        pillIcon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .caption1)
+        pillIcon.translatesAutoresizingMaskIntoConstraints = false
+        // Disc tone is a photo estimate; the TV app's colour was not read.
+        pillIconDisc.backgroundColor = UIColor.white.withAlphaComponent(0.16)
+        pillIconDisc.layer.cornerRadius = Metrics.pillDiscSize / 2
+        pillIconDisc.addSubview(pillIcon)
+        pillLabel.font = emphasizedFont(.body)
         pillLabel.textColor = .white
-        pillStack.addArrangedSubview(pillIcon)
+        pillStack.addArrangedSubview(pillIconDisc)
         pillStack.addArrangedSubview(pillLabel)
         pillStack.axis = .horizontal
         pillStack.spacing = 12
@@ -507,7 +502,12 @@ final class ShellSidebarViewController: UIViewController {
         cardView.addSubview(pillStack)
 
         NSLayoutConstraint.activate([
-            pillStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 24),
+            pillIconDisc.widthAnchor.constraint(equalToConstant: Metrics.pillDiscSize),
+            pillIconDisc.heightAnchor.constraint(equalToConstant: Metrics.pillDiscSize),
+            pillIcon.centerXAnchor.constraint(equalTo: pillIconDisc.centerXAnchor),
+            pillIcon.centerYAnchor.constraint(equalTo: pillIconDisc.centerYAnchor),
+            pillStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor,
+                                               constant: Metrics.pillDiscInset),
             pillStack.centerYAnchor.constraint(equalTo: cardView.topAnchor,
                                                constant: Metrics.pillHeight / 2),
             // Chevron sits just left of the collapsed pill, vertically centered

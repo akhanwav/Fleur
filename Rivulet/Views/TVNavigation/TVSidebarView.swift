@@ -42,6 +42,9 @@ struct TVSidebarView: View {
     /// A profile was entered through the picker; any other close re-presents it.
     @State private var profileChosen = false
     @State private var showProfileSwitcher = false
+    /// The last profile entered, and the sidebar close a switch away from it asks for.
+    @State private var lastProfileId: Int?
+    @State private var sidebarCollapseRequest = 0
     @State private var hasCheckedProfilePicker = false
     @State private var isAwaitingProfileSelection = false
     @AppStorage("lastSeenBuild") private var lastSeenBuild = ""
@@ -135,6 +138,7 @@ struct TVSidebarView: View {
             selection: tabSelection,
             interactionBlocked: nestedNavState.isNested || nestedNavState.isSettingsSubPage,
             pillSuppressed: isMusicLibrarySelected || isLiveTVSelected || isSearchSelected,
+            collapseRequest: sidebarCollapseRequest,
             sections: shellSections,
             content: { tab in contentViewController(for: tab) })
         .ignoresSafeArea()
@@ -147,6 +151,16 @@ struct TVSidebarView: View {
                 PlexWatchlistService.shared.reset()
                 deepLinkHandler.dropHeldLink()
             }
+        }
+        // A switch to another profile arrives at Home with the sidebar closed,
+        // as the TV app's relaunch does. The launch restore (nil to saved) is not one.
+        .onChange(of: profileManager.selectedUser?.id) { _, newId in
+            guard let newId else { return }
+            if let lastProfileId, lastProfileId != newId {
+                selectedTab = .home
+                sidebarCollapseRequest += 1
+            }
+            lastProfileId = newId
         }
         // Reset tab selection when live TV source mode changes
         .onChange(of: combineLiveTVSources) { _, combined in
