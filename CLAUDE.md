@@ -43,7 +43,7 @@ The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg 
 
 Four code roots. `RivuletCore/` is a buildable folder compiled into BOTH app
 targets (not a module — `internal` spans each target); `Rivulet/` is the tvOS
-app, `RivuletiOS/` the iOS app. See "Platform Boundary" above for what goes
+app, `RivuletiOS/` the iOS app. See "Platform Boundary" below for what goes
 where.
 
 ```
@@ -66,18 +66,24 @@ RivuletiOS/             # iOS/iPadOS app (SwiftUI). Shell/ (tabs, Account sheet,
 Rivulet/                # The tvOS app — everything below.
 ├── Models/
 │   ├── Plex/           # (moved to RivuletCore/Models/Plex)
+│   ├── Shared/         # RivuletLink (the one rivulet:// definition) and TopShelfItem,
+│   │                   #   both also compiled into the Top Shelf extension
 │   └── SwiftData/      # Persistent models (Channel, EPGProgram, PlexServer)
 ├── Services/
+│   ├── DeepLinkHandler.swift  # Opens a RivuletLink or Siri activity once the shell is ready
 │   ├── Plex/
-│   │   ├── (PlexNetworkManager, PlexAuthManager, PlexDataStore, …)
-│   │   └── Playback/   # AetherPlayer + routing/remux (see Docs/RIVULET_PLAYER.md)
+│   │   ├── (PlexDataStore, …; the Plex client lives in RivuletCore/Plex)
+│   │   └── Playback/   # AetherPlayer + routing/remux (see Docs/RIVULET_PLAYER.md),
+│   │       │           #   HLSTrustRelay (loopback relay for the hls route)
 │   │       ├── Pipeline/     # ContentRouter (routing decisions)
-│   │       ├── ContentFilter/ # Local mute/skip filter (see "Content Filter (VOD)")
+│   │       ├── ContentFilter/ # Local mute/skip filter (see "Content Filter (VOD)"),
+│   │       │                  #   SubtitleImageReader (reads image subtitles on device)
 │   │       └── Subtitles/    # CaptionAppearance (system caption settings), SubtitleCue,
 │   │                          #   VTT/SRT/ASS parsers (content-filter only; captions are not app-parsed)
 │   ├── LiveTV/         # LiveTVSessionHandoff (store + providers live in RivuletCore/LiveTV)
 │   ├── Insights/       # InsightsTriviaClient, InsightsShowIDResolver (in-player cast/trivia panel)
-│   ├── Cache/          # CacheManager, ImageCacheManager
+│   ├── Cache/          # CacheManager, ImageCacheManager, TopShelfComposer,
+│   │                   #   TopShelfImageCompositor (Top Shelf artwork and logo placement)
 │   └── Focus/          # FocusMemory (tvOS section focus restoration)
 ├── Views/
 │   ├── Player/         # UniversalPlayerView, UniversalPlayerViewModel, PlayerContainerViewController,
@@ -92,7 +98,10 @@ Rivulet/                # The tvOS app — everything below.
 │   │   └── PostVideo/  # Post-playback summary overlays
 │   ├── Media/          # PreviewContext, HeroBackdropSupport, FocusScrollMotion
 │   │   ├── UIKit/, PlexHome/UIKit/, MediaDetail/UIKit/, Person/UIKit/, Library/UIKit/, PreviewCarousel/UIKit/
-│   │   │              #   — the canonical UIKit home/detail/library/person/carousel surfaces
+│   │   │              #   The canonical UIKit home/detail/library/person/carousel surfaces.
+│   │   │              #   UIKit/Cells/ContinueWatchingCard{Compositor,Placement,Cache} build the
+│   │   │              #   Continue Watching card and hold the shared artwork analysis;
+│   │   │              #   PlexHome/UIKit/HeroScrim reads it for the Home hero
 │   │   └── Hero/       # HeroPlaySession + hero support (SwiftUI HeroBackdropLayer/OverlayContent removed)
 │   ├── Music/UIKit/    # MusicLibraryViewController (+ MusicLibrarySidebarView, MusicBrowseViewController),
 │   │                   #   MusicAlbumViewController (album and playlist), MusicArtistViewController,
@@ -106,8 +115,12 @@ Rivulet/                # The tvOS app — everything below.
 │   │                   #   LiveMultiviewViewController, LiveCardCell, LiveMiniPlayerView
 │   ├── Settings/       # SettingsDescriptors, SettingsModels, PlexAuthView
 │   │   └── UIKit/      # SettingsContainer/Page VCs, SettingsCell, SettingsPageModels (canonical)
-│   ├── Components/     # CachedAsyncImage, GlassRowStyle, WhatsNewView
-│   └── TVNavigation/   # TVSidebarView, NavigationEnvironment
+│   ├── Components/     # CachedAsyncImage, GlassRowStyle, WhatsNewView,
+│   │                   #   ProfilePickerOverlay (launch gate), ProfileSwitcherPopup (sidebar panel)
+│   └── TVNavigation/   # TVSidebarView (tab content, launch gates), RootShellHost,
+│       │               #   MenuPressInterceptor, NavigationEnvironment
+│       └── UIKit/      # RootShellViewController, ShellSidebarViewController,
+│                       #   ShellSidebarModel (the custom sidebar, see "Sidebar and profiles")
 └── Docs/                   # gitignored, maintainer-local (see Build & Run note)
     ├── RIVULET_PLAYER.md   # Canonical player reference (routing, AetherPlayer + AVPlayer)
     └── DESIGN_GUIDE.md     # UI/UX documentation
@@ -235,7 +248,7 @@ reach for on its own.
 The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Live TV slots, nav shells). No custom focus scope manager; isolation comes from system mechanisms:
 
 - **`fullScreenCover`** — automatic focus isolation for overlays/popups
-- **`TabView` with `sidebarAdaptable`** — system-managed sidebar/content focus
+- **The sidebar is the UIKit shell** (`RootShellViewController` + `ShellSidebarViewController`), not `TabView(.sidebarAdaptable)`: the shell drives sidebar/content focus (`expandSidebar` / `collapseSidebar`, the edge catcher), and `TVSidebarView` only builds tab content
 - **`@FocusState` + `.onAppear`** — setting initial focus in presented views
 - **`FocusMemory`** — remembers and restores focus within scrollable sections
 
@@ -249,6 +262,37 @@ The SwiftUI primitives below apply only to the remaining SwiftUI surfaces (Live 
     focusedUserId = profileManager.selectedUser?.id
 }
 ```
+
+### Sidebar and profiles
+
+**The sidebar is custom, and its reference is the Apple TV app's sidebar.** The
+Apple TV app does not use UIKit's system tab sidebar: it builds its own on a
+split view, with its own panel radius, row pitch, focus platter and icon column.
+`ShellSidebarViewController`'s `Metrics` are measured against that. Do not
+measure the system sidebar (`UITabBarController`, `TabView(.sidebarAdaptable)`)
+as the reference: its numbers differ (a 52 pt panel radius against the Apple TV
+app's 40), and matching it moves Rivulet away from the app it sits beside. Only
+the panel frame, the pill origin and the morph timing still come from the system
+sidebar.
+
+- **`RootShellViewController` is the shell**: one content child per tab, the
+  sidebar as chrome, the left-edge focus catcher and the Menu policy. SwiftUI
+  stays the tab authority. The shell reports intent through `onTabChange`, and
+  `TVSidebarView`'s selection binding pushes the result back. The rows come from
+  `ShellSidebarModel.sections`, which is pure and unit-tested.
+- **The profile row is not a tab.** Selecting `.account` never becomes
+  `selectedTab`: with more than one profile it presents `ProfileSwitcherPopup`
+  (the profile panel), and while that is up the collapsed pill names the user.
+  Closing the panel on the profile it opened on reopens the sidebar on the
+  profile row (`profileRowRequest`). Switching to another profile goes to Home
+  with the sidebar closed (`collapseRequest`), as the Apple TV app does.
+- **"Profile Picker on Launch" is a hard gate.** `ProfilePickerOverlay` reports a
+  chosen profile through `onSelected`; `TVSidebarView` re-presents the picker on
+  any other close, so Menu cannot dismiss it into the last profile's content.
+  Content, What's New and a held deep link (`DeepLinkHandler.isShellReady`) all
+  wait behind it. The same gate comes up mid-session when
+  `needsProfileSelection` turns true, and it stops music and dismisses whatever
+  is presented first, because the picker cannot present over a player.
 
 ### Remote Input (every remote type)
 
@@ -462,14 +506,30 @@ file. Off by default (Settings → Playback → Content Filtering).
 judges all of them against the user's settings at playback time:
 1. **The title's own subtitle file**: the English external text stream Plex serves
    (`ContentFilterSources.transcriptStream`), fetched and scanned against
-   `ProfanityDictionary` up front. This is what makes language muting work with
-   subtitles off, and it is the only language source on the `hls` route.
-2. **The subtitles on screen**: the active cue, matched live. Covers titles whose
-   only subtitles are embedded (no `key`, so Plex can't serve them on their own).
+   `ProfanityDictionary` up front. It is the only language source on the `hls` route.
+2. **The engine's subtitle cues**: the track on screen, or, with subtitles off and
+   no other language source, an embedded English or unlabeled track the filter
+   selects and reads unseen (`ContentFilterSources.silentTrack`,
+   `syncSilentSubtitleRead`; no preference saved, the user's subtitles stay Off).
+   Image tracks (PGS, VobSub, DVB) are read on device by `SubtitleImageReader`
+   (Vision), in memory only. Aether route only.
 3. **An imported MCF/EDL list** from the user's list source, the only source of
    scene skips. A folder source is searched by file name, IMDb id, then rating key.
 
 Rules that look wrong until you know them:
+- **An embedded subtitle stream cannot be fetched on its own.** It has no `key`,
+  and asking PMS for one by stream id answers 501. That is why source 2 reads the
+  engine's cues: the silent track is selected in the engine and never drawn. The
+  engine holds one subtitle selection, so a track the user turned on always wins
+  it, and the silent read only runs while theirs is Off.
+- **Image cues are read ahead of the playhead**, one at a time and off the main
+  thread, so a line's words are usually known before it is spoken. Text ranks
+  before image and forced-only last when the silent track is picked.
+- **A title with no English or unlabeled subtitle track cannot be language
+  filtered**, and neither can an embedded-only title on the `hls` route. The rail
+  says so instead of failing quietly (`ContentFilterSources.languageNotice`): "No
+  Readable Subtitles", or "Use English Subtitles" when another language's track is
+  on screen and blocks the silent read.
 - **moviecontentfilter.com's `.mcf` download is not in real time.** It rescales the
   title onto 0–99:59:59.999 and leaves the player to map it back with the release's
   own start and end, which Rivulet can't know, so such a file is rejected as
@@ -487,6 +547,57 @@ Rules that look wrong until you know them:
   every other term has an innocent host ("Scunthorpe", "cocktail", romanized names).
 - **The rail button pauses filtering for the current title only.** It shows only
   while filtering is on in Settings, and `reset()` clears the pause on every item.
+
+### Top Shelf and deep links
+
+**URL and user-activity entry points live on the SwiftUI scene and must stay
+there**: `.onOpenURL` and `.onContinueUserActivity` on the `WindowGroup` in
+`RivuletApp.swift`. In a scene-based app UIKit never calls the app delegate's
+`application(_:open:options:)`, and it fails silently. Rivulet handled links
+there for six months, and for that whole time every Top Shelf button opened the
+app and did nothing else.
+
+- **One link definition**: `Models/Shared/RivuletLink.swift` builds and parses
+  `rivulet://play` and `rivulet://detail`, and is compiled into the app and the
+  Top Shelf extension. Do not write the scheme, a host or a query name as a
+  string anywhere else.
+- `DeepLinkHandler` holds a link that arrives before the shell is ready
+  (`isShellReady`: launch, the profile gate) and delivers it afterwards.
+- **Verify any change by opening a link**, with the app closed and with it
+  running. A clean build says nothing about whether the scene receives the URL.
+
+```bash
+xcrun simctl openurl <udid> "rivulet://detail?ratingKey=<key>"
+xcrun simctl openurl <udid> "rivulet://play?ratingKey=<key>"
+```
+
+### Artwork analysis (Continue Watching, Top Shelf, Home hero)
+
+Three surfaces read the artwork before drawing over it, and they share one
+analysis. `ContinueWatchingCardCompositor.analyse` (in
+`ContinueWatchingCardPlacement.swift`) turns a still into `Signals`: face boxes,
+a luminance grid, and Vision's attention and objectness maps. The scoring is pure
+functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
+`placement`), tested without Vision in `ContinueWatchingCardCompositorTests`.
+
+- **Continue Watching card**: `ContinueWatchingCardCompositor` builds the card
+  as one image (the still, a mirrored blurred band under it, a gradient), once
+  per still, cached by `ContinueWatchingCardCache`. The title goes on either edge
+  and at the height that covers the least: `trailingCost` keeps it on the leading
+  edge unless that edge is clearly worse.
+- **Top Shelf logo**: `TopShelfImageCompositor.placement` runs the same `choose`
+  over its own candidate rects.
+- **Home hero scrim**: `HeroScrim.strength` reads only the luminance grid under
+  the text stack and darkens a bright or busy region.
+- **Vision needs the CPU pin in the simulator.** The simulator can only build
+  Vision's models on the CPU; without `setComputeDevice` under
+  `#if targetEnvironment(simulator)` face detection fails there, `Signals.faces`
+  is nil and each title stays where it started, which looks like scoring that
+  does nothing.
+- **Tune the weights, never special-case a title.** A bad placement is fixed in
+  `subjectWeight`, `faceWeight`, `travelWeight`, `comfortableLuma` or
+  `trailingCost`, with the still added as a test case. A per-title exception fixes
+  one card on one server.
 
 ### Plex Metadata Hierarchy
 
@@ -526,7 +637,7 @@ Watching mutation from a shelf (reverted in `90bfd2b` for focus reasons).
 
 Every media surface (Home hero and shelves, library and watchlist grids, Search,
 Discover, Person, the expanded detail with its below-fold rows and footer) rests
-on the Apple TV app's grid, read from its binary (`Docs/atv_ref/REA_NOTES.md` Q2):
+on one grid, measured against the Apple TV app's layout:
 an **80 pt** side margin, **40 pt** between tiles, and a tile width that divides
 the rest by the column count (`MediaRowMetrics.gridWidth`: 6 across = 260 for
 posters and cast, 5 = 320 for Continue Watching, 4 = 410 for episodes, 3 = 560).
@@ -658,8 +769,10 @@ for you and nothing warns you, so a toggle can look and persist perfectly while
 having no effect — the state issue #260 shipped in for 16 builds, after the UIKit
 migration orphaned two keys whose only reader was the deleted SwiftUI library
 view. When you add or touch a row, grep its key across the repo: a single hit, in
-`SettingsPageModels.swift`, means dead. `musicLoudnessNormalization` and
-`musicShowQualityBadges` are dead right now. Also check the reader re-renders on
+`SettingsPageModels.swift`, means dead. The Music page was withdrawn for exactly
+this (`SettingsPageModels.music` returns no rows): `musicLoudnessNormalization`,
+`musicCrossfadeDuration` and `musicShowQualityBadges` had no reader. Restore a row
+only with its reader. Also check the reader re-renders on
 `UserDefaults.didChangeNotification` if the surface computes from the key at
 snapshot/render time, and never apply a display preference where it would be
 written to a cache.
@@ -762,13 +875,26 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 | Music Now Playing | `Views/Music/UIKit/MusicNowPlayingViewController.swift` |
 | Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
 | Music menus | `Views/Music/UIKit/MusicMenus.swift` |
-
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
+| Content filter sources | `Services/Plex/Playback/ContentFilter/ContentFilterSources.swift` |
+| Image subtitle reader | `Services/Plex/Playback/ContentFilter/SubtitleImageReader.swift` |
+| `hls` route trust relay | `Services/Plex/Playback/HLSTrustRelay.swift` |
+| Navigation shell | `Views/TVNavigation/UIKit/RootShellViewController.swift` |
+| Sidebar | `Views/TVNavigation/UIKit/ShellSidebarViewController.swift` |
+| Sidebar rows (pure) | `Views/TVNavigation/UIKit/ShellSidebarModel.swift` |
+| Launch profile picker | `Views/Components/ProfilePickerOverlay.swift` |
+| Sidebar profile panel | `Views/Components/ProfileSwitcherPopup.swift` |
+| `rivulet://` links | `Models/Shared/RivuletLink.swift` |
+| Deep link handling | `Services/DeepLinkHandler.swift` |
+| Continue Watching card | `Views/Media/UIKit/Cells/ContinueWatchingCardCompositor.swift` |
+| Artwork analysis and scoring | `Views/Media/UIKit/Cells/ContinueWatchingCardPlacement.swift` |
+| Home hero scrim | `Views/Media/PlexHome/UIKit/HeroScrim.swift` |
+| Top Shelf logo placement | `Services/Cache/TopShelfImageCompositor.swift` |
 | Focus memory | `Services/Focus/FocusMemory.swift` |
-| Watch progress rule | `Models/Media/WatchProgressPolicy.swift` |
-| Plex star rating / favorite | `Models/Plex/PlexUserRating.swift` |
-| Plex API | `Services/Plex/PlexNetworkManager.swift` |
+| Watch progress rule | `RivuletCore/Models/Media/WatchProgressPolicy.swift` |
+| Plex star rating / favorite | `RivuletCore/Models/Plex/PlexUserRating.swift` |
+| Plex API | `RivuletCore/Plex/PlexNetworkManager.swift` |
 | Glass row styling | `Views/Components/GlassRowStyle.swift` |
 | Settings rows / pages | `Views/Settings/UIKit/SettingsPageModels.swift` |
 | Player canon docs | `Docs/RIVULET_PLAYER.md` |
