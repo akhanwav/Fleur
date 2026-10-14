@@ -42,11 +42,11 @@ final class SettingsHeaderCell: UICollectionViewCell {
         label.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(label)
         NSLayoutConstraint.activate([
-            // Aligns with SettingsCell's title inset (28) so captions and row
-            // titles share a left edge.
-            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -28),
-            label.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8)
+            // tvOS Settings insets captions 32, two past the row titles' 30.
+            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 32),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -32),
+            // Baseline 17 above the next capsule, as measured.
+            label.lastBaselineAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -9)
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -56,8 +56,7 @@ final class SettingsHeaderCell: UICollectionViewCell {
         // cap height (31 x 0.70 = 21.7), against 27.0pt for a row title.
         label.attributedText = NSAttributedString(string: title.uppercased(), attributes: [
             .font: UIFont.systemFont(ofSize: 31, weight: .semibold),
-            .foregroundColor: UIColor.white.withAlphaComponent(0.55),
-            .kern: 1.5
+            .foregroundColor: UIColor.tertiaryLabel
         ])
     }
 }
@@ -86,6 +85,13 @@ final class SettingsCell: UICollectionViewCell {
     private var bgBottom: NSLayoutConstraint!
     private var bgLeading: NSLayoutConstraint!
     private var bgTrailing: NSLayoutConstraint!
+    private var valueToChevron: NSLayoutConstraint!
+    private var valueToEdge: NSLayoutConstraint!
+
+    // Measured off tvOS Settings: fill white 0.10, value and chevron white 0.3 / black 0.4.
+    private static let restingFill = UIColor.white.withAlphaComponent(0.10)
+    private static let restingValue = UIColor.white.withAlphaComponent(0.3)
+    private static let focusedValue = UIColor.black.withAlphaComponent(0.4)
 
     /// Called when this cell GAINS focus (drives the description panel).
     var onFocusGained: (() -> Void)?
@@ -102,8 +108,11 @@ final class SettingsCell: UICollectionViewCell {
         backgroundColor = .clear
 
         // Capsule rows (CapsuleBackgroundView rounds itself to height/2).
-        bg.layer.masksToBounds = true
-        bg.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        // Unmasked so the focus shadow shows; the fill still follows cornerRadius.
+        bg.backgroundColor = Self.restingFill
+        bg.layer.shadowColor = UIColor.black.cgColor
+        bg.layer.shadowOffset = CGSize(width: 0, height: 6)
+        bg.layer.shadowRadius = 10
         bg.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(bg)
         // Kill any system focus/selection background so only `bg` paints.
@@ -118,8 +127,8 @@ final class SettingsCell: UICollectionViewCell {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(titleLabel)
 
-        valueLabel.font = .systemFont(ofSize: 32, weight: .medium)
-        valueLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        valueLabel.font = titleLabel.font
+        valueLabel.textColor = Self.restingValue
         valueLabel.textAlignment = .right
         valueLabel.setContentHuggingPriority(.required, for: .horizontal)
         valueLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -127,8 +136,8 @@ final class SettingsCell: UICollectionViewCell {
         bg.addSubview(valueLabel)
 
         chevron.image = UIImage(systemName: "chevron.right",
-                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 30, weight: .semibold))
-        chevron.tintColor = UIColor.white.withAlphaComponent(0.55)
+                                withConfiguration: UIImage.SymbolConfiguration(pointSize: 38, weight: .medium))
+        chevron.tintColor = Self.restingValue
         chevron.contentMode = .center
         chevron.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(chevron)
@@ -148,19 +157,23 @@ final class SettingsCell: UICollectionViewCell {
         bgLeading = bg.leadingAnchor.constraint(equalTo: contentView.leadingAnchor)
         bgTrailing = bg.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
 
+        // tvOS Settings: value ink ends 86 from the edge before a chevron, 31 without.
+        valueToChevron = valueLabel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -85)
+        valueToEdge = valueLabel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -30)
+
         NSLayoutConstraint.activate([
             bgTop, bgBottom, bgLeading, bgTrailing,
 
-            titleLabel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 28),
+            titleLabel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 30),
             titleLabel.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
 
-            chevron.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -28),
+            chevron.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -32),
             chevron.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
 
             checkmark.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -28),
             checkmark.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
 
-            valueLabel.trailingAnchor.constraint(equalTo: chevron.leadingAnchor, constant: -16),
+            valueToChevron,
             valueLabel.centerYAnchor.constraint(equalTo: bg.centerYAnchor),
             valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 16)
         ])
@@ -173,6 +186,8 @@ final class SettingsCell: UICollectionViewCell {
         valueLabel.text = value
         valueLabel.isHidden = (value == nil || value?.isEmpty == true)
         chevron.isHidden = !showsChevron
+        NSLayoutConstraint.deactivate([valueToChevron, valueToEdge])
+        (showsChevron ? valueToChevron : valueToEdge).isActive = true
         self.destructive = destructive
         setDimmed(dimmed)
         applyAppearance(focused: isFocused)
@@ -237,15 +252,15 @@ final class SettingsCell: UICollectionViewCell {
             // Bright near-opaque white capsule + dark text.
             bg.backgroundColor = .white
             titleLabel.textColor = destructive ? .systemRed : .black
-            valueLabel.textColor = UIColor.black.withAlphaComponent(0.6)
-            chevron.tintColor = UIColor.black.withAlphaComponent(0.6)
+            valueLabel.textColor = Self.focusedValue
+            chevron.tintColor = Self.focusedValue
             checkmark.tintColor = .black
         } else {
             // Unfocused rows are translucent glass capsules (visible buttons).
-            bg.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+            bg.backgroundColor = Self.restingFill
             titleLabel.textColor = destructive ? .systemRed : .white
-            valueLabel.textColor = UIColor.white.withAlphaComponent(0.55)
-            chevron.tintColor = UIColor.white.withAlphaComponent(0.55)
+            valueLabel.textColor = Self.restingValue
+            chevron.tintColor = Self.restingValue
             checkmark.tintColor = .systemBlue
         }
         // Grow the capsule outward by the same amount on all four sides. The
@@ -257,6 +272,7 @@ final class SettingsCell: UICollectionViewCell {
         bgLeading.constant = -outset
         bgTrailing.constant = outset
         layer.zPosition = focused ? 1 : 0
+        bg.layer.shadowOpacity = focused ? 0.3 : 0
         // Inside the focus coordinator's block this animates on the native focus
         // clock; from `configure` it just applies.
         contentView.layoutIfNeeded()

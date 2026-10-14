@@ -5,11 +5,10 @@
 //  SettingsLeftPanelView.swift
 //  Rivulet
 //
-//  Left description panel for the UIKit Settings split, matching the SwiftUI
-//  `SettingsLeftPanel`: a per-PAGE icon (320×320, cornerRadius 60 continuous,
-//  color@0.18, 120pt symbol) that is fixed for the page, plus a per-ROW
-//  description (28pt, white@0.55) that crossfades (0.25) as focus moves
-//  between rows. Reuses `SettingsDescriptorStore` (pageInfo + descriptor).
+//  Left description panel for the UIKit Settings split, matching
+//  tvOS Settings: a per-PAGE icon tile (540×540, centred in the 870×654 panel)
+//  plus a per-ROW description pinned just below the panel (Body, secondary
+//  label) that crossfades as focus moves. Reuses `SettingsDescriptorStore`.
 //
 
 import UIKit
@@ -32,19 +31,21 @@ final class SettingsLeftPanelView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func setup() {
-        iconContainer.layer.cornerRadius = 60
+        iconContainer.layer.cornerRadius = 110
         iconContainer.layer.cornerCurve = .continuous
         iconContainer.translatesAutoresizingMaskIntoConstraints = false
         addSubview(iconContainer)
 
         iconView.contentMode = .center
-        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 120, weight: .medium)
+        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 200, weight: .medium)
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconContainer.addSubview(iconView)
 
-        descriptionLabel.font = .systemFont(ofSize: 28, weight: .regular)
-        descriptionLabel.textColor = UIColor.white.withAlphaComponent(0.55)
-        descriptionLabel.numberOfLines = 4
+        descriptionLabel.font = .preferredFont(forTextStyle: .body)
+        descriptionLabel.textColor = .secondaryLabel
+        descriptionLabel.numberOfLines = 5
+        descriptionLabel.adjustsFontSizeToFitWidth = true
+        descriptionLabel.minimumScaleFactor = 12.0 / 29.0
         descriptionLabel.textAlignment = .center
         descriptionLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(descriptionLabel)
@@ -62,32 +63,29 @@ final class SettingsLeftPanelView: UIView {
         subtextLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(subtextLabel)
 
-        // Hint collapses to zero height (active by default) so pages with no
-        // hint keep the original 28pt icon→description gap (16 + 0 + 12).
+        // Hint collapses to zero height on pages without one.
         hintHeightZero = hintLabel.heightAnchor.constraint(equalToConstant: 0)
         hintHeightZero.isActive = true
 
         NSLayoutConstraint.activate([
-            // Icon vertically centered in the panel, like the SwiftUI Spacer/Spacer.
             iconContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
-            iconContainer.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -80),
-            iconContainer.widthAnchor.constraint(equalToConstant: 320),
-            iconContainer.heightAnchor.constraint(equalToConstant: 320),
+            iconContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconContainer.widthAnchor.constraint(equalToConstant: 540),
+            iconContainer.heightAnchor.constraint(equalToConstant: 540),
 
             iconView.centerXAnchor.constraint(equalTo: iconContainer.centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: iconContainer.centerYAnchor),
 
-            hintLabel.topAnchor.constraint(equalTo: iconContainer.bottomAnchor, constant: 16),
+            hintLabel.topAnchor.constraint(equalTo: iconContainer.bottomAnchor, constant: 12),
             hintLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             hintLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 700),
             hintLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 32),
             hintLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
 
-            descriptionLabel.topAnchor.constraint(equalTo: hintLabel.bottomAnchor, constant: 12),
-            descriptionLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            descriptionLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 700),
-            descriptionLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 32),
-            descriptionLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
+            // Pinned under the panel whatever the image, as tvOS Settings does.
+            descriptionLabel.topAnchor.constraint(equalTo: bottomAnchor),
+            descriptionLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            descriptionLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
 
             subtextLabel.topAnchor.constraint(equalTo: descriptionLabel.bottomAnchor, constant: 12),
             subtextLabel.centerXAnchor.constraint(equalTo: centerXAnchor),

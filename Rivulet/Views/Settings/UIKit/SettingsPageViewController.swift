@@ -64,6 +64,8 @@ final class SettingsPageViewController: UIViewController {
         let section = NSCollectionLayoutSection(group: group)
         section.interGroupSpacing = 8
         section.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 24, bottom: 24, trailing: 24)
+        // Insets from the bounds, not the safe area: the container places the pane.
+        section.contentInsetsReference = .none
         let layout = UICollectionViewCompositionalLayout(section: section)
 
         collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)

@@ -61,8 +61,8 @@ final class SettingsContainerViewController: UIViewController {
     }
 
     private func setupLayout() {
-        titleLabel.font = .systemFont(ofSize: 52, weight: .bold)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.65)
+        titleLabel.font = .systemFont(ofSize: 57, weight: .bold)
+        titleLabel.textColor = .tertiaryLabel
         titleLabel.textAlignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(titleLabel)
@@ -78,19 +78,21 @@ final class SettingsContainerViewController: UIViewController {
         rightPane.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(rightPane)
 
+        // Fixed points measured off tvOS Settings (1920x1080): title baseline
+        // 111, panel 90,180 870x654, rows from x 1060 (the page adds 24).
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
+            titleLabel.firstBaselineAnchor.constraint(equalTo: view.topAnchor, constant: 111),
             titleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             titleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
-            leftPanel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            leftPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            leftPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            leftPanel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.55),
+            leftPanel.topAnchor.constraint(equalTo: view.topAnchor, constant: 180),
+            leftPanel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 90),
+            leftPanel.widthAnchor.constraint(equalToConstant: 870),
+            leftPanel.heightAnchor.constraint(equalToConstant: 654),
 
-            rightPane.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
-            rightPane.leadingAnchor.constraint(equalTo: leftPanel.trailingAnchor),
-            rightPane.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            rightPane.topAnchor.constraint(equalTo: view.topAnchor, constant: 174),
+            rightPane.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 1036),
+            rightPane.widthAnchor.constraint(equalToConstant: 828),
             rightPane.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
