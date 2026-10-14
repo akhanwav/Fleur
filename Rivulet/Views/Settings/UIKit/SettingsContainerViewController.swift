@@ -36,8 +36,9 @@ final class SettingsContainerViewController: UIViewController {
     private var pages: [SettingsPageViewController] = []
     private var topPage: SettingsPageViewController? { pages.last }
 
-    private let slideDistance: CGFloat = 80
-    private let transitionDuration: TimeInterval = 0.45
+    // Measured off tvOS Settings: pages move about 72 pt and settle in about 0.67 s.
+    private let slideDistance: CGFloat = 72
+    private let transitionDuration: TimeInterval = 0.67
     private var isAnimating = false
 
     var depth: Int { pages.count }
