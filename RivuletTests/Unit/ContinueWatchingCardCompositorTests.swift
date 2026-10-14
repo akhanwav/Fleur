@@ -225,11 +225,19 @@ final class ContinueWatchingCardCompositorTests: XCTestCase {
                                              saliency: nil, subject: faint), 0)
     }
 
-    func testCrowdingAFaceMovesTheTitleAway() {
+    func testCrowdingAFaceTipsAPoorSpotIntoMoving() {
         // A face beside the middle slot, touching nothing: the hard rule passes every slot.
-        let face = CGRect(x: 0.5, y: 0.45, width: 0.1, height: 0.1)
-        XCTAssertNotEqual(Compositor.chooseSlot(candidates: slots, faces: [face], luma: grid { _, _ in 0.2 },
-                                                saliency: nil), 0)
+        let face = CGRect(x: 0.5, y: 0.42, width: 0.16, height: 0.16)
+        // Bright under the middle: under the bar alone, over it with the crowding.
+        let luma = grid { _, y in (7..<13).contains(y) ? 0.82 : 0.2 }
+        XCTAssertEqual(Compositor.chooseSlot(candidates: slots, faces: [], luma: luma, saliency: nil), 0)
+        XCTAssertNotEqual(Compositor.chooseSlot(candidates: slots, faces: [face], luma: luma, saliency: nil), 0)
+    }
+
+    func testAReadableDefaultHoldsAgainstASlightlyBetterSpot() {
+        // Busy under the middle slot but still under the bar; flat under the others.
+        let luma = grid { x, y in (8..<12).contains(y) ? ((x + y) % 2 == 0 ? 0.3 : 0.35) : 0.3 }
+        XCTAssertEqual(Compositor.chooseSlot(candidates: slots, faces: [], luma: luma, saliency: nil), 0)
     }
 
     func testDarkEnoughIsNotWorthMovingFor() {
@@ -238,46 +246,55 @@ final class ContinueWatchingCardCompositorTests: XCTestCase {
         XCTAssertEqual(Compositor.chooseSlot(candidates: slots, faces: [], luma: luma, saliency: nil), 0)
     }
 
-    func testPlacementWithNoSignalIsTheMiddleSlot() {
+    /// Where a title rests with no analysis: leading, on the floor.
+    private func rest(_ logo: CGSize?, _ text: CGSize? = nil) -> Compositor.Placement {
         let g = Compositor.Geometry(cardWidth: 320)
-        XCTAssertEqual(Compositor.placement(signals: .none, logoSize: nil, geometry: g), Compositor.Placement())
+        return Compositor.restingPlacement(for: g.titleFootprint(logoSize: logo, textSize: text), geometry: g)
+    }
+
+    func testPlacementWithNoSignalRestsOnTheFloor() {
+        let g = Compositor.Geometry(cardWidth: 320)
+        XCTAssertEqual(rest(nil).offset, 26)
+        XCTAssertEqual(Compositor.placement(signals: .none, logoSize: nil, geometry: g), rest(nil))
         // Brightness alone, with face detection unavailable, never moves the title.
         let blind = Compositor.Signals(size: CGSize(width: 320, height: 180), faces: nil,
                                        luma: grid { _, y in y < 12 ? 1 : 0 }, saliency: nil)
-        XCTAssertEqual(Compositor.placement(signals: blind, logoSize: nil, geometry: g).offset, 0)
+        XCTAssertEqual(Compositor.placement(signals: blind, logoSize: nil, geometry: g).offset, rest(nil).offset)
     }
 
     func testPlacementScoresTheLogosOwnFootprint() {
         let g = Compositor.Geometry(cardWidth: 320)
-        // A face in the middle box's top rows: the whole box covers it in every
-        // slot it reaches, a wide short logo centred in the box does not.
-        let face = CGRect(x: 0.1, y: 44.0 / 180, width: 0.1, height: 10.0 / 180)
+        // A face in the resting box's top rows: the whole box covers it there,
+        // a wide short logo resting on the floor does not.
+        let box = g.titleRect(g.titleFootprint(logoSize: nil), side: .leading, offset: rest(nil).offset)
+        let face = CGRect(x: 0.1, y: (box.minY + 2) / 180, width: 0.1, height: 10.0 / 180)
         let signals = Compositor.Signals(size: CGSize(width: 320, height: 180), faces: [face],
                                          luma: grid { _, _ in 0.3 }, saliency: nil)
-        XCTAssertNotEqual(Compositor.placement(signals: signals, logoSize: nil, geometry: g), Compositor.Placement())
-        XCTAssertEqual(Compositor.placement(signals: signals, logoSize: CGSize(width: 800, height: 100), geometry: g),
-                       Compositor.Placement())
+        XCTAssertNotEqual(Compositor.placement(signals: signals, logoSize: nil, geometry: g), rest(nil))
+        let logo = CGSize(width: 800, height: 100)
+        XCTAssertEqual(Compositor.placement(signals: signals, logoSize: logo, geometry: g), rest(logo))
     }
 
     func testPlacementScoresTheFallbackTitlesLine() {
         let g = Compositor.Geometry(cardWidth: 320)
-        // A face right of the title box, on the middle slot's text line.
-        let face = CGRect(x: 230.0 / 320, y: 75.0 / 180, width: 60.0 / 320, height: 30.0 / 180)
+        // A face right of the title box, on the resting text line.
+        let text = CGSize(width: 400, height: 36)
+        let line = g.titleRect(g.titleFootprint(logoSize: nil, textSize: text), side: .leading, offset: rest(nil, text).offset)
+        let face = CGRect(x: 230.0 / 320, y: line.minY / 180, width: 60.0 / 320, height: line.height / 180)
         let signals = Compositor.Signals(size: CGSize(width: 320, height: 180), faces: [face],
                                          luma: grid { _, _ in 0.3 }, saliency: nil)
-        XCTAssertEqual(Compositor.placement(signals: signals, logoSize: nil, geometry: g).offset, 0)
-        XCTAssertNotEqual(Compositor.placement(signals: signals, logoSize: nil, textSize: CGSize(width: 400, height: 36),
-                                               geometry: g).offset, 0)
+        XCTAssertEqual(Compositor.placement(signals: signals, logoSize: nil, geometry: g), rest(nil))
+        XCTAssertNotEqual(Compositor.placement(signals: signals, logoSize: nil, textSize: text, geometry: g), rest(nil, text))
     }
 
-    func testPlacementLowersTheTitleOffASubjectNoFurtherThanItMust() {
+    func testPlacementRaisesTheTitleOffASubjectOnTheFloor() {
         let g = Compositor.Geometry(cardWidth: 320)
-        // A subject over everything but the still's bottom 54 pt.
+        // A subject over the still's bottom half only.
         let signals = Compositor.Signals(size: CGSize(width: 320, height: 180), faces: [], luma: grid { _, _ in 0.3 },
-                                         saliency: nil, subject: grid { _, y in y < 14 ? 1 : 0 })
-        let placement = Compositor.placement(signals: signals, logoSize: CGSize(width: 148, height: 30), geometry: g)
-        // The first 8 pt step that clears it, short of the floor at +59.
-        XCTAssertEqual(placement.offset, 48)
+                                         saliency: nil, subject: grid { _, y in y >= 10 ? 1 : 0 })
+        let logo = CGSize(width: 148, height: 30)
+        XCTAssertEqual(rest(logo).offset, 59)
+        XCTAssertLessThan(Compositor.placement(signals: signals, logoSize: logo, geometry: g).offset, 0)
     }
 
     /// Signals of a flat dark 320 x 180 still with `faces` given in points.
@@ -309,17 +326,17 @@ final class ContinueWatchingCardCompositorTests: XCTestCase {
 
     func testLeadingEdgeWinsATieAndANearTie() {
         let g = Compositor.Geometry(cardWidth: 320), logo = CGSize(width: 400, height: 200)
-        XCTAssertEqual(Compositor.placement(signals: signals([]), logoSize: logo, geometry: g), Compositor.Placement())
+        XCTAssertEqual(Compositor.placement(signals: signals([]), logoSize: logo, geometry: g), rest(logo))
         // A faint subject down the left half costs less than crossing over.
         let faint = signals([], subject: grid { x, _ in x < 10 ? 0.2 : 0 })
-        XCTAssertEqual(Compositor.placement(signals: faint, logoSize: logo, geometry: g), Compositor.Placement())
+        XCTAssertEqual(Compositor.placement(signals: faint, logoSize: logo, geometry: g), rest(logo))
     }
 
     func testASubjectFillingTheLeadingEdgeSendsTheTitleAcross() {
         let g = Compositor.Geometry(cardWidth: 320)
         let filled = signals([], subject: grid { x, _ in x < 10 ? 1 : 0 })
         let placement = Compositor.placement(signals: filled, logoSize: CGSize(width: 400, height: 200), geometry: g)
-        XCTAssertEqual(placement, Compositor.Placement(side: .trailing))
+        XCTAssertEqual(placement, Compositor.Placement(side: .trailing, offset: rest(CGSize(width: 400, height: 200)).offset))
     }
 
     func testAClearEdgeBeatsShrinkingAndTheLeastCoveredFullSizeSlotBeatsBoth() {
@@ -327,7 +344,7 @@ final class ContinueWatchingCardCompositorTests: XCTestCase {
         // The face the small logo would duck on the leading edge: the trailing edge is clear at full size.
         let leadingFace = CGRect(x: 60, y: 60, width: 50, height: 51)
         XCTAssertEqual(Compositor.placement(signals: signals([leadingFace]), logoSize: logo, geometry: g),
-                       Compositor.Placement(side: .trailing))
+                       Compositor.Placement(side: .trailing, offset: rest(logo).offset))
         // Full-height faces on both edges, the trailing one narrow: no size clears either.
         let walls = [CGRect(x: 20, y: 0, width: 130, height: 180), CGRect(x: 280, y: 0, width: 26, height: 180)]
         let placement = Compositor.placement(signals: signals(walls), logoSize: logo, geometry: g)
@@ -359,8 +376,9 @@ final class ContinueWatchingCardCompositorTests: XCTestCase {
         let g = Compositor.Geometry(cardWidth: 320)
         // A subject fills the left half; a face sits in the mirrored box, left of a 100 pt line of text.
         let s = signals([CGRect(x: 170, y: 80, width: 20, height: 20)], subject: grid { x, _ in x < 10 ? 1 : 0 })
-        XCTAssertEqual(Compositor.placement(signals: s, logoSize: nil, textSize: CGSize(width: 100, height: 36), geometry: g),
-                       Compositor.Placement(side: .trailing))
+        let text = CGSize(width: 100, height: 36)
+        XCTAssertEqual(Compositor.placement(signals: s, logoSize: nil, textSize: text, geometry: g),
+                       Compositor.Placement(side: .trailing, offset: rest(nil, text).offset))
         // The whole box would cover it.
         XCTAssertEqual(Compositor.placement(signals: s, logoSize: nil, geometry: g).side, .leading)
     }

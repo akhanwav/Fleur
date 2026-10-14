@@ -79,6 +79,11 @@ nonisolated extension ContinueWatchingCardCompositor {
     static let trailingCost = 0.45
     /// A logo that hides a face wherever it goes is tried again this much smaller.
     static let smallTitleScale: CGFloat = 0.7
+    /// The default spot stands while it costs no more than this: a title that
+    /// reads there stays put, so a row of cards keeps one look.
+    static let goodEnoughCost = 0.6
+    /// Leaving the default must save at least this much.
+    static let moveMargin = 0.3
 
     /// How badly a light title reads on `rect`: bright, busy (tonal spread, and
     /// detail, which finds a mid-tone cartoon cast that spread misses), eye-catching,
@@ -124,6 +129,11 @@ nonisolated extension ContinueWatchingCardCompositor {
                 abs(covered($0) - covered($1)) > 1e-9 ? covered($0) < covered($1) : cost($0) < cost($1)
             } ?? 0
         }
+        // The default keeps its place unless it reads poorly and another reads clearly better.
+        func raw(_ index: Int) -> Double {
+            Self.cost(of: candidates[index], faces: faces, luma: luma, saliency: saliency, subject: subject)
+        }
+        if open.contains(0), raw(0) <= goodEnoughCost || raw(0) - raw(best) < moveMargin { return 0 }
         return best
     }
 
@@ -139,14 +149,17 @@ nonisolated extension ContinueWatchingCardCompositor {
     /// scored area to what the logo will cover, `textSize` to the fallback title's line.
     static func placement(signals: Signals, logoSize: CGSize?, textSize: CGSize? = nil,
                           geometry: Geometry) -> Placement {
-        guard let luma = signals.luma else { return Placement() }
-        let frame = aspectFill(signals.size, in: geometry.still)
         let title = geometry.titleFootprint(logoSize: logoSize, textSize: textSize)
+        let rest = restingPlacement(for: title, geometry: geometry)
+        guard let luma = signals.luma else { return rest }
+        let frame = aspectFill(signals.size, in: geometry.still)
         guard let faces = signals.faces else {
-            return Placement(strongShadow: needsStrongShadow(under: unit(title, in: frame), luma: luma))
+            let resting = geometry.titleRect(title, side: .leading, offset: rest.offset)
+            return Placement(offset: rest.offset, strongShadow: needsStrongShadow(under: unit(resting, in: frame), luma: luma))
         }
         func place(_ scale: CGFloat) -> (Placement, hidesFace: Bool) {
-            let offsets = geometry.titleOffsets(forHeight: title.height * scale)
+            // Lowest first: the lowest leading spot is the default.
+            let offsets = geometry.titleOffsets(forHeight: title.height * scale).sorted(by: >)
             let slots = [Side.leading, .trailing].flatMap { side in offsets.map { (side: side, offset: $0) } }
             let candidates = slots.map {
                 unit(geometry.titleRect(title, side: $0.side, offset: $0.offset, scale: scale), in: frame)
@@ -163,6 +176,11 @@ nonisolated extension ContinueWatchingCardCompositor {
         guard full.hidesFace, logoSize != nil else { return full.0 }
         let small = place(smallTitleScale)
         return small.hidesFace ? full.0 : small.0
+    }
+
+    /// Where a title rests before, or without, any analysis: on the leading edge, on the floor.
+    static func restingPlacement(for title: CGRect, geometry: Geometry) -> Placement {
+        Placement(offset: geometry.titleOffsets(forHeight: title.height).max() ?? 0)
     }
 
     /// Which of `candidates`, in the points of a `canvas` the still fills, a light

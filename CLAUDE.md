@@ -582,9 +582,11 @@ functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
 
 - **Continue Watching card**: `ContinueWatchingCardCompositor` builds the card
   as one image (the still, a mirrored blurred band under it, a gradient), once
-  per still, cached by `ContinueWatchingCardCache`. The title goes on either edge
-  and at the height that covers the least: `trailingCost` keeps it on the leading
-  edge unless that edge is clearly worse.
+  per still, cached by `ContinueWatchingCardCache`. The title rests leading, on the
+  floor (`restingPlacement`), and stays there while it reads (`goodEnoughCost`);
+  it moves only when another spot reads clearly better (`moveMargin`), so a row
+  keeps one look. `trailingCost` keeps it off the trailing edge unless needed.
+  The same hold applies to Top Shelf and the pause screen through `chooseSlot`.
 - **Top Shelf logo**: `TopShelfImageCompositor.placement` runs the same `choose`
   over its own candidate rects.
 - **Home hero scrim**: `HeroScrim.strength` reads only the luminance grid under

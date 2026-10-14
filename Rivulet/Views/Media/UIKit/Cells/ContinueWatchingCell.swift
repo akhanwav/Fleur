@@ -379,7 +379,8 @@ private final class ContinueWatchingTitleLogoView: UIView {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self, self.currentItemKey == key,
                   self.imageView.alpha == 0, self.titleLabel.alpha == 0 else { return }
-            self.show(nil, logoSize: nil, placement: Compositor.Placement())
+            self.show(nil, logoSize: nil, placement: Compositor.restingPlacement(
+                for: geometry.titleFootprint(logoSize: nil, textSize: textSize), geometry: geometry))
         }
     }
 
