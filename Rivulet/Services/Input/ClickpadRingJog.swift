@@ -9,28 +9,36 @@ import Foundation
 /// at 0.5, wheel position runs clockwise from 12 o'clock, and a turn's distance is
 /// weighted by 2.5 × the touch's radius (full weight at radius 0.4).
 ///
-/// A touch is classified once: it becomes a jog when it turns far enough before
-/// travelling the directional threshold in a straight line, and a swipe otherwise.
+/// A touch is classified once, from where it started: it becomes a jog when its
+/// angle turns past `15 / radius` degrees before its radius changes by the
+/// directional threshold, and a swipe otherwise. A touch that starts or strays
+/// too near the centre never jogs. The turn spent classifying is dropped, as
+/// UIKit's recognizer begins with zero delta.
 /// Feed absolute `GCMicroGamepad` dpad values (-1...1, y up); (0, 0) is a lift.
 ///
 /// Speed is AVKit's (`rotaryGestureDetected:`): each turn moves the scrub needle
 /// 100 points per weighted revolution, scaled up with the turn's velocity, along
 /// the 1760-point bar that spans the whole title.
 struct ClickpadRingJog {
+    /// Radius change that makes a touch a swipe.
     static let directionalThreshold = 0.15
-    /// Degrees of turn, at full weight, that classify a touch as a jog (inferred
-    /// from the recognizer's angle-threshold numerator).
-    static let angleThresholdDegrees = 15.0
-    /// Touches nearer the centre than this never jog.
-    static let centreDeadzone = 1.0 / 6.0
+    /// Numerator of the angle threshold: `clamp(15 / radius, 1, 179)` degrees.
+    static let angleThresholdNumerator = 15.0
+    /// A touch starting nearer the centre than this never jogs (0.20 at the top).
+    static let minimumStartRadius = 0.23
+    static let minimumStartRadiusTop = 0.20
+    /// While a jog runs, samples nearer the centre than this move nothing.
+    static let centreDeadzone = 0.2
 
     enum Classification: Equatable { case undecided, jog, swipe }
 
     private(set) var classification = Classification.undecided
-    private var start: (x: Double, y: Double)?
+    private var startRadius = 0.0
+    private var started = false
     private var lastWheel: Double?
-    private var pendingTurn = 0.0
-    /// The last few raw wheel moves, for the velocity UIKit averages over.
+    /// Unweighted turn since the touch began, while undecided.
+    private var undecidedTurn = 0.0
+    /// The last few raw wheel moves, for the delta and velocity UIKit averages over.
     private var recent: [(time: Double, delta: Double)] = []
     /// Weighted revolutions per second over the last five samples.
     private(set) var velocity = 0.0
@@ -64,43 +72,55 @@ struct ClickpadRingJog {
             return nil
         }
         // GameController reports y up; the digitizer runs y down from the top edge.
-        let point = (x: (Double(x) + 1) / 2, y: (1 - Double(y)) / 2)
-        let dx = point.x - 0.5, dy = point.y - 0.5
-        let radius = (dx * dx + dy * dy).squareRoot()
+        let dx = Double(x) / 2, dy = -Double(y) / 2
+        let radius = max((dx * dx + dy * dy).squareRoot(), 1e-6)
         let wheel = Self.wheelPosition(dx: dx, dy: dy)
-        defer { lastWheel = radius < Self.centreDeadzone ? nil : wheel }
+        defer { lastWheel = wheel }
 
-        guard let start else {
-            self.start = point
+        guard started else {
+            started = true
+            startRadius = radius
+            let top = wheel < 0.125 || wheel > 0.875
+            if radius < (top ? Self.minimumStartRadiusTop : Self.minimumStartRadius) { classification = .swipe }
             return nil
         }
-        guard classification != .swipe, radius >= Self.centreDeadzone, let lastWheel else { return nil }
-
+        guard classification != .swipe, let lastWheel else { return nil }
         let raw = Self.wrapped(wheel - lastWheel)
-        updateVelocity(raw: raw, time: time, weight: 2.5 * radius)
-        let turn = raw * 2.5 * radius
-        switch classification {
-        case .swipe:
-            return nil
-        case .jog:
-            return turn
-        case .undecided:
-            pendingTurn += turn
-            let travelled = ((point.x - start.x) * (point.x - start.x) + (point.y - start.y) * (point.y - start.y)).squareRoot()
-            if abs(pendingTurn) * 360 >= Self.angleThresholdDegrees {
-                classification = .jog
-                return pendingTurn
+
+        if classification == .undecided {
+            undecidedTurn += raw
+            let radial = abs(radius - startRadius)
+            let floor = Self.minimumStartRadius
+                - (Self.minimumStartRadius - 0.18) * min(1, radial / Self.directionalThreshold)
+            if radius < floor { classification = .swipe; return nil }
+            let degrees = abs(undecidedTurn) * 360
+            let angleThreshold = min(179, max(1, Self.angleThresholdNumerator / radius))
+            let turned = degrees / angleThreshold, moved = radial / Self.directionalThreshold
+            if turned >= 1 || moved >= 1 {
+                classification = turned >= moved ? .jog : .swipe
+                // UIKit begins with zero delta and fresh samples.
+                recent = []
+                velocity = 0
             }
-            if travelled >= Self.directionalThreshold { classification = .swipe }
-            return nil
+            return classification == .jog ? 0 : nil
         }
+
+        let weight = 2.5 * radius
+        if radius < Self.centreDeadzone {
+            velocity = 0
+            return 0
+        }
+        updateVelocity(raw: raw, time: time, weight: weight)
+        let deltas = recent.suffix(Self.velocitySamples).map(\.delta)
+        return deltas.reduce(0, +) / Double(deltas.count) * weight
     }
 
     mutating func reset() {
         classification = .undecided
-        start = nil
+        started = false
+        startRadius = 0
         lastWheel = nil
-        pendingTurn = 0
+        undecidedTurn = 0
         recent = []
         velocity = 0
     }

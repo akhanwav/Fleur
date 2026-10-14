@@ -28,10 +28,37 @@ final class ClickpadRingJogTests: XCTestCase {
 
     func test_clockwiseTurn_isPositive_andWeightedByRadius() {
         var jog = ClickpadRingJog()
-        // Radius 0.8 dpad = 0.4 digitizer: full weight, so one turn reads as one.
+        // Radius 0.8 dpad = 0.4 digitizer: full weight. The 37.5° spent classifying
+        // is dropped, and the five-sample mean trails the finger by two samples.
         let turn = drive(&jog, radius: 0.8, from: 0, to: 360, steps: 360)
         XCTAssertTrue(jog.isJogging)
-        XCTAssertEqual(turn, 1, accuracy: 0.01)
+        XCTAssertEqual(turn, (360 - 38 - 2) / 360, accuracy: 0.01)
+    }
+
+    func test_jogStart_doesNotJump() {
+        var jog = ClickpadRingJog()
+        var first: Double?
+        for i in 0...120 {
+            let rad = Double(i) * .pi / 180
+            if let turn = jog.feed(x: Float(0.8 * sin(rad)), y: Float(0.8 * cos(rad))), first == nil { first = turn }
+        }
+        XCTAssertEqual(first, 0, "the turn spent classifying is not scrubbed")
+    }
+
+    func test_angleThreshold_scalesWithRadius() {
+        var jog = ClickpadRingJog()
+        // 15 / 0.4 = 37.5° at full radius: 30° is not yet a jog.
+        _ = drive(&jog, radius: 0.8, from: 0, to: 30)
+        XCTAssertEqual(jog.classification, .undecided)
+        _ = drive(&jog, radius: 0.8, from: 30, to: 40)
+        XCTAssertTrue(jog.isJogging)
+    }
+
+    func test_touchStartingNearCentre_neverJogs() {
+        var jog = ClickpadRingJog()
+        // Radius 0.4 dpad = 0.2 digitizer, under the 0.23 start radius.
+        _ = drive(&jog, radius: 0.4, from: 90, to: 270)
+        XCTAssertEqual(jog.classification, .swipe)
     }
 
     func test_seconds_followAVKitsVelocityGain() {
@@ -57,8 +84,8 @@ final class ClickpadRingJogTests: XCTestCase {
     func test_fingerPosition_followsTheFingerNotTheTurnWeight() {
         var jog = ClickpadRingJog()
         XCTAssertNil(jog.fingerPosition)
-        // A small circle weighs half a turn per revolution, but the finger still sits at 3 o'clock.
-        _ = drive(&jog, radius: 0.4, from: 0, to: 90)
+        // A small circle weighs less per revolution, but the finger still sits at 3 o'clock.
+        _ = drive(&jog, radius: 0.5, from: 0, to: 90)
         XCTAssertEqual(jog.fingerPosition ?? -1, 0.25, accuracy: 0.01)
         _ = jog.feed(x: 0, y: 0)
         XCTAssertNil(jog.fingerPosition, "a lift ends the jog")
@@ -67,20 +94,20 @@ final class ClickpadRingJogTests: XCTestCase {
     func test_counterclockwiseTurn_isNegative() {
         var jog = ClickpadRingJog()
         let turn = drive(&jog, radius: 0.8, from: 180, to: 0)
-        XCTAssertEqual(turn, -0.5, accuracy: 0.01)
+        XCTAssertLessThan(turn, -0.35)
     }
 
     func test_smallerCircle_turnsLess() {
         var outer = ClickpadRingJog(), inner = ClickpadRingJog()
-        let outerTurn = drive(&outer, radius: 0.8, from: 0, to: 180)
-        let innerTurn = drive(&inner, radius: 0.4, from: 0, to: 180)
-        XCTAssertEqual(innerTurn / outerTurn, 0.5, accuracy: 0.02)
+        let outerTurn = drive(&outer, radius: 0.8, from: 90, to: 450, steps: 360)
+        let innerTurn = drive(&inner, radius: 0.5, from: 90, to: 450, steps: 360)
+        XCTAssertLessThan(innerTurn, outerTurn * 0.7)
     }
 
     func test_crossingTwelve_doesNotJump() {
         var jog = ClickpadRingJog()
-        let turn = drive(&jog, radius: 0.8, from: -90, to: 90)
-        XCTAssertEqual(turn, 0.5, accuracy: 0.01)
+        let turn = drive(&jog, radius: 0.8, from: -90, to: 90, steps: 180)
+        XCTAssertEqual(turn, (180 - 38 - 2) / 360, accuracy: 0.01)
     }
 
     func test_straightSwipeThroughCentre_isASwipe() {
@@ -108,11 +135,12 @@ final class ClickpadRingJogTests: XCTestCase {
         XCTAssertEqual(jog.classification, .undecided)
     }
 
-    func test_centreDeadzone_neverJogs() {
+    func test_centreDeadzone_holdsTheJogWithoutMoving() {
         var jog = ClickpadRingJog()
-        // Radius 0.2 dpad = 0.1 digitizer, inside the 1/6 deadzone.
-        let turn = drive(&jog, radius: 0.2, from: 0, to: 360)
-        XCTAssertEqual(turn, 0)
-        XCTAssertFalse(jog.isJogging)
+        _ = drive(&jog, radius: 0.8, from: 0, to: 90)
+        XCTAssertTrue(jog.isJogging)
+        // Radius 0.3 dpad = 0.15 digitizer, inside the 0.2 deadzone.
+        XCTAssertEqual(jog.feed(x: 0.3, y: 0), 0)
+        XCTAssertTrue(jog.isJogging)
     }
 }
