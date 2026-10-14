@@ -770,7 +770,13 @@ enum SettingsContent {
                 presentConfirm(on: vc, title: "Force Refresh Libraries?",
                                message: "This clears the metadata cache and reloads library content from your Plex server.",
                                confirmTitle: "Refresh", destructive: false) {
-                    Task { await CacheManager.shared.clearAllCache() }
+                    Task {
+                        await CacheManager.shared.clearAllCache()
+                        await PlexDataStore.shared.refreshLibraries()
+                        await PlexDataStore.shared.refreshHubs()
+                        await PlexDataStore.shared.refreshLibraryHubs()
+                        NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+                    }
                 }
             })),
             SettingsRowItem(id: "clearAllCache", title: "Clear All Cache",
@@ -818,8 +824,13 @@ enum SettingsContent {
         return rows
     }
 
+    /// Set while Refresh Channels runs, so the row says so and ignores a second press.
+    private static var refreshingSourceID: String?
+
     private static var liveTVSourceDetail: [SettingsRowItem] {
-        guard let source = pendingSourceDetail else { return [] }
+        guard let pending = pendingSourceDetail else { return [] }
+        // Read live: the snapshot taken when the page opened goes stale on a refresh.
+        let source = LiveTVDataStore.shared.sources.first { $0.id == pending.id } ?? pending
         var rows: [SettingsRowItem] = [
             SettingsRowItem(id: "src_status", title: "Status",
                             kind: .info(value: { source.isConnected ? "Connected" : "Disconnected" })),
@@ -836,10 +847,16 @@ enum SettingsContent {
             rows.append(SettingsRowItem(id: "src_lastSync", title: "Last Synced",
                                         kind: .info(value: { lastSync.formatted(date: .abbreviated, time: .shortened) })))
         }
-        rows.append(SettingsRowItem(id: "refreshChannels", title: "Refresh Channels",
+        let refreshing = refreshingSourceID == source.id
+        rows.append(SettingsRowItem(id: "refreshChannels", title: refreshing ? "Refreshing Channels…" : "Refresh Channels",
                                     kind: .action(destructive: false, handler: { vc in
+            guard refreshingSourceID == nil else { return }
+            refreshingSourceID = source.id
+            (vc as? SettingsPageViewController)?.reloadRows()
             Task {
                 await LiveTVDataStore.shared.refreshChannels()
+                await LiveTVDataStore.shared.loadEPG()
+                refreshingSourceID = nil
                 (vc as? SettingsPageViewController)?.reloadRows()
             }
         })))

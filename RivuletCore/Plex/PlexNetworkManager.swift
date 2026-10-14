@@ -1229,11 +1229,19 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             request.addValue(value, forHTTPHeaderField: key)
         }
 
+        let before = try? await getMetadata(serverURL: serverURL, authToken: authToken, ratingKey: ratingKey).updatedAt
         let (_, response) = try await session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
             throw PlexAPIError.invalidResponse
+        }
+        // The server refreshes after answering (about 3 s measured): wait for
+        // the item's updatedAt to move, so a repaint shows the new metadata.
+        for _ in 0..<15 {
+            try await Task.sleep(for: .seconds(2))
+            let now = try? await getMetadata(serverURL: serverURL, authToken: authToken, ratingKey: ratingKey).updatedAt
+            if now != before { return }
         }
     }
 

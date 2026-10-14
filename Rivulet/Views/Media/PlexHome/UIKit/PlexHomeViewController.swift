@@ -6567,8 +6567,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let cwLast = [
                 TileMenuAction(title: "Refresh Metadata",
                                systemImage: "arrow.clockwise") {
-                    Task {
-                        try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                    Self.changeOnServer {
+                        try await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                     }
                 },
             ]
@@ -6626,8 +6626,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let last = [
             TileMenuAction(title: "Refresh Metadata",
                            systemImage: "arrow.clockwise") {
-                Task {
-                    try? await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
+                Self.changeOnServer {
+                    try await network.refreshMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
                 }
             },
         ]
