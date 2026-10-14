@@ -86,6 +86,10 @@ final class PreviewCarouselViewController: UIViewController {
     /// can tell them apart from the horizontal paging swipes, which are claimed
     /// unconditionally.
     private var verticalSwipeRecognizers: [UISwipeGestureRecognizer] = []
+    /// Whether focus rested on the details' top row when the current touch began.
+    /// A long swipe from a lower row walks focus up to it mid-gesture, and must not
+    /// then also collapse the details when the swipe completes.
+    private var touchBeganOnDetailsTopRow = false
 
     // MARK: - Subviews
 
@@ -1385,7 +1389,8 @@ final class PreviewCarouselViewController: UIViewController {
         case .up:
             if state.phase == .expandedHero { return true }
             if state.phase == .detailsStable {
-                return expandedDetail.focusIsOnPills || expandedDetail.focusIsOnEpisodes
+                return touchBeganOnDetailsTopRow
+                    && (expandedDetail.focusIsOnPills || expandedDetail.focusIsOnEpisodes)
             }
             return false
         default:
@@ -1858,6 +1863,14 @@ extension PreviewCarouselViewController: UIGestureRecognizerDelegate {
     /// the engine needs the swipe to move focus between them. Declining must
     /// happen here; bailing inside the handler is too late, the begun
     /// recognizer has already stolen the gesture.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === verticalSwipeRecognizers.first {
+            touchBeganOnDetailsTopRow = state.phase == .detailsStable
+                && (expandedDetail.focusIsOnPills || expandedDetail.focusIsOnEpisodes)
+        }
+        return true
+    }
+
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let swipe = gestureRecognizer as? UISwipeGestureRecognizer else { return true }
         // Touch twin of the pressesBegan guard: nothing pages or scrolls under a prompt.
