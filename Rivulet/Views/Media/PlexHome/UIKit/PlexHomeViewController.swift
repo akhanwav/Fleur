@@ -1476,10 +1476,9 @@ final class PlexHomeViewController: UIViewController {
         let oldY = collectionView.contentOffset.y
         let newY = max(-collectionView.adjustedContentInset.top, oldY + minYAfter - minYBefore)
         collectionView.contentOffset.y = newY
-        // A focus scroll in flight re-derives the offset every frame from its
-        // endpoints; move them too or the next tick undoes the shift.
+        // A focus scroll in flight follows its target; move it too or the
+        // scroll pulls the page back by the shift.
         if offsetLink != nil {
-            offsetStartY += newY - oldY
             offsetTargetY += newY - oldY
         }
     }
@@ -5954,14 +5953,19 @@ final class PlexHomeViewController: UIViewController {
         animateContentOffset(toY: clamped)
     }
 
-    /// Centre a specific grid cell's row (library mode). The grid spans many
-    /// rows in one section, so the section path above would pin the viewport
-    /// to the grid's top; centre the focused cell's own row instead. Same
-    /// clamp + CADisplayLink driver as scrollSectionIntoView. Ported from
-    /// MediaLibraryViewController.scrollGridCellIntoView(at:).
+    /// Keep a grid cell's row on screen (library mode), scrolling only as far
+    /// as the system's focus scroll would: the row stays 180 pt inside the
+    /// edges. Measured from the in-flight target so rapid moves add up.
     private func scrollGridCellIntoView(at indexPath: IndexPath) {
         guard let attrs = collectionView.layoutAttributesForItem(at: indexPath) else { return }
-        scrollToCenter(frame: attrs.frame)
+        let from = offsetLink != nil ? offsetTargetY : collectionView.contentOffset.y
+        let target = FocusScrollMotion.minimalOffset(revealing: attrs.frame, from: from,
+                                                     height: collectionView.bounds.height)
+        let top = -collectionView.adjustedContentInset.top
+        let maxOffset = max(top, collectionView.contentSize.height - collectionView.bounds.height)
+        let clamped = max(top, min(target, maxOffset))
+        guard abs(from - clamped) > 1 else { return }
+        animateContentOffset(toY: clamped)
     }
 
     /// Scroll whatever is focused right now fully on screen.
@@ -6076,16 +6080,17 @@ final class PlexHomeViewController: UIViewController {
     // visible). A CADisplayLink advancing the real offset per frame recycles cells
     // progressively, so rows scroll out smoothly.
     private var offsetLink: CADisplayLink?
-    private var offsetStartY: CGFloat = 0
     private var offsetTargetY: CGFloat = 0
-    private var offsetStartTime: CFTimeInterval = 0
-    private let offsetDuration: CFTimeInterval = FocusScrollMotion.settleDuration
+    private var offsetVelocity: CGFloat = 0
+    private var offsetLastTick: CFTimeInterval = 0
 
+    /// Follows `targetY` with the system's focus-scroll model. A scroll already
+    /// in flight is retargeted and keeps its speed, so rapid moves never restart.
     private func animateContentOffset(toY targetY: CGFloat) {
-        offsetLink?.invalidate()
-        offsetStartY = collectionView.contentOffset.y   // continue from current position
         offsetTargetY = targetY
-        offsetStartTime = CACurrentMediaTime()
+        guard offsetLink == nil else { return }
+        offsetVelocity = 0
+        offsetLastTick = CACurrentMediaTime()
         // WEAK proxy target: CADisplayLink retains its target strongly, and
         // this VC has no deinit hook SwiftUI is guaranteed to trigger — a
         // discarded instance (the launch double-build) with a live link would
@@ -6111,13 +6116,16 @@ final class PlexHomeViewController: UIViewController {
     }
 
     @objc fileprivate func stepOffset(_ link: CADisplayLink) {
-        let t = offsetDuration > 0 ? min(1, (CACurrentMediaTime() - offsetStartTime) / offsetDuration) : 1
-        let e = FocusScrollMotion.ease(t)   // shared focus-scroll curve (cubic ease-out)
-        collectionView.contentOffset = CGPoint(x: 0, y: offsetStartY + (offsetTargetY - offsetStartY) * CGFloat(e))
-        if t >= 1 {
+        let now = CACurrentMediaTime()
+        let step = FocusScrollMotion.follow(from: collectionView.contentOffset.y, to: offsetTargetY,
+                                            velocity: offsetVelocity, dt: now - offsetLastTick,
+                                            viewport: collectionView.bounds.height)
+        offsetLastTick = now
+        offsetVelocity = step.velocity
+        collectionView.contentOffset = CGPoint(x: 0, y: step.y)
+        if step.done {
             link.invalidate()
             offsetLink = nil
-            collectionView.contentOffset = CGPoint(x: 0, y: offsetTargetY)
         }
     }
 

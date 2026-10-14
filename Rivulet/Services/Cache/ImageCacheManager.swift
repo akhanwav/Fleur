@@ -87,7 +87,14 @@ actor ImageCacheManager: NSObject {
 
     // MARK: - Active Downloads (prevent duplicate byte fetches)
 
-    private var activeDownloads: [URL: Task<Data?, Never>] = [:]
+    /// A shared fetch, cancelled once every caller waiting on it is cancelled,
+    /// so tiles scrolled past do not queue ahead of the ones on screen.
+    private struct Download {
+        let id: UUID
+        let task: Task<Data?, Never>
+        var waiters: Int
+    }
+    private var activeDownloads: [URL: Download] = [:]
 
     // MARK: - Cache Directory
 
@@ -297,15 +304,18 @@ actor ImageCacheManager: NSObject {
     /// Download the original image bytes, validate, persist to disk, and return them.
     /// Coalesced per-URL so concurrent requests share a single network fetch.
     private func fetchOriginalData(url: URL, key: String) async -> Data? {
-        if let existing = activeDownloads[url] {
-            return await existing.value
+        if var existing = activeDownloads[url] {
+            existing.waiters += 1
+            activeDownloads[url] = existing
+            return await wait(for: existing, url: url)
         }
 
+        let id = UUID()
         let task = Task<Data?, Never> { [weak self] in
             guard let self = self else { return nil }
 
             defer {
-                Task { await self.removeActiveDownload(for: url) }
+                Task { await self.removeActiveDownload(for: url, id: id) }
             }
 
             // Bounded retry: Plex's image/transcode endpoints transiently 5xx, time
@@ -349,6 +359,7 @@ actor ImageCacheManager: NSObject {
                     }
                     return nil
                 } catch {
+                    if Task.isCancelled { return nil }
                     // Network error / timeout — retryable.
                     print("💾 ImageCacheManager: Download failed for \(url.lastPathComponent) (attempt \(attempt + 1)/\(maxAttempts)): \(error.localizedDescription)")
                     if isLastAttempt { return nil }
@@ -359,12 +370,32 @@ actor ImageCacheManager: NSObject {
             return nil
         }
 
-        activeDownloads[url] = task
-        return await task.value
+        let download = Download(id: id, task: task, waiters: 1)
+        activeDownloads[url] = download
+        return await wait(for: download, url: url)
     }
 
-    private func removeActiveDownload(for url: URL) {
-        activeDownloads.removeValue(forKey: url)
+    private func wait(for download: Download, url: URL) async -> Data? {
+        await withTaskCancellationHandler {
+            await download.task.value
+        } onCancel: {
+            Task { await self.dropWaiter(for: url, id: download.id) }
+        }
+    }
+
+    private func dropWaiter(for url: URL, id: UUID) {
+        guard var download = activeDownloads[url], download.id == id else { return }
+        download.waiters -= 1
+        if download.waiters > 0 {
+            activeDownloads[url] = download
+        } else {
+            activeDownloads[url] = nil
+            download.task.cancel()
+        }
+    }
+
+    private func removeActiveDownload(for url: URL, id: UUID) {
+        if activeDownloads[url]?.id == id { activeDownloads[url] = nil }
     }
 
     // MARK: - Disk Operations
