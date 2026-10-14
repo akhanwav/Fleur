@@ -39,17 +39,28 @@ nonisolated extension ContinueWatchingCardCompositor {
         let key = cacheKey(layer, url, geometry, scale)
         if let cached = cache.object(forKey: key) { return cached }
         guard let source = await ImageCacheManager.shared.image(for: url)?.cgImage else { return nil }
-        let rendered = await Task.detached(priority: .userInitiated) {
+        let rendered = await offPool {
             switch layer {
             case .card: render(still: source, geometry: geometry, scale: scale)
             case .title: renderTitle(logo: source, geometry: geometry, scale: scale)
             case .titleStrong: renderTitle(logo: source, geometry: geometry, scale: scale, strongShadow: true)
             }
-        }.value
+        }
         guard let rendered else { return nil }
         let image = UIImage(cgImage: rendered, scale: scale, orientation: .up)
         cache.setObject(image, forKey: key, cost: rendered.bytesPerRow * rendered.height)
         return image
+    }
+
+    /// One serial queue for Vision and drawing. Run on Swift's cooperative pool,
+    /// a few cards' analysis held every thread on a 3-core Apple TV and stalled
+    /// all other async work (image loads, Plex requests) behind it.
+    private static let workQueue = DispatchQueue(label: "rivulet.artwork-analysis", qos: .utility)
+
+    private static func offPool<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            workQueue.async { continuation.resume(returning: work()) }
+        }
     }
 
     // MARK: - Signals
@@ -73,7 +84,7 @@ nonisolated extension ContinueWatchingCardCompositor {
                 defer { analysing.withLock { $0[url] = nil } }
                 // A failed fetch is not kept: the next display tries again.
                 guard let source = await ImageCacheManager.shared.image(for: url)?.cgImage else { return .none }
-                let signals = analyse(source)
+                let signals = await offPool { analyse(source) }
                 signalsCache.setObject(SignalsBox(signals), forKey: url.absoluteString as NSString)
                 return signals
             }
