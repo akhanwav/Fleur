@@ -16,6 +16,8 @@ struct ShellSidebarItem: Hashable {
     let icon: String
     /// The profile row's picture; the symbol stays where there is none.
     var avatarURL: URL?
+    /// The profile row only: Select opens the profile switcher.
+    var canSwitchProfile = false
 }
 
 /// A group of rows. `title` renders as a small section header; nil means the
@@ -43,14 +45,20 @@ enum ShellSidebarModel {
         serverName: String?,
         profileName: String,
         profileAvatar: URL? = nil,
+        canSwitchProfile: Bool = false,
         jellyfinServerName: String? = nil,
         jellyfinLibraries: [MediaLibrary] = []
     ) -> [ShellSidebarSection] {
         var sections: [ShellSidebarSection] = []
 
+        // The profile is a header in a section of its own, above the tabs.
+        sections.append(ShellSidebarSection(title: nil, items: [
+            ShellSidebarItem(tab: .account, title: firstName(of: profileName),
+                             icon: "person.crop.circle.fill", avatarURL: profileAvatar,
+                             canSwitchProfile: canSwitchProfile),
+        ]))
+
         var top: [ShellSidebarItem] = [
-            ShellSidebarItem(tab: .account, title: profileName, icon: "person.crop.circle.fill",
-                            avatarURL: profileAvatar),
             ShellSidebarItem(tab: .search, title: "Search", icon: "magnifyingglass"),
             ShellSidebarItem(tab: .home, title: "Home", icon: "house.fill"),
         ]
@@ -96,6 +104,11 @@ enum ShellSidebarModel {
             title: nil,
             items: [ShellSidebarItem(tab: .settings, title: "Settings", icon: "gearshape.fill")]))
         return sections
+    }
+
+    /// The first word of a display name; a one-word name or handle is whole.
+    static func firstName(of displayName: String) -> String {
+        displayName.split(whereSeparator: \.isWhitespace).first.map(String.init) ?? displayName
     }
 
     static func icon(forLibraryType type: String) -> String {

@@ -27,25 +27,48 @@ final class ShellSidebarModelTests: XCTestCase {
         XCTAssertEqual(jf?.items.first?.tab, .providerLibrary(providerID: "jellyfin:srv", libraryID: "lib-m"))
     }
 
-    func test_profileRow_carriesTheUsersNameAndAvatar() {
+    func test_profileHeader_isItsOwnFirstSection_withFirstNameAndAvatar() {
         let avatar = URL(string: "https://plex.tv/users/abc/avatar")
-        let top = ShellSidebarModel.sections(
+        let all = ShellSidebarModel.sections(
             libraries: [], liveTVSources: [], combineLiveTV: true,
             showDiscover: false, discoverAbove: true, showWatchlist: false,
-            liveTVAbove: false, serverName: nil, profileName: "Bain", profileAvatar: avatar)[0].items
+            liveTVAbove: false, serverName: nil, profileName: "William Gurley", profileAvatar: avatar)
 
-        XCTAssertEqual(top.first?.tab, .account)
-        XCTAssertEqual(top.first?.title, "Bain")
-        XCTAssertEqual(top.map(\.avatarURL), [avatar, nil, nil])
+        XCTAssertEqual(all[0].items.map(\.tab), [.account])
+        XCTAssertEqual(all[0].items.first?.title, "William")
+        XCTAssertEqual(all[0].items.first?.avatarURL, avatar)
+        XCTAssertEqual(all[1].items.map(\.tab), [.search, .home])
+    }
+
+    func test_profileHeader_canSwitchProfile_followsTheArgument() {
+        func header(_ canSwitch: Bool) -> ShellSidebarItem? {
+            ShellSidebarModel.sections(
+                libraries: [], liveTVSources: [], combineLiveTV: true,
+                showDiscover: false, discoverAbove: true, showWatchlist: false,
+                liveTVAbove: false, serverName: nil, profileName: "Bain",
+                canSwitchProfile: canSwitch)[0].items.first
+        }
+        XCTAssertEqual(header(true)?.canSwitchProfile, true)
+        XCTAssertEqual(header(false)?.canSwitchProfile, false)
+        XCTAssertEqual(sections(jellyfinName: nil, jellyfin: [])[0].items.first?.canSwitchProfile, false)
+    }
+
+    func test_firstName() {
+        XCTAssertEqual(ShellSidebarModel.firstName(of: "William Gurley"), "William")
+        XCTAssertEqual(ShellSidebarModel.firstName(of: "  Mary  Ann\tSmith"), "Mary")
+        XCTAssertEqual(ShellSidebarModel.firstName(of: "katmgurley"), "katmgurley")
+        XCTAssertEqual(ShellSidebarModel.firstName(of: "l984_451"), "l984_451")
+        XCTAssertEqual(ShellSidebarModel.firstName(of: "Account"), "Account")
+        XCTAssertEqual(ShellSidebarModel.firstName(of: ""), "")
     }
 
     func test_noJellyfin_noJellyfinSection() {
-        XCTAssertEqual(sections(jellyfinName: nil, jellyfin: []).map(\.title), [nil, nil])
+        XCTAssertEqual(sections(jellyfinName: nil, jellyfin: []).map(\.title), [nil, nil, nil])
     }
 
     func test_jellyfinSectionSitsBeforeSettings() {
         let libs = [MediaLibrary(id: "lib-m", providerID: "jellyfin:srv", title: "Movies", kind: .movies)]
         XCTAssertEqual(sections(jellyfinName: "jellyfin-test", jellyfin: libs).map(\.title),
-                       [nil, "jellyfin-test", nil])
+                       [nil, nil, "jellyfin-test", nil])
     }
 }

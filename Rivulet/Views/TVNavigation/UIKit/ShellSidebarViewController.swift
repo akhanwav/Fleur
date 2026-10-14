@@ -43,8 +43,11 @@ private enum Metrics {
     static let pillDiscSize: CGFloat = 46
     static var pillDiscInset: CGFloat { (pillHeight - pillDiscSize) / 2 }
     static let pillTrailing: CGFloat = 24
-    /// The TV app's sidebar avatar.
+    /// The TV app's sidebar avatar, and how much it grows under focus.
     static let avatarSize: CGFloat = 50
+    static let avatarFocusGrowth: CGFloat = 4
+    /// The TV app's profile header band: the first tab sits 125pt below the list top.
+    static let profileBandHeight: CGFloat = 125
     /// USER-VERIFIED on screen: the single spring crossfade reads nearly
     /// identical to the system morph; a literal three-phase re-timing from
     /// the 120fps frame analysis read distinctly WORSE and was reverted.
@@ -151,7 +154,6 @@ final class ShellSidebarRowCell: UICollectionViewCell {
 
     private let backgroundPill = UIView()
     private let iconView = UIImageView()
-    private let avatarView = SidebarAvatarView(diameter: Metrics.avatarSize)
     private let titleLabel = UILabel()
     private var isSelectedTab = false
 
@@ -169,11 +171,7 @@ final class ShellSidebarRowCell: UICollectionViewCell {
             contentView.addSubview(view)
         }
 
-        contentView.addSubview(avatarView)
-
         NSLayoutConstraint.activate([
-            avatarView.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
-            avatarView.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
             backgroundPill.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             backgroundPill.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             backgroundPill.topAnchor.constraint(equalTo: contentView.topAnchor,
@@ -197,7 +195,6 @@ final class ShellSidebarRowCell: UICollectionViewCell {
     func configure(item: ShellSidebarItem, isSelectedTab: Bool) {
         self.isSelectedTab = isSelectedTab
         iconView.image = UIImage(systemName: item.icon)
-        avatarView.url = item.avatarURL
         titleLabel.text = item.title
         applyAppearance(focused: isFocused)
     }
@@ -220,6 +217,99 @@ final class ShellSidebarRowCell: UICollectionViewCell {
         backgroundPill.backgroundColor = colors.background
         iconView.tintColor = colors.content
         titleLabel.textColor = colors.content
+    }
+}
+
+// MARK: - Profile header cell
+
+/// The profile entry, above the tabs: avatar and first name, no focus capsule.
+/// Focus grows the avatar and, where there is a profile to switch to, fades a
+/// "Switch Profile" caption in under the name.
+final class ShellSidebarProfileCell: UICollectionViewCell {
+    static let reuseIdentifier = "ShellSidebarProfileCell"
+
+    private let iconView = UIImageView()
+    private let avatarView = SidebarAvatarView(diameter: Metrics.avatarSize)
+    private let nameLabel = UILabel()
+    private let captionLabel = UILabel()
+    private let separator = UIView()
+    private var nameCenterY: NSLayoutConstraint!
+    private var canSwitch = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 44, weight: .regular)
+        nameLabel.font = .preferredFont(forTextStyle: .caption1)
+        captionLabel.font = .preferredFont(forTextStyle: .caption2)
+        captionLabel.text = "Switch Profile"
+        captionLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+        separator.backgroundColor = UIColor.white.withAlphaComponent(0.1)
+        for view in [iconView, avatarView, nameLabel, captionLabel, separator] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            contentView.addSubview(view)
+        }
+        // The entry occupies the band's top row; the separator halves the rest.
+        let rowCenter = Metrics.rowPitch / 2
+        nameCenterY = nameLabel.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: rowCenter)
+        NSLayoutConstraint.activate([
+            iconView.centerXAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                              constant: Metrics.iconCenterX),
+            iconView.centerYAnchor.constraint(equalTo: contentView.topAnchor, constant: rowCenter),
+            avatarView.centerXAnchor.constraint(equalTo: iconView.centerXAnchor),
+            avatarView.centerYAnchor.constraint(equalTo: iconView.centerYAnchor),
+            nameLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor,
+                                               constant: Metrics.titleLeading),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
+                                                constant: -Metrics.titleTrailing),
+            nameCenterY,
+            captionLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+            captionLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor,
+                                                   constant: -Metrics.titleTrailing),
+            captionLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor),
+            separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 15),
+            separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            separator.heightAnchor.constraint(equalToConstant: 1),
+            separator.centerYAnchor.constraint(
+                equalTo: contentView.topAnchor,
+                constant: (Metrics.rowPitch + Metrics.profileBandHeight) / 2),
+        ])
+        isAccessibilityElement = true
+        applyAppearance(focused: false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func configure(item: ShellSidebarItem) {
+        iconView.image = UIImage(systemName: item.icon)
+        avatarView.url = item.avatarURL
+        nameLabel.text = item.title
+        canSwitch = item.canSwitchProfile
+        accessibilityLabel = canSwitch ? "\(item.title), Switch Profile" : item.title
+        accessibilityTraits = canSwitch ? .button : .staticText
+        applyAppearance(focused: isFocused)
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let focused = context.nextFocusedView === self
+        coordinator.addCoordinatedAnimations({
+            self.applyAppearance(focused: focused)
+            self.contentView.layoutIfNeeded()
+        })
+    }
+
+    private func applyAppearance(focused: Bool) {
+        let content = sidebarRowColors(focused: false, selected: focused).content
+        iconView.tintColor = content
+        nameLabel.textColor = content
+        let captioned = focused && canSwitch
+        captionLabel.alpha = captioned ? 1 : 0
+        // The name rises by half the caption so the pair stays centred on the avatar.
+        nameCenterY.constant = Metrics.rowPitch / 2 - (captioned ? captionLabel.font.lineHeight / 2 : 0)
+        let scale = focused ? (Metrics.avatarSize + Metrics.avatarFocusGrowth) / Metrics.avatarSize : 1
+        avatarView.transform = CGAffineTransform(scaleX: scale, y: scale)
+        iconView.transform = avatarView.transform
     }
 }
 
@@ -504,6 +594,8 @@ final class ShellSidebarViewController: UIViewController {
         collectionView.remembersLastFocusedIndexPath = false
         collectionView.register(ShellSidebarRowCell.self,
                                 forCellWithReuseIdentifier: ShellSidebarRowCell.reuseIdentifier)
+        collectionView.register(ShellSidebarProfileCell.self,
+                                forCellWithReuseIdentifier: ShellSidebarProfileCell.reuseIdentifier)
         collectionView.register(ShellSidebarHeaderView.self,
                                 forSupplementaryViewOfKind: ShellSidebarHeaderView.elementKind,
                                 withReuseIdentifier: ShellSidebarHeaderView.reuseIdentifier)
@@ -576,8 +668,12 @@ final class ShellSidebarViewController: UIViewController {
 
     private func makeLayout() -> UICollectionViewLayout {
         UICollectionViewCompositionalLayout { [weak self] sectionIndex, _ in
-            let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
-                                                  heightDimension: .absolute(Metrics.rowPitch))
+            // The profile header is section 0 and brings its own gap beneath.
+            let isProfile = self?.sections[sectionIndex].items.first?.tab == .account
+            let followsProfile = sectionIndex == 1 && self?.sections[0].items.first?.tab == .account
+            let itemSize = NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1),
+                heightDimension: .absolute(isProfile ? Metrics.profileBandHeight : Metrics.rowPitch))
             let item = NSCollectionLayoutItem(layoutSize: itemSize)
             let group = NSCollectionLayoutGroup.vertical(layoutSize: itemSize, subitems: [item])
             let section = NSCollectionLayoutSection(group: group)
@@ -596,7 +692,7 @@ final class ShellSidebarViewController: UIViewController {
                         elementKind: ShellSidebarHeaderView.elementKind,
                         alignment: .top)
                 ]
-            } else if sectionIndex > 0 {
+            } else if sectionIndex > 0, !followsProfile {
                 section.contentInsets = NSDirectionalEdgeInsets(top: Metrics.sectionGap,
                                                                 leading: 0, bottom: 0, trailing: 0)
             }
@@ -615,7 +711,7 @@ final class ShellSidebarViewController: UIViewController {
             ?? PlexAuthManager.shared.username
             ?? "Account"
         return ShellSidebarModel.sections(
-            libraries: PlexDataStore.shared.visibleMediaLibraries,
+            libraries: PlexDataStore.shared.visibleSidebarLibraries,
             liveTVSources: LiveTVDataStore.shared.sources,
             combineLiveTV: flag("combineLiveTVSources", default: true),
             showDiscover: flag("showDiscoverTab", default: true),
@@ -646,10 +742,17 @@ extension ShellSidebarViewController: UICollectionViewDataSource, UICollectionVi
 
     func collectionView(_ collectionView: UICollectionView,
                         cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        let item = sections[indexPath.section].items[indexPath.item]
+        if item.tab == .account {
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: ShellSidebarProfileCell.reuseIdentifier,
+                for: indexPath) as! ShellSidebarProfileCell
+            cell.configure(item: item)
+            return cell
+        }
         let cell = collectionView.dequeueReusableCell(
             withReuseIdentifier: ShellSidebarRowCell.reuseIdentifier,
             for: indexPath) as! ShellSidebarRowCell
-        let item = sections[indexPath.section].items[indexPath.item]
         cell.configure(item: item, isSelectedTab: item.tab == selectedTab)
         return cell
     }

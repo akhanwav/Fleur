@@ -87,7 +87,7 @@ struct ProfileSwitcherPopup: View {
         let isFocused = focusedUserId == user.id
         let isLoadingThis = isLoading && selectedUserForPin?.id == user.id
 
-        let firstName = user.displayName.split(separator: " ").first.map(String.init) ?? user.displayName
+        let firstName = ShellSidebarModel.firstName(of: user.displayName)
         let avatarSize: CGFloat = 160
 
         return Button {
