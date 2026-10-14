@@ -701,7 +701,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
     func getChildren(
         serverURL: String,
         authToken: String,
-        ratingKey: String
+        ratingKey: String,
+        start: Int? = nil,
+        size: Int? = nil,
+        sort: String? = nil
     ) async throws -> [PlexMetadata] {
         guard var components = URLComponents(string: "\(serverURL)/library/metadata/\(ratingKey)/children") else {
             throw PlexAPIError.invalidURL
@@ -711,6 +714,16 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         components.queryItems = [
             URLQueryItem(name: "includeMarkers", value: "1")
         ]
+        // The size is ignored unless the start is sent with it.
+        if let size {
+            components.queryItems? += [
+                URLQueryItem(name: "X-Plex-Container-Start", value: "\(start ?? 0)"),
+                URLQueryItem(name: "X-Plex-Container-Size", value: "\(size)")
+            ]
+        }
+        if let sort {
+            components.queryItems?.append(URLQueryItem(name: "sort", value: sort))
+        }
 
         guard let url = components.url else {
             throw PlexAPIError.invalidURL

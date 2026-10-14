@@ -99,7 +99,7 @@ struct TVSidebarView: View {
     /// sidebar wedged on live mutation; ours does not.
     private var shellSections: [ShellSidebarSection] {
         ShellSidebarModel.sections(
-            libraries: dataStore.visibleMediaLibraries,
+            libraries: dataStore.visibleSidebarLibraries,
             liveTVSources: liveTVDataStore.sources,
             combineLiveTV: combineLiveTVSources,
             showDiscover: showDiscoverTab,
@@ -109,6 +109,7 @@ struct TVSidebarView: View {
             serverName: authManager.savedServerName,
             profileName: profileName,
             profileAvatar: profileManager.selectedUser?.thumb.flatMap { URL(string: $0) },
+            canSwitchProfile: profileManager.hasMultipleProfiles,
             jellyfinServerName: jellyfinStore.account?.serverName,
             jellyfinLibraries: jellyfinStore.visibleLibraries)
     }
@@ -523,6 +524,13 @@ struct TVSidebarView: View {
             // gets its own controller — this is what the SwiftUI `.id(key)`
             // was buying.
             if let lib = dataStore.libraries.first(where: { $0.key == key }) {
+                if lib.isPhotoLibrary {
+                    return PhotoLibraryViewController(title: lib.title) {
+                        guard let provider = MediaProviderRegistry.shared.plexProvider,
+                              let photos = provider as? any PhotoProvider else { return nil }
+                        return (photos, PlexMediaMapper.library(lib, providerID: provider.id))
+                    }
+                }
                 return lib.isMusicLibrary
                     ? MusicLibraryViewController(libraryKey: lib.key, title: lib.title)
                     : PlexHomeViewController(mode: .library(key: lib.key, title: lib.title))
@@ -530,6 +538,12 @@ struct TVSidebarView: View {
         case .providerLibrary(_, let libraryID):
             // The same page as a Plex library, through the provider.
             if let library = jellyfinStore.libraries.first(where: { $0.id == libraryID }) {
+                if library.kind == .photos {
+                    return PhotoLibraryViewController(title: library.title) {
+                        (MediaProviderRegistry.shared.provider(for: library.providerID) as? any PhotoProvider)
+                            .map { ($0, library) }
+                    }
+                }
                 return PlexHomeViewController(mode: .library(key: library.settingsKey, title: library.title),
                                               providerLibrary: library)
             }
@@ -603,7 +617,7 @@ struct TVSidebarView: View {
             case .library(let key):
                 // Both library surfaces mount directly as UIKit VCs above. This
                 // is left for a tab built before the library list held its key.
-                if let lib = dataStore.libraries.first(where: { $0.key == key }), !lib.isMusicLibrary {
+                if let lib = dataStore.libraries.first(where: { $0.key == key }), lib.isVideoLibrary {
                     UIKitHomeContainer(mode: .library(key: lib.key, title: lib.title))
                         .id(lib.key)
                 }
@@ -661,7 +675,7 @@ struct TVSidebarView: View {
     private func applyDebugLaunchTab() {
         guard !didApplyDebugLaunch,
               let name = ProcessInfo.processInfo.environment["RIVULET_OPEN_LIBRARY"],
-              let lib = dataStore.visibleMediaLibraries.first(where: { $0.title == name }) else { return }
+              let lib = dataStore.visibleSidebarLibraries.first(where: { $0.title == name }) else { return }
         didApplyDebugLaunch = true
         selectedTab = .library(key: lib.key)
         #if DEBUG

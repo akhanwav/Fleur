@@ -25,9 +25,10 @@ enum JellyfinMediaMapper {
         case "movies": kind = .movies
         case "tvshows": kind = .shows
         case "music": kind = .music
-        case "photos": kind = .photos
+        // "Home Videos and Photos" is the photo browser's, by type alone.
+        case "photos", "homevideos": kind = .photos
         case "livetv": kind = .liveTV
-        case nil, "homevideos", "mixed", "folders", "unknown": kind = .mixed
+        case nil, "mixed", "folders", "unknown": kind = .mixed
         default: return nil
         }
         return MediaLibrary(id: id, providerID: providerID, title: view.name ?? "", kind: kind)

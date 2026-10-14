@@ -664,6 +664,27 @@ write either number anywhere else.
 - Music (already at 80), Live TV (`liveLeading`, `EPGTheme.pageMargin`), Settings
   and the sidebar keep margins of their own.
 
+### Photos
+
+A photo library (Plex section type `photo`, Jellyfin `photos` or `homevideos`) is a library like
+any other: listed in the sidebar and in Settings > Sidebar Libraries, opened by
+`PhotoLibraryViewController` (`Views/Photos/UIKit/`), a stack of `PhotoGridViewController` grids
+with a focusless full-screen `PhotoViewerViewController` (paging and slideshow, both remote
+transports through `DirectionalInputBinding`). tvOS only.
+
+- **Photos are `PhotoItem`, never `MediaItem`.** That is what keeps them out of Home rows,
+  Search, the detail page, Continue Watching and Top Shelf. Do not map one into a `MediaItem`.
+- **One seam: `PhotoProvider.photoPage(in:folder:page:)`**, adopted by extension on the Plex and
+  Jellyfin providers. Every server assumption lives in `PlexPhotoProvider.swift` and
+  `JellyfinPhotoProvider.swift`.
+- **`visibleSidebarLibraries` lists photo libraries; `visibleMediaLibraries` does not.** The
+  second feeds Home rows, hub fetches and prefetch, so widening it puts photo sections on Home.
+- **Never request the original file.** Thumbnails ask the photo transcoder for a 520 px cover,
+  the viewer for a fit inside 3840x2160 with no `minSize` (`minSize=1` crops to cover).
+- **The server side is unverified.** No photo library existed on either test server when this was
+  built, so both mappers follow documented response shapes. `PlexPhotoFixture` (DEBUG only,
+  `RIVULET_PHOTO_FIXTURE`) stands in for one; delete it when the mappers are measured.
+
 ### Glass UI Style
 
 All focusable rows use consistent styling (see `Docs/DESIGN_GUIDE.md`):

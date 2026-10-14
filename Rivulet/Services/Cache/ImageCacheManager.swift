@@ -101,6 +101,8 @@ actor ImageCacheManager: NSObject {
     override private init() {
         super.init()
         memoryCache.countLimit = maxMemoryCacheCount
+        // By bytes too: 100 screen-sized bitmaps are several GB.
+        memoryCache.totalCostLimit = 400 * 1024 * 1024
         keyCache.countLimit = maxKeyCacheCount
         Task {
             await createCacheDirectoryIfNeeded()
@@ -139,6 +141,10 @@ actor ImageCacheManager: NSObject {
         "\(diskKey)#\(quality.keySuffix)" as NSString
     }
 
+    nonisolated private static func byteCost(_ image: UIImage) -> Int {
+        image.cgImage.map { $0.bytesPerRow * $0.height } ?? 0
+    }
+
     /// Get an image at the requested `quality`, decoded off the main thread.
     /// Stale-while-revalidate: returns cached immediately, refreshes in background if stale.
     func image(for url: URL, quality: ImageQuality = .thumb, forceRefresh: Bool = false) async -> UIImage? {
@@ -160,7 +166,7 @@ actor ImageCacheManager: NSObject {
             }.value
 
             if let decoded {
-                memoryCache.setObject(decoded, forKey: memKey)
+                memoryCache.setObject(decoded, forKey: memKey, cost: Self.byteCost(decoded))
                 updateAccessTime(for: diskKey)
                 scheduleStaleRefresh(url: url, key: diskKey)
                 return decoded
@@ -171,7 +177,7 @@ actor ImageCacheManager: NSObject {
         guard let data = await fetchOriginalData(url: url, key: diskKey) else { return nil }
         let decoded = await decodeDownsampled(data: data, maxPixelSize: quality.maxPixelSize)
         if let decoded {
-            memoryCache.setObject(decoded, forKey: memKey)
+            memoryCache.setObject(decoded, forKey: memKey, cost: Self.byteCost(decoded))
         }
         return decoded
     }

@@ -201,6 +201,11 @@ nonisolated struct PlexLibrary: Codable, Identifiable, Hashable, Sendable {
     var isMusicLibrary: Bool {
         type == "artist"
     }
+
+    /// Check if this is a photo library
+    var isPhotoLibrary: Bool {
+        type == "photo"
+    }
 }
 
 nonisolated struct PlexLibraryLocation: Codable, Hashable, Sendable {

@@ -31,7 +31,13 @@ class PlexDataStore: ObservableObject {
     /// after it, nil/empty means "this user has no Continue Watching" (drop
     /// the row). Reset on sign-out and profile switch.
     private var hasFetchedContinueWatching = false
-    @Published var libraries: [PlexLibrary] = []
+    @Published var libraries: [PlexLibrary] = [] {
+        didSet {
+            #if DEBUG
+            if let fixture = PlexPhotoFixture.section(missingFrom: libraries) { libraries.append(fixture) }
+            #endif
+        }
+    }
     @Published var isLoadingHubs = false
     @Published var isLoadingLibraries = false
     @Published var hubsError: String?
@@ -204,8 +210,14 @@ class PlexDataStore: ObservableObject {
         visibleLibraries.filter { $0.isMusicLibrary }
     }
 
-    /// Video and music libraries combined (for sidebar display)
+    /// Video and music libraries: the ones Home rows, library hubs and the
+    /// prefetch are built from. Photo libraries have none of those.
     var visibleMediaLibraries: [PlexLibrary] {
+        visibleLibraries.filter { $0.isVideoLibrary || $0.isMusicLibrary }
+    }
+
+    /// Every library the sidebar lists, photo libraries included.
+    var visibleSidebarLibraries: [PlexLibrary] {
         visibleLibraries.filter(\.hasBrowseSurface)
     }
 
@@ -2317,7 +2329,6 @@ class PlexDataStore: ObservableObject {
 }
 
 extension PlexLibrary {
-    /// The sections tvOS has a page for. Photo sections have none yet (#33),
-    /// so the sidebar and Settings both leave them out.
-    var hasBrowseSurface: Bool { isVideoLibrary || isMusicLibrary }
+    /// The sections tvOS has a page for: the sidebar and Settings list these.
+    var hasBrowseSurface: Bool { isVideoLibrary || isMusicLibrary || isPhotoLibrary }
 }

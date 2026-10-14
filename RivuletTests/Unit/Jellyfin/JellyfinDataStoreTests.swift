@@ -41,14 +41,17 @@ final class JellyfinDataStoreTests: XCTestCase {
                  items: [JellyfinFixtures.mediaItem(itemID)])
     }
 
-    func test_load_keepsVideoLibrariesOnly() async {
+    func test_load_keepsVideoAndPhotoLibraries() async {
         jellyfin.libraryList = [library("m", .movies), library("t", .shows), library("mu", .music),
                                 library("p", .photos), library("x", .mixed), library("l", .liveTV)]
+        jellyfin.hubsByLibrary = ["p": [recentlyAdded("p", "z")]]
         let store = JellyfinDataStore(observesRefresh: false)
 
         await store.load(from: jellyfin)
 
-        XCTAssertEqual(store.libraries.map(\.id), ["m", "t", "x"])
+        XCTAssertEqual(store.libraries.map(\.id), ["m", "t", "p", "x"])
+        XCTAssertFalse(store.homeRows.contains { $0.id.hasSuffix("|p.recentlyAdded") },
+                       "a photo library has no Home row")
     }
 
     func test_load_rows_continueWatchingThenEachLibrarysRecentlyAdded() async {

@@ -23,7 +23,7 @@ final class PlexLibrarySectionListTests: XCTestCase {
         XCTAssertEqual(try sections().map(\.key), ["1", "3", "6", "7"])
     }
 
-    func test_photoSectionsHaveNoBrowseSurface_serverHiddenFlagDoesNotCount() throws {
-        XCTAssertEqual(try sections().filter(\.hasBrowseSurface).map(\.title), ["Movies", "Music", "Shared TV"])
+    func test_photoSectionsHaveABrowseSurface_serverHiddenFlagDoesNotCount() throws {
+        XCTAssertEqual(try sections().filter(\.hasBrowseSurface).map(\.title), ["Movies", "Music", "Photos", "Shared TV"])
     }
 }
