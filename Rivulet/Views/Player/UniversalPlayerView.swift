@@ -665,6 +665,8 @@ struct UniversalPlayerView: View {
     /// carousel; CachedAsyncImage would decode at the `.thumb` 900px
     /// default and look soft full-screen on a 4K panel.
     @State private var ambientBackdropImage: UIImage?
+    /// The backdrop's artwork analysis, shared with Continue Watching and Top Shelf.
+    @State private var ambientSignals: ContinueWatchingCardCompositor.Signals?
 
     /// Initialize with metadata (creates viewModel internally)
     @MainActor
@@ -923,15 +925,6 @@ struct UniversalPlayerView: View {
     /// 900px default and look soft). A deeper dim overlay layers in once
     /// `pausePresentation` reaches `.dimmed` (OLED burn-in guard after 2
     /// minutes paused).
-    /// Bottom inset for the ambient title logo. For a show the logo sits just
-    /// above the rail's held episode title (which stays at its rail position
-    /// ~278pt off the bottom), keeping the same small gap the logo has from
-    /// the rail title normally. For a movie there is no held title, so the
-    /// logo floats a touch lower in the lower third.
-    private var ambientLogoBottomInset: CGFloat {
-        viewModel.metadata.type == "episode" ? 292 : 260
-    }
-
     @ViewBuilder
     private func ambientBackdropView(url: URL) -> some View {
         ZStack {
@@ -951,29 +944,28 @@ struct UniversalPlayerView: View {
                     .ignoresSafeArea()
             }
 
-            // Title logo, sitting just above the rail's episode title. For a
-            // show the episode name stays put in the glass rail (kept visible
-            // by PlayerRailView.setAmbient); the logo sits the same distance
-            // above it that it has from the rail title normally. For a movie
-            // there is no held title — the logo just floats in the lower third.
-            if let logo = viewModel.titleLogoImage {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Image(uiImage: logo)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 500, maxHeight: 130, alignment: .bottomLeading)
-                            .padding(.leading, 132)
-                            .padding(.bottom, ambientLogoBottomInset)
-                        Spacer()
-                    }
+            // Title logo where the Top Shelf would put it on this backdrop:
+            // clear of faces and busy artwork, above the rail's held title.
+            if let logo = viewModel.titleLogoImage, let signals = ambientSignals {
+                GeometryReader { proxy in
+                    let place = TopShelfImageCompositor.placement(logoSize: logo.size, signals: signals,
+                                                                  canvas: proxy.size)
+                    Image(uiImage: logo)
+                        .resizable()
+                        .frame(width: place.rect.width, height: place.rect.height)
+                        .shadow(color: .black.opacity(place.strongShadow ? 0.6 : 0),
+                                radius: proxy.size.height / 108, y: proxy.size.height / 270)
+                        .position(x: place.rect.midX, y: place.rect.midY)
                 }
+                .ignoresSafeArea()
                 .transition(.opacity)
             }
         }
         .task(id: url) {
+            ambientSignals = nil
+            async let signals = ContinueWatchingCardCompositor.signals(for: url)
             ambientBackdropImage = await ImageCacheManager.shared.image(for: url, quality: .full)
+            ambientSignals = await signals
         }
         .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
     }
