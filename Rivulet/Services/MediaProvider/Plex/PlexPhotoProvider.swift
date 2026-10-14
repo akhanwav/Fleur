@@ -6,13 +6,14 @@
 //  Rivulet
 //
 //  Plex photo sections. Every assumption about how PMS answers for one lives
-//  in this file. None of it has been seen against a live photo section.
+//  in this file, measured against a photo section on PMS 1.43.4.
 //
 
 import Foundation
 
 enum PlexPhotoMapper {
     /// An album is told from a photo by its key alone: both are `type="photo"`.
+    /// Albums carry no item count.
     static func item(_ meta: PlexMetadata, providerID: String, serverURL: String, authToken: String) -> PhotoItem? {
         guard let ratingKey = meta.ratingKey else { return nil }
         let kind: PhotoItem.Kind
@@ -35,7 +36,7 @@ enum PlexPhotoMapper {
             kind: kind,
             title: meta.title ?? "",
             date: date(meta),
-            childCount: kind == .folder ? (meta.leafCount ?? meta.childCount) : nil,
+            childCount: nil,
             thumbnail: image(meta.thumb, cover: true),
             full: kind == .folder ? nil : image(original ?? meta.thumb, cover: false),
             playable: kind == .clip
@@ -43,10 +44,10 @@ enum PlexPhotoMapper {
                 : nil)
     }
 
-    /// Date taken (`originallyAvailableAt`), else when it was scanned.
+    /// Date taken (`originallyAvailableAt`, a camera-local day), else the file's date.
     static func date(_ meta: PlexMetadata) -> Date? {
         if let taken = meta.originallyAvailableAt,
-           let date = try? Date(taken, strategy: .iso8601.year().month().day()) {
+           let date = try? Date(taken, strategy: Date.ISO8601FormatStyle(timeZone: .current).year().month().day()) {
             return date
         }
         return meta.addedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) }
@@ -75,44 +76,31 @@ enum PlexPhotoMapper {
 extension PlexProvider: PhotoProvider {
     private static let photoSort = "originallyAvailableAt:desc"
 
+    /// One level: its albums once (type 14), then its photos and clips (types 13, 12), paged.
     func photoPage(in library: MediaLibrary, folder: MediaItemRef?, page: Page) async throws -> PhotoPage {
-        #if DEBUG
-        if library.id == PlexPhotoFixture.key {
-            return try await PlexPhotoFixture.page(self, folder: folder, page: page)
-        }
-        #endif
-        return try await plexCall {
+        try await plexCall {
             func map(_ metas: [PlexMetadata]) -> [PhotoItem] {
                 metas.compactMap {
                     PlexPhotoMapper.item($0, providerID: id, serverURL: serverURL, authToken: authToken)
                 }
             }
-            let next = Page(offset: page.offset + page.limit, limit: page.limit)
-
-            // A folder: sub-albums, photos and clips come back in one list.
-            if let folder {
-                let children = try await networkManager.getChildren(
-                    serverURL: serverURL, authToken: authToken, ratingKey: folder.itemID,
-                    start: page.offset, size: page.limit, sort: Self.photoSort)
-                let items = map(children)
-                return PhotoPage(folders: items.filter { $0.kind == .folder },
-                                 media: items.filter { $0.kind != .folder },
-                                 nextPage: children.count >= page.limit ? next : nil)
-            }
-
-            // The root: top-level albums (type 14) once, then every photo and clip (types 13, 12).
-            // ponytail: one request of 1000 albums; page it if a section ever has more.
+            let parent = folder.map { [URLQueryItem(name: "parent", value: $0.itemID)] }
+            // ponytail: one request of 1000 albums; page it if a level ever has more.
             func albums() async throws -> [PlexMetadata] {
                 guard page.offset == 0 else { return [] }
                 return try await networkManager.getLibraryItemsWithTotal(
                     serverURL: serverURL, authToken: authToken, sectionId: library.id,
-                    size: 1000, sort: "titleSort", type: 14).items
+                    size: 1000, sort: "titleSort", type: 14, filters: parent ?? []).items
             }
             async let albumList = albums()
+            // With no parent PMS lists only the photos loose at the root;
+            // `clusterZoomLevel=1` makes that every photo and clip in the section.
             let photos = try await networkManager.getLibraryItemsWithTotal(
                 serverURL: serverURL, authToken: authToken, sectionId: library.id,
                 start: page.offset, size: page.limit, sort: Self.photoSort,
-                filters: [URLQueryItem(name: "type", value: "13,12")])
+                filters: [URLQueryItem(name: "type", value: "13,12")]
+                    + (parent ?? [URLQueryItem(name: "clusterZoomLevel", value: "1")]))
+            let next = Page(offset: page.offset + page.limit, limit: page.limit)
             let more = next.offset < (photos.totalSize ?? 0)
             return PhotoPage(folders: map(try await albumList).filter { $0.kind == .folder },
                              media: map(photos.items).filter { $0.kind != .folder },

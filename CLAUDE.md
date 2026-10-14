@@ -680,10 +680,21 @@ transports through `DirectionalInputBinding`). tvOS only.
 - **`visibleSidebarLibraries` lists photo libraries; `visibleMediaLibraries` does not.** The
   second feeds Home rows, hub fetches and prefetch, so widening it puts photo sections on Home.
 - **Never request the original file.** Thumbnails ask the photo transcoder for a 520 px cover,
-  the viewer for a fit inside 3840x2160 with no `minSize` (`minSize=1` crops to cover).
-- **The server side is unverified.** No photo library existed on either test server when this was
-  built, so both mappers follow documented response shapes. `PlexPhotoFixture` (DEBUG only,
-  `RIVULET_PHOTO_FIXTURE`) stands in for one; delete it when the mappers are measured.
+  the viewer for a fit inside 3840x2160 with no `minSize` (`minSize=1` scales to cover, so a
+  portrait photo comes back larger than the screen). The transcoder applies EXIF rotation.
+- **Plex is measured (PMS 1.43.4); Jellyfin is not.** No Jellyfin photo library has been seen,
+  so `JellyfinPhotoProvider` still follows documented response shapes. What Plex does:
+  - An album, a photo and a clip all sit under `Metadata`. An album is `type="photo"` with a key
+    ending in `/children` and carries no item count; a clip is `type="clip"`.
+  - Every level is two `/library/sections/<id>/all` requests: `type=14` for its albums and
+    `type=13,12` for its photos and clips, both with `parent=<album>` inside a folder. Do not
+    page `/library/metadata/<album>/children`: sorted by date it puts sub-albums last.
+  - At the root `type=13,12` lists only the photos loose in the root folder.
+    `clusterZoomLevel=1` makes it every photo and clip in the section, sorted and paged.
+  - `originallyAvailableAt` is a camera-local day: parse it in the device's zone, or the caption
+    is a day early west of UTC. `addedAt` is the file's date, not the scan time.
+  - HEIC files were not indexed on the test server (0 of 4): they are absent from every listing.
+  - A clip's Part is the video file (the transcoder answers 500 for it): its still is the thumb.
 
 ### Glass UI Style
 

@@ -4,8 +4,18 @@
 import XCTest
 @testable import Rivulet
 
-/// Fixtures follow the documented response shapes, not a captured photo section.
+/// Fixtures are entries from a photo section on PMS 1.43.4, trimmed of file paths.
 final class PlexPhotoMapperTests: XCTestCase {
+    private var zone: TimeZone!
+
+    // West of UTC, where a date parsed at UTC midnight shows as the day before.
+    override func setUp() {
+        zone = NSTimeZone.default
+        NSTimeZone.default = TimeZone(identifier: "America/Chicago")!
+    }
+
+    override func tearDown() { NSTimeZone.default = zone }
+
     private func map(_ json: String) throws -> PhotoItem? {
         let meta = try JSONDecoder().decode(PlexMetadata.self, from: Data(json.utf8))
         return PlexPhotoMapper.item(meta, providerID: "plex:abc", serverURL: "http://s:32400", authToken: "tok")
@@ -16,44 +26,73 @@ final class PlexPhotoMapperTests: XCTestCase {
         return Dictionary(uniqueKeysWithValues: items.map { ($0.name, $0.value ?? "") })
     }
 
+    private static let album = #"""
+    {"ratingKey":"242388","key":"/library/metadata/242388/children","parentRatingKey":"242383",
+     "guid":"local://242388","type":"photo","title":"Day Two","parentKey":"/library/metadata/242383",
+     "summary":"","index":1,"composite":"/library/metadata/242388/composite/1791946145",
+     "thumb":"/library/metadata/242388/thumb/1791946145","art":"/library/metadata/242388/art/1791946145",
+     "addedAt":1791946143,"updatedAt":1791946145}
+    """#
+
+    private static let photo = #"""
+    {"ratingKey":"242382","key":"/library/metadata/242382","guid":"local://242382","type":"photo",
+     "title":"photo-5","summary":"","index":1,"year":2024,"thumb":"/library/metadata/242382/thumb/1791946144",
+     "originallyAvailableAt":"2024-03-02","addedAt":1709400000,"updatedAt":1791946144,
+     "createdAtAccuracy":"epoch,local","createdAtTZOffset":"-3600",
+     "Media":[{"id":270603,"width":4032,"height":3024,"aspectRatio":1.33,"container":"jpeg",
+               "hasVoiceActivity":false,
+               "Part":[{"id":272315,"key":"/library/parts/272315/1709400000/file.jpg","size":1700000,
+                        "container":"jpeg","orientation":6}]}]}
+    """#
+
+    // `optimizedForStreaming` is a number on Media and a bool on Part, as the server sends it.
+    private static let clip = #"""
+    {"ratingKey":"242384","key":"/library/metadata/242384","parentRatingKey":"242383",
+     "guid":"com.plexapp.agents.none://242384?lang=xn","type":"clip","title":"clip-1",
+     "parentKey":"/library/metadata/242383","subtype":"photo","summary":"","index":1,"year":2024,
+     "thumb":"/library/metadata/242384/thumb/1791946143","duration":9398,
+     "originallyAvailableAt":"2024-06-01","addedAt":1717250000,"updatedAt":1791946143,
+     "createdAtAccuracy":"epoch,local","createdAtTZOffset":"-3600",
+     "Media":[{"id":270604,"duration":9398,"bitrate":2486,"width":1280,"height":720,"aspectRatio":1.78,
+               "audioChannels":2,"audioCodec":"aac","videoCodec":"hevc","videoResolution":"720",
+               "container":"mov","videoFrameRate":"NTSC","optimizedForStreaming":1,"audioProfile":"lc",
+               "has64bitOffsets":false,"videoProfile":"main","hasVoiceActivity":false,
+               "Part":[{"id":272316,"key":"/library/parts/272316/1717250000/file.mov","duration":9398,
+                        "size":2900000,"audioProfile":"lc","container":"mov","has64bitOffsets":false,
+                        "optimizedForStreaming":true,"videoProfile":"main"}]}]}
+    """#
+
     func test_album_isToldByItsKey_notItsType() throws {
-        let album = try XCTUnwrap(map(#"""
-        {"ratingKey":"10","key":"/library/metadata/10/children","type":"photo","title":"Italy",
-         "thumb":"/library/metadata/10/thumb/1","leafCount":128,"addedAt":1700000000}
-        """#))
+        let album = try XCTUnwrap(map(Self.album))
         XCTAssertEqual(album.kind, .folder)
-        XCTAssertEqual(album.ref, MediaItemRef(providerID: "plex:abc", itemID: "10"))
-        XCTAssertEqual(album.title, "Italy")
-        XCTAssertEqual(album.childCount, 128)
+        XCTAssertEqual(album.ref, MediaItemRef(providerID: "plex:abc", itemID: "242388"))
+        XCTAssertEqual(album.title, "Day Two")
+        XCTAssertNil(album.childCount, "the server sends no count for an album")
+        XCTAssertEqual(query(album.thumbnail)["url"], "/library/metadata/242388/thumb/1791946145")
         XCTAssertNil(album.full, "a folder is never shown full screen")
         XCTAssertNil(album.playable)
     }
 
     func test_photo_datesAndSizedURLs() throws {
-        let photo = try XCTUnwrap(map(#"""
-        {"ratingKey":"11","key":"/library/metadata/11","type":"photo","title":"IMG_0001",
-         "thumb":"/library/metadata/11/thumb/1","originallyAvailableAt":"2024-06-09","addedAt":1700000000,
-         "Media":[{"id":1,"width":4032,"height":3024,"Part":[{"id":2,"key":"/library/parts/2/1/IMG_0001.heic"}]}]}
-        """#))
+        let photo = try XCTUnwrap(map(Self.photo))
         XCTAssertEqual(photo.kind, .photo)
         XCTAssertNil(photo.childCount)
         XCTAssertNil(photo.playable)
-        let taken = Calendar(identifier: .gregorian).dateComponents(
-            in: TimeZone(identifier: "UTC")!, from: try XCTUnwrap(photo.date))
-        XCTAssertEqual([taken.year, taken.month, taken.day], [2024, 6, 9], "the date taken, not the scan time")
+        let taken = Calendar.current.dateComponents([.year, .month, .day], from: try XCTUnwrap(photo.date))
+        XCTAssertEqual([taken.year, taken.month, taken.day], [2024, 3, 2], "the day taken, in the device's zone")
 
         let thumb = query(photo.thumbnail)
         XCTAssertEqual(photo.thumbnail?.path, "/photo/:/transcode")
-        XCTAssertEqual(thumb["url"], "/library/metadata/11/thumb/1")
+        XCTAssertEqual(thumb["url"], "/library/metadata/242382/thumb/1791946144")
         XCTAssertEqual([thumb["width"], thumb["height"]], ["520", "520"])
         XCTAssertEqual(thumb["minSize"], "1", "a tile is a cover")
         XCTAssertEqual(thumb["upscale"], "0")
         XCTAssertEqual(thumb["X-Plex-Token"], "tok")
 
         let full = query(photo.full)
-        XCTAssertEqual(full["url"], "/library/parts/2/1/IMG_0001.heic", "the file, through the transcoder")
+        XCTAssertEqual(full["url"], "/library/parts/272315/1709400000/file.jpg", "the file, through the transcoder")
         XCTAssertEqual([full["width"], full["height"]], ["3840", "2160"])
-        XCTAssertNil(full["minSize"], "with minSize a portrait photo comes back screen-wide")
+        XCTAssertNil(full["minSize"], "with minSize a portrait photo comes back larger than the screen")
         XCTAssertEqual(photo.full?.path, "/photo/:/transcode", "the original file is never requested directly")
     }
 
@@ -67,14 +106,10 @@ final class PlexPhotoMapperTests: XCTestCase {
     }
 
     func test_clip_carriesAPlayableItem_andAStillForItsImage() throws {
-        let clip = try XCTUnwrap(map(#"""
-        {"ratingKey":"13","key":"/library/metadata/13","type":"clip","title":"MOV_0002","duration":12000,
-         "thumb":"/library/metadata/13/thumb/1",
-         "Media":[{"id":3,"Part":[{"id":4,"key":"/library/parts/4/1/MOV_0002.mov"}]}]}
-        """#))
+        let clip = try XCTUnwrap(map(Self.clip))
         XCTAssertEqual(clip.kind, .clip)
         XCTAssertEqual(clip.playable?.ref, clip.ref)
-        XCTAssertEqual(query(clip.full)["url"], "/library/metadata/13/thumb/1", "never the video file")
+        XCTAssertEqual(query(clip.full)["url"], "/library/metadata/242384/thumb/1791946143", "never the video file")
     }
 
     func test_otherTypes_andItemsWithoutAKey_areDropped() throws {

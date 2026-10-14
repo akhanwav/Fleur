@@ -31,13 +31,7 @@ class PlexDataStore: ObservableObject {
     /// after it, nil/empty means "this user has no Continue Watching" (drop
     /// the row). Reset on sign-out and profile switch.
     private var hasFetchedContinueWatching = false
-    @Published var libraries: [PlexLibrary] = [] {
-        didSet {
-            #if DEBUG
-            if let fixture = PlexPhotoFixture.section(missingFrom: libraries) { libraries.append(fixture) }
-            #endif
-        }
-    }
+    @Published var libraries: [PlexLibrary] = []
     @Published var isLoadingHubs = false
     @Published var isLoadingLibraries = false
     @Published var hubsError: String?
