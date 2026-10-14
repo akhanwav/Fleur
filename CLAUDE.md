@@ -596,6 +596,11 @@ functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
   `#if targetEnvironment(simulator)` face detection fails there, `Signals.faces`
   is nil and each title stays where it started, which looks like scoring that
   does nothing.
+- **Vision and drawing run on `ContinueWatchingCardCache`'s own serial queue
+  (`offPool`), never in a `Task`.** On Swift's cooperative pool a few cards'
+  analysis held every thread of a 3-core Apple TV (2nd-gen 4K), and image
+  loads and Plex requests queued behind it: Home stayed empty on some
+  launches. The simulator has the Mac's cores and never shows it.
 - **Tune the weights, never special-case a title.** A bad placement is fixed in
   `subjectWeight`, `faceWeight`, `travelWeight`, `comfortableLuma` or
   `trailingCost`, with the still added as a test case. A per-title exception fixes
