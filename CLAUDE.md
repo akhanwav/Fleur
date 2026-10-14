@@ -666,8 +666,8 @@ write either number anywhere else.
 
 ### Photos
 
-A photo library (Plex section type `photo`, Jellyfin `photos` or `homevideos`) is a library like
-any other: listed in the sidebar and in Settings > Sidebar Libraries, opened by
+A photo library (Plex section type `photo`, Jellyfin `photos`, or `homevideos` holding at least
+one photo) is a library like any other: listed in the sidebar and in Settings > Sidebar Libraries, opened by
 `PhotoLibraryViewController` (`Views/Photos/UIKit/`), a stack of `PhotoGridViewController` grids
 with a focusless full-screen `PhotoViewerViewController` (paging and slideshow, both remote
 transports through `DirectionalInputBinding`). tvOS only.
@@ -682,8 +682,7 @@ transports through `DirectionalInputBinding`). tvOS only.
 - **Never request the original file.** Thumbnails ask the photo transcoder for a 520 px cover,
   the viewer for a fit inside 3840x2160 with no `minSize` (`minSize=1` scales to cover, so a
   portrait photo comes back larger than the screen). The transcoder applies EXIF rotation.
-- **Plex is measured (PMS 1.43.4); Jellyfin is not.** No Jellyfin photo library has been seen,
-  so `JellyfinPhotoProvider` still follows documented response shapes. What Plex does:
+- **Both servers are measured (PMS 1.43.4, Jellyfin 12.1).** What Plex does:
   - An album, a photo and a clip all sit under `Metadata`. An album is `type="photo"` with a key
     ending in `/children` and carries no item count; a clip is `type="clip"`.
   - Every level is two `/library/sections/<id>/all` requests: `type=14` for its albums and
@@ -695,6 +694,29 @@ transports through `DirectionalInputBinding`). tvOS only.
     is a day early west of UTC. `addedAt` is the file's date, not the scan time.
   - HEIC files were not indexed on the test server (0 of 4): they are absent from every listing.
   - A clip's Part is the video file (the transcoder answers 500 for it): its still is the thumb.
+- **What Jellyfin does:**
+  - **A `homevideos` view is a photo library only when it holds a photo.** `JellyfinProvider.libraries()`
+    asks each one for a count (`holdsPhotos`: `Items?parentId=<view>&recursive=true&includeItemTypes=Photo&limit=0`,
+    48 bytes). None leaves it `.mixed`: the video page and its Home row, as before the photo
+    feature. A failed probe fails `libraries()`, so the store keeps the previous list. A `photos` view is always a photo library, with no probe. A 12.1
+    server can only create `homevideos`. The mapper stays pure (`homeVideosHoldPhotos:`).
+  - Every level is two `Items` requests with `parentId`: `includeItemTypes=PhotoAlbum,Folder`
+    sorted by `SortName`, first page only, and `includeItemTypes=Photo,Video` sorted
+    `DateCreated,SortName` descending and paged against `TotalRecordCount`. The media request
+    adds `recursive=true` at the root, which lists every photo and clip in the library.
+  - **The folders request must say `recursive=false`.** With `includeItemTypes` and a library id
+    the server recurses by itself: the root gains every nested album and the library's own
+    physical `Folder`. Inside an album it does not.
+  - A sub-folder is a `PhotoAlbum`. `RecursiveItemCount` counts its photos and clips at any
+    depth. It has no image (404), so the cell keeps the folder glyph.
+  - A photo's `PremiereDate` is the camera's wall clock stamped `Z`: read its first ten
+    characters as a day in the device's zone. A clip's `PremiereDate`, and `DateCreated` (all a
+    photo without EXIF has), are real instants. `DateCreated` arrives only with `fields=DateCreated`.
+  - Images come from `Items/<id>/Images/Primary` with the item's tag and no token:
+    `fillWidth=fillHeight=520` is a cover, `maxWidth=3840&maxHeight=2160` a fit. Neither
+    upscales, both apply EXIF rotation. No size parameters means a full-resolution re-encode.
+  - Server limits: HEIC is not indexed (0 of 4), `isFolder` is not an `/Items` parameter, and
+    the legacy `X-Emby-Token` header answers 401 (the client sends `Authorization: MediaBrowser`).
 
 ### Glass UI Style
 

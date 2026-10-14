@@ -53,7 +53,18 @@ final class JellyfinProvider: MediaProvider, @unchecked Sendable {
 
     func libraries() async throws -> [MediaLibrary] {
         let result: JFQueryResult = try await client.get("UserViews")
-        return (result.items ?? []).compactMap { JellyfinMediaMapper.library($0, providerID: id) }
+        var libraries: [MediaLibrary] = []
+        for view in result.items ?? [] {
+            // One count per "homevideos" view decides photo browser or video page.
+            var holdsPhotos = false
+            if view.collectionType == "homevideos", let viewID = view.id {
+                holdsPhotos = try await self.holdsPhotos(libraryID: viewID)
+            }
+            if let library = JellyfinMediaMapper.library(view, providerID: id, homeVideosHoldPhotos: holdsPhotos) {
+                libraries.append(library)
+            }
+        }
+        return libraries
     }
 
     func items(in library: MediaLibrary, sort: SortOption, page: Page) async throws -> PagedResult<MediaItem> {

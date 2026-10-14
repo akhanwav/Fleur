@@ -5,9 +5,8 @@
 //  JellyfinPhotoProvider.swift
 //  Rivulet
 //
-//  Jellyfin "Home Videos and Photos" libraries. Every assumption about how
-//  the server answers for one lives in this file. None of it has been seen
-//  against a live library.
+//  Jellyfin "Home Videos and Photos" libraries. Every assumption about what
+//  the server answers for one lives in this file. Measured on Jellyfin 12.1.
 //
 
 import Foundation
@@ -33,8 +32,7 @@ enum JellyfinPhotoMapper {
             ref: MediaItemRef(providerID: providerID, itemID: id),
             kind: kind,
             title: dto.name ?? "",
-            // The EXIF date lands in both; a file without one has only DateCreated.
-            date: (dto.premiereDate ?? dto.dateCreated).flatMap(JellyfinMediaMapper.parseDate),
+            date: date(dto, kind: kind),
             childCount: kind == .folder ? dto.recursiveItemCount : nil,
             thumbnail: image([URLQueryItem(name: "fillWidth", value: side),
                               URLQueryItem(name: "fillHeight", value: side)]),
@@ -44,9 +42,33 @@ enum JellyfinPhotoMapper {
                 ? JellyfinMediaMapper.item(dto, providerID: providerID, baseURL: baseURL)
                 : nil)
     }
+
+    /// A photo's PremiereDate is the camera's wall clock stamped Z: read its
+    /// day in the device's zone. A clip's, and DateCreated, are instants.
+    static func date(_ dto: JFItem, kind: PhotoItem.Kind) -> Date? {
+        if kind == .photo, let taken = dto.premiereDate,
+           let day = try? Date(String(taken.prefix(10)),
+                               strategy: Date.ISO8601FormatStyle(timeZone: .current).year().month().day()) {
+            return day
+        }
+        return (dto.premiereDate ?? dto.dateCreated).flatMap(JellyfinMediaMapper.parseDate)
+    }
 }
 
 extension JellyfinProvider: PhotoProvider {
+    /// Whether a "homevideos" view holds any photo: a count with no items.
+    /// Throws on a failed probe, so the store keeps the libraries it had.
+    func holdsPhotos(libraryID: String) async throws -> Bool {
+        let result: JFQueryResult = try await client.get("Items", [
+            URLQueryItem(name: "parentId", value: libraryID),
+            URLQueryItem(name: "recursive", value: "true"),
+            URLQueryItem(name: "includeItemTypes", value: "Photo"),
+            URLQueryItem(name: "limit", value: "0"),
+            URLQueryItem(name: "enableTotalRecordCount", value: "true")
+        ])
+        return (result.totalRecordCount ?? 0) > 0
+    }
+
     func photoPage(in library: MediaLibrary, folder: MediaItemRef?, page: Page) async throws -> PhotoPage {
         let parent = URLQueryItem(name: "parentId", value: folder?.itemID ?? library.id)
         let fields = URLQueryItem(name: "fields", value: "DateCreated,RecursiveItemCount")
@@ -56,12 +78,14 @@ extension JellyfinProvider: PhotoProvider {
             }
         }
 
-        // Folders are direct children, asked for once.
+        // Asked for once. Without `recursive=false` a library id recurses by
+        // itself: nested albums and the library's own Folder join the root.
         func folders() async throws -> JFQueryResult? {
             guard page.offset == 0 else { return nil }
             return try await client.get("Items", [
                 parent, fields,
                 URLQueryItem(name: "includeItemTypes", value: "PhotoAlbum,Folder"),
+                URLQueryItem(name: "recursive", value: "false"),
                 URLQueryItem(name: "sortBy", value: "SortName")
             ])
         }

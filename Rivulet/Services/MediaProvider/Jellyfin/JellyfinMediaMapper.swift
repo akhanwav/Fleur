@@ -18,15 +18,17 @@ enum JellyfinMediaMapper {
 
     /// Library views Rivulet can render. Book, playlist, box set and trailer
     /// views have no surface, so they are dropped rather than shown empty.
-    static func library(_ view: JFItem, providerID: String) -> MediaLibrary? {
+    static func library(_ view: JFItem, providerID: String, homeVideosHoldPhotos: Bool = false) -> MediaLibrary? {
         guard let id = view.id else { return nil }
         let kind: MediaLibrary.LibraryKind
         switch view.collectionType {
         case "movies": kind = .movies
         case "tvshows": kind = .shows
         case "music": kind = .music
-        // "Home Videos and Photos" is the photo browser's, by type alone.
-        case "photos", "homevideos": kind = .photos
+        case "photos": kind = .photos
+        // "Home Videos and Photos": the photo browser's only when it holds
+        // photos, so a video-only one keeps the video page and its Home row.
+        case "homevideos": kind = homeVideosHoldPhotos ? .photos : .mixed
         case "livetv": kind = .liveTV
         case nil, "mixed", "folders", "unknown": kind = .mixed
         default: return nil
