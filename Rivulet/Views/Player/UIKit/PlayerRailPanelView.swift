@@ -42,6 +42,9 @@ protocol RailPanelMenuHandling {
 
 final class PlayerRailPanelView: UIView {
 
+    /// The gray laid over `.clear` glass that matches AVKit's panels.
+    static let glassWash = UIColor(white: 0.35, alpha: 0.18)
+
     /// Height available to panel CONTENT at the panel's full size. Content that
     /// wants a constant panel (rather than one that grows and shrinks with what
     /// it happens to be showing) constrains itself to this.
@@ -114,7 +117,7 @@ final class PlayerRailPanelView: UIView {
         backgroundEffectView.layer.cornerRadius = Metrics.cornerRadius
         backgroundEffectView.layer.cornerCurve = .continuous
 
-        wash.backgroundColor = UIColor(white: 0.35, alpha: 0.18)
+        wash.backgroundColor = Self.glassWash
         wash.layer.cornerRadius = Metrics.cornerRadius
         wash.layer.cornerCurve = .continuous
         wash.isUserInteractionEnabled = false

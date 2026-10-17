@@ -49,6 +49,7 @@ final class CardTrackListView: UIView {
     }
 
     private let rows: [Row]
+    private let actions: [CardActionConfig]
     private let toggles: [CardToggleConfig]
     private let steppers: [CardStepperConfig]
     private let onSelect: (Int?) -> Void
@@ -64,6 +65,7 @@ final class CardTrackListView: UIView {
     private weak var lastFocusedControl: UIView?
 
     convenience init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool,
+                     actions: [CardActionConfig] = [],
                      toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
                      onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
@@ -78,13 +80,14 @@ final class CardTrackListView: UIView {
                 isSelected: track.id == selectedTrackId
             )
         })
-        self.init(header: header, rows: rows, toggles: toggles, steppers: steppers, onSelect: onSelect)
+        self.init(header: header, rows: rows, actions: actions, toggles: toggles, steppers: steppers, onSelect: onSelect)
     }
 
     /// A plain list of choices: each row's `trackId` is what `onSelect` receives.
-    init(header: String, rows: [Row], toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
-         onSelect: @escaping (Int?) -> Void) {
+    init(header: String, rows: [Row], actions: [CardActionConfig] = [], toggles: [CardToggleConfig] = [],
+         steppers: [CardStepperConfig] = [], onSelect: @escaping (Int?) -> Void) {
         self.rows = rows
+        self.actions = actions
         self.toggles = toggles
         self.steppers = steppers
         self.onSelect = onSelect
@@ -141,6 +144,21 @@ final class CardTrackListView: UIView {
             let button = CardTrackRowButton(row: row)
             button.onTap = { [weak self] in
                 self?.onSelect(row.trackId)
+            }
+            stack.addArrangedSubview(button)
+            rowButtons.append(button)
+        }
+
+        // Actions (Search for Subtitles) get their own section; the handler
+        // decides what happens to the popup.
+        if !actions.isEmpty, !rowButtons.isEmpty {
+            stack.addArrangedSubview(MenuSeparatorView())
+        }
+        for config in actions {
+            let button = CardTrackRowButton(row: Row(title: config.title, subtitle: nil, trackId: nil, isSelected: false))
+            button.onTap = { [weak button] in
+                guard let button else { return }
+                config.run(button)
             }
             stack.addArrangedSubview(button)
             rowButtons.append(button)
@@ -226,6 +244,14 @@ private final class MenuSeparatorView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+// MARK: - CardActionConfig
+
+/// A row that runs `run`, which receives the row so it can retitle it.
+struct CardActionConfig {
+    let title: String
+    let run: (CardTrackRowButton) -> Void
 }
 
 // MARK: - CardToggleConfig
@@ -451,6 +477,8 @@ final class CardTrackRowButton: UIControl {
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+
+    func setTitle(_ title: String) { titleLabel.text = title }
 
     override func layoutSubviews() {
         super.layoutSubviews()

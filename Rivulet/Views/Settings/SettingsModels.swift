@@ -105,6 +105,28 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
     }
 }
 
+// MARK: - Autoplay Limit
+
+/// Episodes that may play in a row before Up Next waits for the remote.
+enum AutoplayLimit: Int, CaseIterable, CustomStringConvertible {
+    case off = 0
+    case two = 2
+    case three = 3
+    case four = 4
+    case five = 5
+
+    static let storageKey = "autoplayLimit"
+
+    static var current: AutoplayLimit {
+        AutoplayLimit(rawValue: UserDefaults.standard.integer(forKey: storageKey)) ?? .off
+    }
+
+    var description: String { self == .off ? "Off" : "\(rawValue) Episodes" }
+
+    /// Whether Up Next may count down after `count` episodes in a row.
+    func allowsAutoplay(afterEpisodesInARow count: Int) -> Bool { self == .off || count < rawValue }
+}
+
 // MARK: - Skip Length
 
 /// Single Left/Right tap-skip length (seconds). Drives `InputConfig.tapSeekSeconds`.

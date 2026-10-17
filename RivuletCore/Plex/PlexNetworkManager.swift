@@ -1245,6 +1245,62 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Subtitles the server's agents (OpenSubtitles) offer for an item, best first.
+    /// `language` must be ISO 639-1: PMS 1.43.4 answers 500 for "eng".
+    func searchSubtitles(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String,
+        language: String
+    ) async throws -> [PlexStream] {
+        guard var components = URLComponents(string: "\(serverURL)/library/metadata/\(ratingKey)/subtitles") else {
+            throw PlexAPIError.invalidURL
+        }
+        components.queryItems = [URLQueryItem(name: "language", value: language)]
+        guard let url = components.url else { throw PlexAPIError.invalidURL }
+        let container: PlexStreamListWrapper = try await request(url, headers: plexHeaders(authToken: authToken))
+        return container.MediaContainer.Stream ?? []
+    }
+
+    /// Whether `authToken` administers the server: `/accounts` answers 200 for the
+    /// owner and 401 otherwise.
+    func canAdministerServer(serverURL: String, authToken: String) async -> Bool {
+        guard let url = URL(string: "\(serverURL)/accounts?X-Plex-Container-Start=0&X-Plex-Container-Size=1") else {
+            return false
+        }
+        var request = URLRequest(url: url)
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+        guard let (_, response) = try? await session.data(for: request) else { return false }
+        return (response as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    /// Saves a search result next to the media. PMS answers at once and lists
+    /// the new stream (under a new id) about two seconds later.
+    func downloadSubtitle(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String,
+        resultKey: String
+    ) async throws {
+        guard var components = URLComponents(string: "\(serverURL)/library/metadata/\(ratingKey)/subtitles") else {
+            throw PlexAPIError.invalidURL
+        }
+        components.queryItems = [URLQueryItem(name: "key", value: resultKey)]
+        guard let url = components.url else { throw PlexAPIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        for (key, value) in plexHeaders(authToken: authToken) {
+            request.addValue(value, forHTTPHeaderField: key)
+        }
+        let (_, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw PlexAPIError.invalidResponse
+        }
+    }
+
     /// Remove item from the Continue Watching hub without touching its
     /// watch state (progress/viewCount stay intact — the item is only
     /// hidden from the hub, matching official Plex clients).

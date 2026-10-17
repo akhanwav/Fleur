@@ -35,6 +35,7 @@ class PlayerContainerViewController: UIViewController {
     /// Next (Task 6). Only one can be up at a time — presenting a new
     /// one dismisses whatever's showing first.
     private var activeRailPanel: PlayerRailPanelView?
+    private var subtitleSearchTask: Task<Void, Never>?
 
     /// Previous `railVisible`, so `applyChromeVisibility()` can spot the rail
     /// APPEARING and start every appearance on the scrubber.
@@ -48,6 +49,8 @@ class PlayerContainerViewController: UIViewController {
     /// every other chrome layer while `postVideoState != .hidden`; removed
     /// (not just hidden) when it goes away so its buttons cannot hold focus.
     private var postVideoOverlay: PostVideoOverlayView?
+    /// Darkens the video behind the Up Next card, as `chromeScrim` does behind the rail.
+    private var postVideoScrim: SideScrimView?
     /// Snapshot of the last `$insightsCast` emission, read when the rail's
     /// Insights panel is presented.
     private var insightsCastCache: [MediaPerson] = []
@@ -1444,6 +1447,11 @@ class PlayerContainerViewController: UIViewController {
                 content: CardTrackListView(
                     header: "Subtitles", tracks: vm.subtitleTracks,
                     selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+                    actions: vm.canSearchSubtitles ? [
+                        CardActionConfig(title: "Search for Subtitles") { [weak self] row in
+                            self?.searchSubtitles(from: row)
+                        },
+                    ] : [],
                     steppers: [
                         // Delay: sticky per movie/episode (ratingKey).
                         CardStepperConfig(
@@ -1577,6 +1585,43 @@ class PlayerContainerViewController: UIViewController {
         return true
     }
 
+    // MARK: - Subtitle search
+
+    /// Searches while the Subtitles menu stays up, then swaps in the results,
+    /// unless that menu was closed meanwhile.
+    private func searchSubtitles(from row: CardTrackRowButton) {
+        guard let vm = viewModel, subtitleSearchTask == nil else { return }
+        let origin = activeRailPanel
+        row.setTitle("Searching…")
+        subtitleSearchTask = Task { [weak self, weak vm, weak row] in
+            let results = try? await vm?.searchSubtitles()
+            guard let self else { return }
+            self.subtitleSearchTask = nil
+            row?.setTitle("Search for Subtitles")
+            guard let vm, let origin, self.activeRailPanel === origin else { return }
+            let found = results ?? []
+            let rows = found.isEmpty
+                ? [CardTrackListView.Row(title: results == nil ? "Search Failed" : "No Subtitles Found",
+                                         subtitle: nil, trackId: nil, isSelected: false)]
+                : found.enumerated().map { index, result in
+                    CardTrackListView.Row(
+                        title: result.title ?? result.displayTitle ?? "Subtitle",
+                        subtitle: [result.language, result.codec?.uppercased(),
+                                   result.hearingImpaired == true ? "SDH" : nil,
+                                   result.forced == true ? "Forced" : nil]
+                            .compactMap { $0 }.joined(separator: " • "),
+                        trackId: index, isSelected: false)
+                }
+            _ = self.presentRailPanel(
+                content: CardTrackListView(header: "Search Results", rows: rows, onSelect: { [weak vm, weak self] index in
+                    self?.activeRailPanel?.dismissPanel()
+                    guard let index, let vm else { return }
+                    Task { await vm.installSubtitle(found[index]) }
+                }),
+                width: CardTrackListView.menuWidth, from: self.rail?.subtitlesButton ?? self.view)
+        }
+    }
+
     // MARK: - Full description
 
     private var descriptionOverlay: PlayerDescriptionOverlayView?
@@ -1618,6 +1663,7 @@ class PlayerContainerViewController: UIViewController {
 
     func debugMenu() { handleMenuButton() }
     func debugHideChrome() { viewModel?.showControls = false }
+    func debugResume() { viewModel?.resume() }
     func debugContentVertical(up: Bool) { handleContentVertical(up: up) }
 
     func debugPresentPane(_ name: String) {
@@ -1868,16 +1914,37 @@ class PlayerContainerViewController: UIViewController {
         if state != .hidden {
             let overlay = postVideoOverlay ?? makePostVideoOverlay()
             if overlay.superview == nil {
-                overlay.frame = view.bounds
-                overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                overlay.alpha = 0
-                overlay.resetFocusGrace()
+                let scrim = SideScrimView()
+                scrim.alpha = 0
+                view.addSubview(scrim)
+                scrim.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    scrim.topAnchor.constraint(equalTo: view.topAnchor),
+                    scrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                    scrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                    scrim.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.6),
+                ])
+                postVideoScrim = scrim
+                UIView.animate(withDuration: 0.5) { scrim.alpha = 1 }
                 view.addSubview(overlay)
-                UIView.animate(withDuration: 0.35) { overlay.alpha = 1 }
+                overlay.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([
+                    overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -PlayerRailView.sideInset),
+                    overlay.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+                ])
             }
             refreshPostVideoContent()
-        } else {
-            postVideoOverlay?.removeFromSuperview()
+        } else if let overlay = postVideoOverlay {
+            // A departing card is not the focus owner; the next presentation builds a new one.
+            postVideoOverlay = nil
+            let scrim = postVideoScrim
+            postVideoScrim = nil
+            UIView.animate(withDuration: 0.35, animations: { scrim?.alpha = 0 },
+                           completion: { _ in scrim?.removeFromSuperview() })
+            overlay.slideOut { [weak self] in
+                self?.setNeedsFocusUpdate()
+                self?.updateFocusIfNeeded()
+            }
         }
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
@@ -1914,7 +1981,6 @@ class PlayerContainerViewController: UIViewController {
             nextEpisode: vm.nextEpisode,
             serverURL: vm.serverURL,
             authToken: vm.authToken,
-            backdrop: vm.loadingArtImage ?? vm.loadingThumbImage,
             thumbnailURL: vm.nextEpisode.flatMap(vm.providerThumbnailURL(for:)),
             errorMessage: vm.nextEpisodeError
         )
@@ -1932,7 +1998,8 @@ class PlayerContainerViewController: UIViewController {
         // Buffering shares the loading label but none of the other loading
         // treatment (no skeleton, no focus gate) — see the state sink.
         let showsActivityCue = isLoading || vm.playbackState == .buffering
-        let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient
+        // The Up Next card sits over the video alone.
+        let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient && vm.postVideoState == .hidden
         let railVisible = chromeVisible && !vm.isScrubbing
         if !chromeVisible { progressBar?.clearSkipIndicator() }
 
@@ -2231,6 +2298,26 @@ final class ChromeScrimView: UIView {
         gradient.locations = [0.356, 0.912, 1]
         gradient.startPoint = CGPoint(x: 0.5, y: 0)
         gradient.endPoint = CGPoint(x: 0.5, y: 1)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Right-side legibility gradient behind the Up Next card: `ChromeScrimView`'s
+/// stops, turned to run left to right.
+final class SideScrimView: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        let gradient = layer as! CAGradientLayer
+        gradient.colors = [
+            UIColor.black.withAlphaComponent(0).cgColor,
+            UIColor.black.withAlphaComponent(0.55).cgColor,
+            UIColor.black.withAlphaComponent(0.55).cgColor,
+        ]
+        gradient.locations = [0, 0.6, 1]
+        gradient.startPoint = CGPoint(x: 0, y: 0.5)
+        gradient.endPoint = CGPoint(x: 1, y: 0.5)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }

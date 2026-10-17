@@ -27,26 +27,6 @@ enum PostVideoState: Equatable {
     case showingEpisodeSummary
 }
 
-/// Video frame state for shrink animation
-enum VideoFrameState: Equatable {
-    case fullscreen
-    case shrunk
-
-    var scale: CGFloat {
-        switch self {
-        case .fullscreen: return 1.0
-        case .shrunk: return 0.25  // 25% size - roughly 480x270 on 1920x1080
-        }
-    }
-
-    var offset: CGSize {
-        switch self {
-        case .fullscreen: return .zero
-        case .shrunk: return CGSize(width: 60, height: 60)  // Padding from top-left corner
-        }
-    }
-}
-
 /// Seek indicator shown briefly when user taps left/right to skip
 enum SeekIndicator: Equatable {
     case forward(Int)   // seconds skipped forward
@@ -235,7 +215,6 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Post-Video State
     @Published var postVideoState: PostVideoState = .hidden
-    @Published var videoFrameState: VideoFrameState = .fullscreen
     @Published private(set) var nextEpisode: PlexMetadata?
     /// Set once the next episode has been RESOLVED EARLY for the current episode
     /// (driven by Aether's first non-nil currentAVPlayer). Guards the fetch so
@@ -282,6 +261,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     @Published private(set) var countdownTotalSeconds: Int = 0
     @Published var isCountdownPaused: Bool = false
     private var countdownTimer: Timer?
+    /// Episodes played since the remote last started one, counting that one.
+    private var episodesInARow = 1
     @Published var scrubThumbnail: UIImage?
     @Published private(set) var scrubSpeed: Int = 0  // -8...8 shuttle level (0 = not shuttling); see ShuttleGrammar
     private var scrubStartTime: Date?  // When scrubbing started (for YouTube-style acceleration)
@@ -1597,6 +1578,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func startPlayback() async {
+        Task { await resolveSubtitleSearchAccess() }
         // Fetch detailed metadata if markers or chapters are missing
         let hasMarkers = !(metadata.Marker ?? []).isEmpty
         let hasChapters = !(metadata.Chapter ?? []).isEmpty
@@ -4378,6 +4360,80 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Subtitle Search
+
+    /// Plex writes the file next to the media, which only the server's admin may
+    /// do. `selectedServer` (and its `owned`) is nil after a warm launch, so ask the server.
+    private(set) var canSearchSubtitles = false
+    /// Admin answers per server URL + token, for the session.
+    private static var serverAdminAnswers: [String: Bool] = [:]
+
+    private func resolveSubtitleSearchAccess() async {
+        guard case .plex = source, metadata.ratingKey != nil,
+              PlexUserProfileManager.shared.selectedUser?.restricted != true else { return }
+        let key = serverURL + authToken
+        if let known = Self.serverAdminAnswers[key] {
+            canSearchSubtitles = known
+            return
+        }
+        let isAdmin = await PlexNetworkManager.shared.canAdministerServer(serverURL: serverURL, authToken: authToken)
+        Self.serverAdminAnswers[key] = isAdmin
+        canSearchSubtitles = isAdmin
+    }
+
+    /// The subtitle preference's language, else the device's, as ISO 639-1.
+    private var subtitleSearchLanguage: String {
+        let device = Locale.current.language.languageCode?.identifier(.alpha2) ?? "en"
+        guard case .track(let preferred, _, _, _) = TrackIntentStore.subtitleIntent ?? .off else { return device }
+        let code = TrackLanguage.normalize(preferred)
+        return code.isEmpty ? device : Locale.LanguageCode(code).identifier(.alpha2) ?? device
+    }
+
+    func searchSubtitles() async throws -> [PlexStream] {
+        guard let ratingKey = metadata.ratingKey else { return [] }
+        return try await PlexNetworkManager.shared.searchSubtitles(
+            serverURL: serverURL, authToken: authToken, ratingKey: ratingKey, language: subtitleSearchLanguage)
+    }
+
+    /// Downloads `result`, waits for the server to list it, then reloads at the
+    /// playhead with it on. A reload re-registers every sidecar in Plex's order,
+    /// which `TrackMerge` pairs on; adding one to the live engine would not.
+    func installSubtitle(_ result: PlexStream) async {
+        guard let ratingKey = metadata.ratingKey, let resultKey = result.key else { return }
+        let network = PlexNetworkManager.shared
+        let generation = itemGeneration
+        let known = Set(plexSubtitleTracksFromMetadata().map(\.id))
+        var tracks = currentPlexTrackIDs()
+        showCompatibilityNotice("Downloading Subtitles…")
+        do {
+            try await network.downloadSubtitle(
+                serverURL: serverURL, authToken: authToken, ratingKey: ratingKey, resultKey: resultKey)
+            for _ in 0..<10 {
+                try await Task.sleep(for: .seconds(1.5))
+                let fresh = try await network.getMetadata(serverURL: serverURL, authToken: authToken, ratingKey: ratingKey)
+                guard generation == itemGeneration else { return }
+                let media = VersionRanking.select(playingMediaID.map(VersionChoice.source) ?? .best,
+                                                  in: fresh.Media ?? []).media
+                guard let added = media.first?.Part?.first?.Stream?.first(where: {
+                    $0.isSubtitle && $0.key != nil && !known.contains($0.id)
+                }) else { continue }
+                metadata.Media = media
+                TrackIntentStore.subtitleIntent = SubtitleIntent(from: MediaTrack(from: added))
+                tracks.subtitle = added.id
+                hideCompatibilityNotice()
+                enqueueStreamWork { vm in
+                    await vm.reloadStream(toOriginal: vm.aetherPlayer != nil, reason: "subtitle_download",
+                                          tracks: tracks, restoring: vm.planSnapshot)
+                }
+                return
+            }
+            showCompatibilityNotice("Subtitles Didn't Arrive")
+        } catch {
+            if isCancellationError(error) || generation != itemGeneration { return }
+            showCompatibilityNotice("Couldn't Download Subtitles")
+        }
+    }
+
     /// Native (AVKit) subtitle picker bridge. Track ids ARE engine indices on
     /// the aether route, so a pick from the native picker is the same value our
     /// own picker produces — just forward it.
@@ -5456,14 +5512,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // Animate video shrink
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.85)) {
-            videoFrameState = .shrunk
-        }
-
-        // Show episode summary after brief delay
-        try? await Task.sleep(nanoseconds: 200_000_000)  // 0.2s
-        guard generation == itemGeneration else { return }
         postVideoState = .showingEpisodeSummary
 
         // Start countdown and preload
@@ -6024,6 +6072,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard countdownSetting > 0 else {
             return
         }
+        // Autoplay Limit: past it, Up Next waits for the remote.
+        guard AutoplayLimit.current.allowsAutoplay(afterEpisodesInARow: episodesInARow) else { return }
 
         countdownSeconds = countdownSetting
         // The ring draws remaining/total, so it needs the RESOLVED setting.
@@ -6044,7 +6094,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
                 if self.countdownSeconds <= 0 {
                     self.countdownTimer?.invalidate()
-                    await self.playNextEpisode()
+                    await self.playNextEpisode(autoplayed: true)
                 }
             }
         }
@@ -6190,8 +6240,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         await playNextEpisode()
     }
 
-    /// Play the next episode
-    func playNextEpisode() async {
+    /// Play the next episode. `autoplayed` is the countdown running out; any
+    /// other start comes from the remote and begins a new run.
+    func playNextEpisode(autoplayed: Bool = false) async {
         guard let next = nextEpisode else { return }
         // A provider swap awaits its provider first, so a second call (the
         // countdown and a Play Now press) must not start another one.
@@ -6231,12 +6282,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         countdownTimer = nil
         countdownSeconds = 0
         isCountdownPaused = false
+        episodesInARow = autoplayed ? episodesInARow + 1 : 1
 
-        // Reset post-video state with animation to return video to fullscreen
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            postVideoState = .hidden
-            videoFrameState = .fullscreen
-        }
+        postVideoState = .hidden
 
         if let nextProviderPlayback {
             // Source, display shim and reporter move together; the outgoing
@@ -6372,7 +6420,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         countdownTimer?.invalidate()
         countdownTimer = nil
         postVideoState = .hidden
-        videoFrameState = .fullscreen
         nextEpisode = nil
         countdownSeconds = 0
         isCountdownPaused = false

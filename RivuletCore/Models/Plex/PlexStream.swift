@@ -141,3 +141,11 @@ nonisolated struct PlexStream: Codable, Identifiable, Sendable {
         return false
     }
 }
+
+/// `/library/metadata/<key>/subtitles` answer: `MediaContainer.Stream[]`.
+nonisolated struct PlexStreamListWrapper: Codable, Sendable {
+    let MediaContainer: Inner
+    nonisolated struct Inner: Codable, Sendable {
+        let Stream: [PlexStream]?
+    }
+}

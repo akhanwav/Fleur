@@ -5,19 +5,13 @@
 //  PostVideoOverlayView.swift
 //  Rivulet
 //
-//  The end-of-episode "Up Next" page: blurred backdrop, next-episode card,
-//  autoplay countdown ring, Play Next / Dismiss.
+//  The end-of-episode "Up Next" card: a glass card that slides in from the
+//  right over the still-playing credits, with the next episode, the autoplay
+//  countdown ring, and Play Next / Dismiss. Back slides it away.
 //
-//  UIKit because the rest of the player chrome is. As SwiftUI inside the
-//  hosting controller it rendered correctly and could not be reached: the
-//  container's `preferredFocusEnvironments` never pointed at it and nothing
-//  requested a focus update when it appeared, so `@FocusState` had no engine
-//  pass to act on and every button sat unfocused. The fix is structural, not
-//  a modifier: the container hands focus to this view and asks the engine to
-//  re-resolve. See `PlayerContainerViewController.applyPostVideoState`.
-//
-//  The video keeps playing behind at `VideoFrameState.shrunk`, so the
-//  backdrop is masked with a hole at the shrunk rect rather than covering it.
+//  The view IS the card's footprint (the container pins it to the trailing
+//  edge): anything larger above the player's content anchor would make the
+//  anchor unfocusable while the card slides out.
 //
 
 import UIKit
@@ -25,41 +19,34 @@ import UIKit
 final class PostVideoOverlayView: UIView {
 
     private enum Metrics {
-        static let contentSpacing: CGFloat = 32
-        static let controlsSpacing: CGFloat = 40
-        static let horizontalPadding: CGFloat = 80
-        static let cardMaxWidth: CGFloat = 700
+        static let width: CGFloat = 640
+        static let padding: CGFloat = 40
+        static let cornerRadius: CGFloat = 40
+        static let spacing: CGFloat = 24
+        /// How far past the screen edge the card starts and ends.
+        static let offscreen: CGFloat = 720
     }
 
     /// Play Next / Play Now, and the Play-Pause press.
     var onPlayNext: (() -> Void)?
-    /// Dismiss button: back to fullscreen video.
+    /// Dismiss button: stop the countdown, else close the card.
     var onDismiss: (() -> Void)?
-    /// Any focus move the user made. Drives cancel-the-countdown-on-interaction;
-    /// the first landing (the engine placing initial focus) does NOT count.
+    /// A focus move the user made with the remote. Cancels the countdown.
     var onUserFocusMove: (() -> Void)?
 
-    private let backdropContainer = UIView()
-    private let backdropImageView = UIImageView()
-    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-    private let dimView = UIView()
-
+    /// The rail panels' glass: `.clear` plus their wash.
+    private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .clear))
     private let contentStack = UIStackView()
-    private let headerStack = UIStackView()
     private let headerLabel = UILabel()
     private let headerSubtitleLabel = UILabel()
     private let card = NextEpisodeCardView()
-    private let controlsStack = UIStackView()
     private let ring = CountdownRingView()
     private let playNextButton = PostVideoButtonView(isPrimary: true)
     private let dismissButton = PostVideoButtonView(isPrimary: false)
 
-    private let spinner = UIActivityIndicatorView(style: .large)
     private var hasNextEpisode = false
     private var countdownActive = false
-    /// The engine's first landing is not a user interaction. Same guard the
-    /// SwiftUI version carried as `hasConsumedInitialFocus`.
-    private var hasSeenInitialFocus = false
+    private var isOnScreen = false
 
     // MARK: - Init
 
@@ -74,90 +61,61 @@ final class PostVideoOverlayView: UIView {
 
     private func setupViews() {
         backgroundColor = .clear
+        transform = CGAffineTransform(translationX: Metrics.offscreen, y: 0)
 
-        backdropImageView.contentMode = .scaleAspectFill
-        backdropImageView.clipsToBounds = true
-        // Fallback when there is no art, matching the old solid-black case.
-        backdropContainer.backgroundColor = UIColor.black.withAlphaComponent(0.7)
-        dimView.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        glass.contentView.backgroundColor = PlayerRailPanelView.glassWash
+        glass.clipsToBounds = true
+        glass.layer.cornerRadius = Metrics.cornerRadius
+        glass.layer.cornerCurve = .continuous
 
         headerLabel.font = .systemFont(ofSize: 32, weight: .bold)
         headerLabel.textColor = .white
-        headerLabel.textAlignment = .center
         headerSubtitleLabel.font = .systemFont(ofSize: 22)
         headerSubtitleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-        headerSubtitleLabel.textAlignment = .center
-        headerSubtitleLabel.text = "You've watched all available episodes"
+        headerSubtitleLabel.numberOfLines = 2
 
-        headerStack.axis = .vertical
-        headerStack.spacing = 8
-        headerStack.alignment = .center
-        headerStack.addArrangedSubview(headerLabel)
-        headerStack.addArrangedSubview(headerSubtitleLabel)
+        let headerText = UIStackView(arrangedSubviews: [headerLabel, headerSubtitleLabel])
+        headerText.axis = .vertical
+        headerText.spacing = 8
+        let header = UIStackView(arrangedSubviews: [headerText, ring])
+        header.axis = .horizontal
+        header.alignment = .center
+        header.distribution = .equalSpacing
 
-        controlsStack.axis = .horizontal
-        controlsStack.spacing = Metrics.controlsSpacing
-        controlsStack.alignment = .center
-        controlsStack.addArrangedSubview(ring)
-        controlsStack.addArrangedSubview(playNextButton)
-        controlsStack.addArrangedSubview(dismissButton)
+        let buttons = UIStackView(arrangedSubviews: [playNextButton, dismissButton])
+        buttons.axis = .horizontal
+        buttons.spacing = 24
 
         contentStack.axis = .vertical
-        contentStack.spacing = Metrics.contentSpacing
-        contentStack.alignment = .center
-        contentStack.addArrangedSubview(headerStack)
+        contentStack.spacing = Metrics.spacing
+        // Leading so the buttons keep their own width; header and card fill.
+        contentStack.alignment = .leading
+        contentStack.addArrangedSubview(header)
         contentStack.addArrangedSubview(card)
-        contentStack.addArrangedSubview(controlsStack)
+        contentStack.addArrangedSubview(buttons)
+        contentStack.setCustomSpacing(36, after: card)
 
         playNextButton.onTap = { [weak self] in self?.onPlayNext?() }
         dismissButton.onTap = { [weak self] in self?.onDismiss?() }
-        let focusMoved: () -> Void = { [weak self] in
-            guard let self else { return }
-            guard self.hasSeenInitialFocus else {
-                self.hasSeenInitialFocus = true
-                return
-            }
-            self.onUserFocusMove?()
-        }
-        playNextButton.onFocused = focusMoved
-        dismissButton.onFocused = focusMoved
+        playNextButton.onUserFocus = { [weak self] in self?.onUserFocusMove?() }
+        dismissButton.onUserFocus = { [weak self] in self?.onUserFocusMove?() }
 
-        [backdropImageView, blurView, dimView].forEach {
-            backdropContainer.addSubview($0)
-            $0.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                $0.topAnchor.constraint(equalTo: backdropContainer.topAnchor),
-                $0.bottomAnchor.constraint(equalTo: backdropContainer.bottomAnchor),
-                $0.leadingAnchor.constraint(equalTo: backdropContainer.leadingAnchor),
-                $0.trailingAnchor.constraint(equalTo: backdropContainer.trailingAnchor),
-            ])
-        }
-
-        spinner.color = .white
-        spinner.hidesWhenStopped = true
-
-        [backdropContainer, contentStack, spinner].forEach {
+        [glass, contentStack].forEach {
             addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
-
         NSLayoutConstraint.activate([
-            spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
-            spinner.centerYAnchor.constraint(equalTo: centerYAnchor),
-
-            backdropContainer.topAnchor.constraint(equalTo: topAnchor),
-            backdropContainer.bottomAnchor.constraint(equalTo: bottomAnchor),
-            backdropContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backdropContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            contentStack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            contentStack.leadingAnchor.constraint(
-                greaterThanOrEqualTo: leadingAnchor, constant: Metrics.horizontalPadding),
-            contentStack.trailingAnchor.constraint(
-                lessThanOrEqualTo: trailingAnchor, constant: -Metrics.horizontalPadding),
-
-            card.widthAnchor.constraint(equalToConstant: Metrics.cardMaxWidth),
+            widthAnchor.constraint(equalToConstant: Metrics.width),
+            glass.topAnchor.constraint(equalTo: topAnchor),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor),
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            contentStack.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.padding),
+            contentStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -Metrics.padding),
+            contentStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.padding),
+            contentStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Metrics.padding),
+            header.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
+            card.widthAnchor.constraint(equalTo: contentStack.widthAnchor),
         ])
     }
 
@@ -165,15 +123,9 @@ final class PostVideoOverlayView: UIView {
 
     /// `thumbnailURL` is the next episode's own image URL when it has one;
     /// nil builds the Plex thumbnail URL.
-    func configure(nextEpisode: PlexMetadata?, serverURL: String, authToken: String, backdrop: UIImage?,
+    func configure(nextEpisode: PlexMetadata?, serverURL: String, authToken: String,
                    thumbnailURL: URL? = nil, errorMessage: String? = nil) {
         hasNextEpisode = nextEpisode != nil
-        backdropImageView.image = backdrop
-        // No art: the container's own translucent black stands in, and the
-        // blur over nothing would just wash it out.
-        blurView.isHidden = backdrop == nil
-        dimView.isHidden = backdrop == nil
-
         headerLabel.text = hasNextEpisode ? "Up Next" : "End of Series"
         headerSubtitleLabel.text = errorMessage ?? "You've watched all available episodes"
         headerSubtitleLabel.isHidden = hasNextEpisode && errorMessage == nil
@@ -185,18 +137,32 @@ final class PostVideoOverlayView: UIView {
         applyButtonState()
     }
 
-    /// While the next episode is still being fetched: backdrop and spinner
-    /// only. Same beat the SwiftUI `.loading` case covered.
+    /// The card stays off screen while the next episode is fetched, then slides in.
     func setLoading(_ loading: Bool) {
-        contentStack.isHidden = loading
-        if loading { spinner.startAnimating() } else { spinner.stopAnimating() }
+        guard !loading, !isOnScreen else { return }
+        isOnScreen = true
+        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.9, initialSpringVelocity: 0) {
+            self.transform = .identity
+        }
+    }
+
+    /// Slides the card back off the edge, then removes it.
+    func slideOut(completion: @escaping () -> Void) {
+        isUserInteractionEnabled = false
+        UIView.animate(withDuration: 0.35, delay: 0, options: .curveEaseIn, animations: {
+            self.transform = CGAffineTransform(translationX: Metrics.offscreen, y: 0)
+        }, completion: { _ in
+            self.removeFromSuperview()
+            completion()
+        })
     }
 
     /// Countdown tick. `total` is the resolved setting, not a re-read of
     /// UserDefaults — see `UniversalPlayerViewModel.countdownTotalSeconds`.
     func setCountdown(remaining: Int, total: Int, isPaused: Bool) {
         countdownActive = remaining > 0 && !isPaused
-        ring.isHidden = !(hasNextEpisode && countdownActive)
+        // Alpha, not isHidden: the ring sets the header's height, so hiding it moved the card.
+        ring.alpha = hasNextEpisode && countdownActive ? 1 : 0
         ring.update(remaining: remaining, total: total, isPaused: isPaused)
         applyButtonState()
     }
@@ -206,8 +172,7 @@ final class PostVideoOverlayView: UIView {
         playNextButton.configure(
             title: countdownActive ? "Play Now" : "Play Next", systemImage: "play.fill")
         // With a countdown running, Dismiss means "stop the countdown"; with
-        // none, it means "back to the video". Same two roles the SwiftUI
-        // version split across two buttons that were never on screen together.
+        // none, it means "close the card".
         dismissButton.configure(
             title: "Dismiss", systemImage: countdownActive ? nil : "xmark")
         dismissButton.setPrimaryLook(!hasNextEpisode)
@@ -219,11 +184,6 @@ final class PostVideoOverlayView: UIView {
         hasNextEpisode ? [playNextButton] : [dismissButton]
     }
 
-    /// A fresh presentation gets a fresh initial-focus grace.
-    func resetFocusGrace() {
-        hasSeenInitialFocus = false
-    }
-
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .playPause {
             if hasNextEpisode {
@@ -232,35 +192,6 @@ final class PostVideoOverlayView: UIView {
             }
         }
         super.pressesBegan(presses, with: event)
-    }
-
-    // MARK: - Layout
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        applyShrunkVideoHole()
-    }
-
-    /// The video plays on behind this view at `VideoFrameState.shrunk`, so
-    /// punch its rect out of the backdrop instead of covering it. Derived from
-    /// the same constants the video layer scales by, not a second copy.
-    private func applyShrunkVideoHole() {
-        guard bounds.width > 0, bounds.height > 0 else { return }
-        let scale = VideoFrameState.shrunk.scale
-        let offset = VideoFrameState.shrunk.offset
-        let hole = CGRect(
-            x: offset.width,
-            y: offset.height,
-            width: bounds.width * scale,
-            height: bounds.height * scale
-        )
-        let path = UIBezierPath(rect: bounds)
-        path.append(UIBezierPath(roundedRect: hole, cornerRadius: 12))
-        let mask = (backdropContainer.layer.mask as? CAShapeLayer) ?? CAShapeLayer()
-        mask.frame = bounds
-        mask.fillRule = .evenOdd
-        mask.path = path.cgPath
-        backdropContainer.layer.mask = mask
     }
 }
 
@@ -293,18 +224,9 @@ final class NextEpisodeCardView: UIView {
     }
 
     private func setupViews() {
-        // A translucent fill rather than a second blur: this card sits on an
-        // already-blurred backdrop, where another blur pass reads the same and
-        // costs an extra offscreen. Matches the glass row style.
-        backgroundColor = UIColor.white.withAlphaComponent(0.08)
-        layer.cornerRadius = 20
-        layer.cornerCurve = .continuous
-        layer.borderWidth = 1
-        layer.borderColor = UIColor.white.withAlphaComponent(0.1).cgColor
-
         thumbView.contentMode = .scaleAspectFill
         thumbView.clipsToBounds = true
-        thumbView.layer.cornerRadius = 12
+        thumbView.layer.cornerRadius = 20
         thumbView.layer.cornerCurve = .continuous
         thumbView.backgroundColor = UIColor.white.withAlphaComponent(0.1)
 
@@ -317,15 +239,15 @@ final class NextEpisodeCardView: UIView {
         numberLabel.setContentHuggingPriority(.required, for: .horizontal)
         numberLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        titleLabel.font = .systemFont(ofSize: 26, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 28, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
 
-        summaryLabel.font = .systemFont(ofSize: 20)
+        summaryLabel.font = .systemFont(ofSize: 22)
         summaryLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        summaryLabel.numberOfLines = 3
+        summaryLabel.numberOfLines = 4
 
-        durationLabel.font = .systemFont(ofSize: 18)
+        durationLabel.font = .systemFont(ofSize: 20)
         durationLabel.textColor = UIColor.white.withAlphaComponent(0.5)
 
         let titleRow = UIStackView(arrangedSubviews: [numberLabel, titleLabel])
@@ -333,29 +255,21 @@ final class NextEpisodeCardView: UIView {
         titleRow.spacing = 12
         titleRow.alignment = .firstBaseline
 
-        let textStack = UIStackView(arrangedSubviews: [showLabel, titleRow, summaryLabel, durationLabel])
-        textStack.axis = .vertical
-        textStack.spacing = 8
-        textStack.alignment = .leading
-        textStack.setCustomSpacing(12, after: summaryLabel)
-
-        [thumbView, textStack].forEach {
-            addSubview($0)
-            $0.translatesAutoresizingMaskIntoConstraints = false
-        }
+        let stack = UIStackView(arrangedSubviews: [thumbView, showLabel, titleRow, summaryLabel, durationLabel])
+        stack.axis = .vertical
+        stack.spacing = 8
+        stack.alignment = .fill
+        stack.setCustomSpacing(20, after: thumbView)
+        stack.setCustomSpacing(12, after: summaryLabel)
+        addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
-            thumbView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 24),
-            thumbView.topAnchor.constraint(equalTo: topAnchor, constant: 24),
-            thumbView.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -24),
-            thumbView.widthAnchor.constraint(equalToConstant: 280),
-            thumbView.heightAnchor.constraint(equalToConstant: 158),
-
-            textStack.leadingAnchor.constraint(equalTo: thumbView.trailingAnchor, constant: 24),
-            textStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            textStack.topAnchor.constraint(equalTo: topAnchor, constant: 24),
-            textStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24),
-            textStack.heightAnchor.constraint(greaterThanOrEqualTo: thumbView.heightAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            thumbView.heightAnchor.constraint(equalTo: thumbView.widthAnchor, multiplier: 9.0 / 16.0),
         ])
     }
 
@@ -382,7 +296,7 @@ final class NextEpisodeCardView: UIView {
         thumbView.image = nil
         guard let url = url ?? episode.thumb.flatMap({
             PlexNetworkManager.shared.buildThumbnailURL(
-                serverURL: serverURL, authToken: authToken, thumbPath: $0, width: 560, height: 316)
+                serverURL: serverURL, authToken: authToken, thumbPath: $0, width: 1120, height: 630)
         }) else { return }
         imageLoadTask = Task { [weak self] in
             let image = await ImageCacheManager.shared.image(for: url)
@@ -397,8 +311,8 @@ final class NextEpisodeCardView: UIView {
 final class CountdownRingView: UIView {
 
     private enum Metrics {
-        static let size: CGFloat = 100
-        static let lineWidth: CGFloat = 6
+        static let size: CGFloat = 72
+        static let lineWidth: CGFloat = 5
     }
 
     private let trackLayer = CAShapeLayer()
@@ -426,7 +340,7 @@ final class CountdownRingView: UIView {
         progressLayer.lineCap = .round
         progressLayer.strokeEnd = 1
 
-        numberLabel.font = .systemFont(ofSize: 48, weight: .bold)
+        numberLabel.font = .systemFont(ofSize: 32, weight: .bold)
         numberLabel.textColor = .white
         numberLabel.textAlignment = .center
         addSubview(numberLabel)
@@ -465,6 +379,16 @@ final class CountdownRingView: UIView {
 
         let progress: CGFloat = total > 0 ? CGFloat(remaining) / CGFloat(total) : 0
         guard progress != lastProgress else { return }
+        // Only the tick down animates; a countdown starts full.
+        guard progress < lastProgress else {
+            lastProgress = progress
+            progressLayer.removeAnimation(forKey: "strokeEnd")
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            progressLayer.strokeEnd = progress
+            CATransaction.commit()
+            return
+        }
         // Write the model value first, then animate from the old one: parking
         // the presentation layer with fillMode would leave the model
         // disagreeing with the screen on the next tick.
@@ -485,7 +409,9 @@ final class CountdownRingView: UIView {
 final class PostVideoButtonView: UIControl {
 
     var onTap: (() -> Void)?
-    var onFocused: (() -> Void)?
+    /// Focus arrived by a remote move. Engine placements (first landing, the
+    /// hand-off from Dismiss to Play Next once the episode loads) have no heading.
+    var onUserFocus: (() -> Void)?
 
     private let iconView = UIImageView()
     private let titleLabel = UILabel()
@@ -579,7 +505,7 @@ final class PostVideoButtonView: UIControl {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
         coordinator.addCoordinatedAnimations({ self.applyLook(focused: focused) }, completion: nil)
-        if focused { onFocused?() }
+        if focused, !context.focusHeading.isEmpty { onUserFocus?() }
     }
 
     // Select does not fire .primaryActionTriggered on a plain UIControl on
@@ -590,5 +516,11 @@ final class PostVideoButtonView: UIControl {
             return
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    // The release must not bubble: once the card is gone the player reads it as Select on the video.
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if presses.contains(where: { $0.type == .select }) { return }
+        super.pressesEnded(presses, with: event)
     }
 }

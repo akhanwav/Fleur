@@ -162,6 +162,10 @@ enum SettingsDescriptorStore {
             icon: "forward.end.alt",
             description: "How long to wait before automatically playing the next episode. Set to Off to disable autoplay."
         ),
+        "autoplayLimit": SettingDescriptor(
+            icon: "moon.zzz",
+            description: "After this many episodes play in a row, the next one waits for you instead of starting on its own."
+        ),
         "skipLength": SettingDescriptor(
             icon: "forward.fill",
             description: "How far a single Right press skips ahead during playback."

@@ -1615,6 +1615,15 @@ enum DebugFocusDriver {
                 try? await Task.sleep(for: .seconds(1.2))
                 continue
             }
+            if word == "wait" {
+                try? await Task.sleep(for: .seconds(4))
+                continue
+            }
+            if word == "play" {
+                PlayerContainerViewController.debugCurrent?.debugResume()
+                state("move-\(index + 1)")
+                continue
+            }
             if word == "menu" {
                 PlayerContainerViewController.debugCurrent?.debugMenu()
                 try? await Task.sleep(for: .milliseconds(800))
@@ -1629,6 +1638,7 @@ enum DebugFocusDriver {
                 (focused as? InsightsCastCardView)?.onPress?()
                 (focused as? PlayerSummaryButton)?.onPress?()
                 (focused as? TransportControlButton)?.onPress?()
+                (focused as? CardTrackRowButton)?.onTap?()
                 try? await Task.sleep(for: .milliseconds(800))
                 print("[Moves] \(index + 1) select focus=\(describeFocus(in: window))")
                 state("move-\(index + 1)")

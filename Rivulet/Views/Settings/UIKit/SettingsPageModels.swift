@@ -344,6 +344,13 @@ enum SettingsContent {
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
                                 AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
                             })),
+            SettingsRowItem(id: "autoplayLimit", title: "Autoplay Limit",
+                            kind: .cycle(value: { AutoplayLimit.current.description },
+                                         next: {
+                                             let all = AutoplayLimit.allCases
+                                             let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
+                                             SettingsStore.setInt(AutoplayLimit.storageKey, next.rawValue)
+                                         })),
             SettingsRowItem(id: "skipLength", title: "Skip Forward Length",
                             kind: .navigationValue(.skipIntervalPicker, value: {
                                 SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""

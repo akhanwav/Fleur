@@ -723,11 +723,10 @@ struct UniversalPlayerView: View {
                 .ignoresSafeArea()
                 .zIndex(0)
 
-            // Video player layer - floats above post-video overlay when shrunk
             playerLayer
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
-                .zIndex(viewModel.videoFrameState == .shrunk ? 200 : 1)
+                .zIndex(1)
 
             // Player controls and overlays (subtitles, loading, controls, etc.)
             playerContentLayer
@@ -905,14 +904,8 @@ struct UniversalPlayerView: View {
             // covers both backends (AVPlayerLayer / sample-buffer layer)
             // and survives internal AVPlayer swaps without rebinding.
             AetherVideoSurfaceView(player: aether)
-                .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
-                .offset(viewModel.videoFrameState.offset)
-                .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
         } else if let player = viewModel.player, viewModel.streamURL != nil {
             AVPlayerLayerView(player: player)
-                .scaleEffect(viewModel.videoFrameState.scale, anchor: .topLeading)
-                .offset(viewModel.videoFrameState.offset)
-                .animation(.spring(response: 0.5, dampingFraction: 0.85), value: viewModel.videoFrameState)
         }
     }
 
