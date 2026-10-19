@@ -7,8 +7,8 @@ mkdir -p $OUT
 
 shot() {
   local name=$1; shift
-  xcrun simctl terminate $UDID com.gstudios.rivulet >/dev/null 2>&1
-  xcrun simctl launch $UDID com.gstudios.rivulet -screenshotToken $PLEX_TOKEN -screenshotServer $SERVER "$@" >/dev/null
+  xcrun simctl terminate $UDID com.akhanwav.fleur >/dev/null 2>&1
+  xcrun simctl launch $UDID com.akhanwav.fleur -screenshotToken $PLEX_TOKEN -screenshotServer $SERVER "$@" >/dev/null
   sleep ${WAIT:-8}
   xcrun simctl io $UDID screenshot --type=png "$OUT/$name.png" >/dev/null 2>&1 && echo "$OUT/$name.png"
 }

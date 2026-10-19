@@ -31,7 +31,7 @@
 set -euo pipefail
 
 SIM_UDID="${SIM_UDID:-B7CDD74D-BA0C-4CDB-8038-8D6FCAB7764F}"
-BUNDLE_ID="com.gstudios.rivulet"
+BUNDLE_ID="com.akhanwav.fleur"
 DEFAULTS_KEY="homeImplementation"
 
 IMPL="${1:-}"

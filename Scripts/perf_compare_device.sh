@@ -20,7 +20,7 @@
 set -euo pipefail
 
 DEVICE_UDID="${DEVICE_UDID:-00008110-001618993E41401E}"
-BUNDLE_ID="com.gstudios.rivulet"
+BUNDLE_ID="com.akhanwav.fleur"
 
 IMPL="${1:-}"
 TRIALS="${2:-5}"

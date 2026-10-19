@@ -452,7 +452,7 @@
 				CODE_SIGN_ENTITLEMENTS = TopShelfExtension/TopShelfExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 93;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TopShelfExtension/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = TopShelfExtension;
@@ -463,7 +463,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.rivulet.TopShelfExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.fleur.TopShelfExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
 				SKIP_INSTALL = YES;
@@ -483,7 +483,7 @@
 				CODE_SIGN_ENTITLEMENTS = TopShelfExtension/TopShelfExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 93;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = TopShelfExtension/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = TopShelfExtension;
@@ -494,7 +494,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.rivulet.TopShelfExtension;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.fleur.TopShelfExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
 				SKIP_INSTALL = YES;
@@ -519,7 +519,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 93;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -548,7 +548,7 @@
 					"-liconv",
 					"-lz",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.rivulet;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.fleur;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -578,7 +578,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 93;
 				DEAD_CODE_STRIPPING = YES;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -607,7 +607,7 @@
 					"-liconv",
 					"-lz",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.rivulet;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.fleur;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
@@ -663,7 +663,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -727,7 +727,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
@@ -753,10 +753,10 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 93;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.RivuletTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.FleurTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -776,10 +776,10 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 93;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.RivuletTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.FleurTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -800,7 +800,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 77;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = RivuletiOS/Info.plist;
@@ -817,7 +817,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.rivulet;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.fleur;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -836,7 +836,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 77;
-				DEVELOPMENT_TEAM = ZHB786H6YN;
+				DEVELOPMENT_TEAM = AWJKBPQ3PL;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = RivuletiOS/Info.plist;
@@ -853,7 +853,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.7;
-				PRODUCT_BUNDLE_IDENTIFIER = com.gstudios.rivulet;
+				PRODUCT_BUNDLE_IDENTIFIER = com.akhanwav.fleur;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

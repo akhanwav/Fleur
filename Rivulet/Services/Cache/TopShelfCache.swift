@@ -15,7 +15,7 @@ import Foundation
 final class TopShelfCache: Sendable {
     static let shared = TopShelfCache()
 
-    private let appGroupIdentifier = "group.com.bain.Rivulet"
+    private let appGroupIdentifier = "group.com.akhanwav.fleur"
     private let cacheFileName = "top_shelf_items.json"
 
     private init() {}

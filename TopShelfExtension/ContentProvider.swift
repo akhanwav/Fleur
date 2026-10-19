@@ -11,7 +11,7 @@
 import TVServices
 import os.log
 
-private let logger = Logger(subsystem: "com.gstudios.rivulet.TopShelfExtension", category: "ContentProvider")
+private let logger = Logger(subsystem: "com.akhanwav.fleur.TopShelfExtension", category: "ContentProvider")
 
 class ContentProvider: TVTopShelfContentProvider {
 

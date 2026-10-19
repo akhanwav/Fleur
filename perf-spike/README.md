@@ -15,7 +15,7 @@ Both implementations live in the same app, gated by a runtime toggle:
 
 - `homeImplementation` AppStorage key (default: `swiftui`)
 - Settings → Appearance → "Home: UIKit/TVUIKit (perf spike)" flips it
-- Or: `defaults write com.gstudios.rivulet homeImplementation -string {swiftui|uikit}`
+- Or: `defaults write com.akhanwav.fleur homeImplementation -string {swiftui|uikit}`
 
 Both versions:
 - Read the same `PlexDataStore.shared`
