@@ -76,11 +76,11 @@ private func searchActorId(serverURL: String, name: String, headers: [String: St
     guard let url = components.url else { return nil }
     let container: PlexActorSearchContainer? = try? await PlexNetworkManager.shared.request(url, headers: headers)
     let target = normalizedActorName(name)
-    return container?.MediaContainer.Hub?
+    let actors: [PlexActorSearchContainer.Actor] = container?.MediaContainer.Hub?
         .filter { $0.type == "actor" }
-        .flatMap { $0.Directory ?? [] }
-        .first { $0.tag.map(normalizedActorName) == target }?
-        .id.map(String.init)
+        .flatMap { $0.Directory ?? [] } ?? []
+    let match = actors.first { $0.tag.map(normalizedActorName) == target }
+    return match?.id.map(String.init)
 }
 
 /// Every title of one Plex type featuring the actor, across all libraries.

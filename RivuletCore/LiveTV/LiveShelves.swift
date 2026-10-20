@@ -192,11 +192,14 @@ enum LiveShelves {
             ? LiveSuggestions.scores(upcoming.map { ($0, $0.program?.startTime ?? now) },
                                      history: input.viewings, now: now)
             : upcoming.map { _ in 0 }
-        let soon = zip(upcoming, likeness.map { $0 >= LiveSuggestions.threshold ? $0 : 0 })
-            .sorted { $0.1 != $1.1 ? $0.1 > $1.1
-                : ($0.0.program?.startTime ?? now) < ($1.0.program?.startTime ?? now) }
-            .prefix(40)
-            .compactMap { candidate, _ in candidate.program.map { LiveCardItem.upcoming($0, on: candidate.channel) } }
+        let scoredUpcoming: [(candidate: LiveSuggestions.Candidate, score: Double)] =
+            zip(upcoming, likeness.map { $0 >= LiveSuggestions.threshold ? $0 : 0 }).map { ($0, $1) }
+        let rankedUpcoming = scoredUpcoming.sorted { lhs, rhs in
+            if lhs.score != rhs.score { return lhs.score > rhs.score }
+            return (lhs.candidate.program?.startTime ?? now) < (rhs.candidate.program?.startTime ?? now)
+        }
+        let soon = rankedUpcoming.prefix(40)
+            .compactMap { entry -> LiveCardItem? in entry.candidate.program.map { LiveCardItem.upcoming($0, on: entry.candidate.channel) } }
         if !soon.isEmpty {
             shelves.append(LiveShelf(id: "soon", title: "Starting Soon", items: soon))
         }
