@@ -1475,6 +1475,14 @@ class PlayerContainerViewController: UIViewController {
                 content: CardTrackListView(
                     header: "Audio", tracks: vm.audioTracks,
                     selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
+                    actions: vm.aetherPlayer == nil ? [] : [
+                        // Clears this title's own Sync value back to
+                        // Settings' global default; stays open so the
+                        // stepper below is seen jumping to it.
+                        CardActionConfig(title: "Reset to Default") { [weak vm] _ in
+                            vm?.resetAudioSyncToDefault()
+                        },
+                    ],
                     toggles: SystemAudioAdjustment.menuToggles,
                     steppers: vm.aetherPlayer == nil ? [] : [
                         // Sync: sticky per title, added on top of Settings'

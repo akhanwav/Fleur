@@ -22,6 +22,15 @@ nonisolated struct StallTracker: Sendable {
         quietUntil = date.addingTimeInterval(Self.grace)
     }
 
+    /// Like `noteSeekOrLoad`, but for a pause expected to run longer than a
+    /// quick seek — an audio-sync reload on AetherEngine's loopback route is
+    /// a full source reopen, comparable in cost to the initial load itself,
+    /// not a quick in-place correction. The caller picks a duration that
+    /// covers it without silencing real stalls for long after.
+    mutating func noteExpectedPause(at date: Date, quietFor duration: TimeInterval) {
+        quietUntil = date.addingTimeInterval(duration)
+    }
+
     /// A step-down spends the stalls behind it; the new step starts with a clean count.
     mutating func noteStepDown() {
         stalls.removeAll()

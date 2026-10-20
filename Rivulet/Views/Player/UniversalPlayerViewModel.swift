@@ -376,11 +376,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         subtitleHeightUnits = SubtitleAdjustments.heightUnits(forMediaKey: subtitleMediaKey)
     }
 
-    // MARK: - Audio sync (OSD stepper, sticky per item, additive with a global default)
+    // MARK: - Audio sync (OSD stepper, sticky per item, absolute per title)
 
-    /// This item's EFFECTIVE audio sync offset in ms: the Settings global
-    /// default plus this title's own delta. Published so the Audio panel
-    /// re-renders on a step. aether route only (see `AudioSyncAdjustments`).
+    /// This item's EFFECTIVE audio sync offset in ms: its own stored
+    /// absolute value, or the Settings global default when it has never
+    /// been adjusted. Published so the Audio panel re-renders on a step.
+    /// aether route only (see `AudioSyncAdjustments`).
     @Published private(set) var audioSyncOffsetMs: Int = 0
 
     /// True for a couple of seconds right when a debounced change actually
@@ -395,22 +396,45 @@ final class UniversalPlayerViewModel: ObservableObject {
     private static let audioSyncDebounceDelay: TimeInterval = 0.5
     /// How long the "Applying…" note stays up once a change is sent.
     private static let audioSyncApplyingNoteDuration: TimeInterval = 2.0
+    /// How long the stall tracker ignores buffering after a reload: longer
+    /// than a seek's grace (`StallTracker.grace`) and past `StallTracker.
+    /// longStall` — a slow-but-successful reload on a remote server must not
+    /// itself read as the stall that trips Auto quality's step-down, which
+    /// would stop the engine out from under its own in-flight reload (the
+    /// actual cause of a later apply "failing": the reload was fine, this
+    /// tracker wasn't told to expect it).
+    private static let audioSyncReloadGrace: TimeInterval = 12
 
-    /// Steps this title's delta — not the global default — and persists it
-    /// and updates the DISPLAYED value immediately, so every press feels
-    /// responsive. The engine call is debounced: on the loopback route
-    /// (Rivulet's default for direct play) `setAudioDelay` is a full source
-    /// reopen, not an in-place correction, so applying every press live let a
-    /// burst of presses queue overlapping reloads and break playback.
-    /// Guarded on `aetherPlayer` here too (not just in the panel that hides
-    /// this stepper on the hls route): a held button's closure can't observe
-    /// a mid-hold route change.
+    /// Steps this title's own ABSOLUTE offset — starting from whatever is
+    /// currently in force (its own prior value, or the global default if
+    /// never touched) — and persists it and updates the DISPLAYED value
+    /// immediately, so every press feels responsive. The engine call is
+    /// debounced: on the loopback route (Rivulet's default for direct play)
+    /// `setAudioDelay` is a full source reopen, not an in-place correction,
+    /// so applying every press live let a burst of presses queue overlapping
+    /// reloads and break playback. Guarded on `aetherPlayer` here too (not
+    /// just in the panel that hides this stepper on the hls route): a held
+    /// button's closure can't observe a mid-hold route change.
     func adjustAudioSync(bySteps steps: Int) {
         guard aetherPlayer != nil else { return }
-        let perTitle = AudioSyncAdjustments.perTitleMs(forMediaKey: subtitleMediaKey) + steps * AudioSyncAdjustments.stepMs
-        AudioSyncAdjustments.setPerTitleMs(perTitle, forMediaKey: subtitleMediaKey)
-        audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+        let newValue = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+            + steps * AudioSyncAdjustments.stepMs
+        AudioSyncAdjustments.setStoredMs(newValue, forMediaKey: subtitleMediaKey)
+        audioSyncOffsetMs = newValue
+        scheduleDebouncedAudioSyncApply()
+    }
 
+    /// Clears this title's own override; it goes back to tracking Settings'
+    /// global default live, including any later change to it. A no-op when
+    /// the title has no override, so it can't trigger a pointless reload.
+    func resetAudioSyncToDefault() {
+        guard aetherPlayer != nil, AudioSyncAdjustments.storedMs(forMediaKey: subtitleMediaKey) != nil else { return }
+        AudioSyncAdjustments.resetToDefault(forMediaKey: subtitleMediaKey)
+        audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+        scheduleDebouncedAudioSyncApply()
+    }
+
+    private func scheduleDebouncedAudioSyncApply() {
         audioSyncDebounceTimer?.invalidate()
         let timer = Timer(timeInterval: Self.audioSyncDebounceDelay, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -426,6 +450,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func applyAudioSyncNow() {
         guard let ap = aetherPlayer else { return }
         isApplyingAudioSync = true
+        // Must be told BEFORE setAudioDelay, not after: the reload's own
+        // buffering can start within the same runloop turn.
+        stallTracker.noteExpectedPause(at: Date(), quietFor: Self.audioSyncReloadGrace)
         ap.setAudioDelay(Double(audioSyncOffsetMs) / 1000.0)
 
         audioSyncApplyingTimer?.invalidate()

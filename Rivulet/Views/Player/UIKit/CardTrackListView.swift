@@ -64,6 +64,14 @@ final class CardTrackListView: UIView {
     /// The control focus is on: a track row or a stepper's -/+ button.
     private weak var lastFocusedControl: UIView?
 
+    private var stepperRefreshTimer: Timer?
+    /// Long enough to span a debounced change elsewhere in this panel:
+    /// presses (or an action, e.g. Audio Sync's "Reset to Default") settle,
+    /// then a stepper's value transitions again on its own with nothing left
+    /// to trigger a label update.
+    private static let stepperRefreshWindow: TimeInterval = 3.0
+    private static let stepperRefreshInterval: TimeInterval = 0.15
+
     convenience init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool,
                      actions: [CardActionConfig] = [],
                      toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
@@ -156,9 +164,14 @@ final class CardTrackListView: UIView {
         }
         for config in actions {
             let button = CardTrackRowButton(row: Row(title: config.title, subtitle: nil, trackId: nil, isSelected: false))
-            button.onTap = { [weak button] in
+            button.onTap = { [weak self, weak button] in
                 guard let button else { return }
                 config.run(button)
+                // An action can change a stepper's value elsewhere in this
+                // same panel (Audio Sync's "Reset to Default"), possibly
+                // asynchronously (its own debounced apply) — keep every
+                // stepper row's label in sync for a few seconds either way.
+                self?.scheduleStepperRefresh()
             }
             stack.addArrangedSubview(button)
             rowButtons.append(button)
@@ -190,9 +203,28 @@ final class CardTrackListView: UIView {
         }
         for config in steppers {
             let row = CardStepperRowView(config: config)
+            row.onStep = { [weak self] in self?.scheduleStepperRefresh() }
             stack.addArrangedSubview(row)
             stepperRows.append(row)
         }
+    }
+
+    /// Keeps every stepper row's label in sync with its own `config.value()`
+    /// for a few seconds after a press or an action — not just at the press
+    /// itself — since a value here can change asynchronously afterward (a
+    /// debounced apply) or be changed by a DIFFERENT control in this same
+    /// panel. No row needs to know why; it only needs to be re-read.
+    private func scheduleStepperRefresh() {
+        guard !stepperRows.isEmpty else { return }
+        stepperRefreshTimer?.invalidate()
+        let deadline = Date().addingTimeInterval(Self.stepperRefreshWindow)
+        let timer = Timer(timeInterval: Self.stepperRefreshInterval, repeats: true) { [weak self] pollTimer in
+            guard let self else { pollTimer.invalidate(); return }
+            self.stepperRows.forEach { $0.refreshValue() }
+            if Date() >= deadline { pollTimer.invalidate() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        stepperRefreshTimer = timer
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
@@ -288,6 +320,12 @@ final class CardStepperRowView: UIView {
     /// only control on a dedicated page (Settings' global-default modal).
     var incrementButton: UIView { plus }
 
+    /// Fires after every press, so the owning list can keep every row (not
+    /// just this one) in sync for a few seconds afterward — a press here can
+    /// change a value shown elsewhere, and a control elsewhere (Audio Sync's
+    /// "Reset to Default" action) can change THIS row's value.
+    var onStep: (() -> Void)?
+
     init(config: CardStepperConfig) {
         self.config = config
         super.init(frame: .zero)
@@ -336,32 +374,17 @@ final class CardStepperRowView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    private var refreshTimer: Timer?
-    /// Long enough to span a debounced change: presses settle, then the
-    /// value transitions again on its own (e.g. Audio Sync's "Applying…"
-    /// note) with no further press to trigger a label update.
-    private static let refreshWindow: TimeInterval = 3.0
-    private static let refreshInterval: TimeInterval = 0.15
-
     private func step(_ direction: Int) {
         config.onStep(direction)
         valueLabel.text = config.value()
-        scheduleRefresh()
+        onStep?()
     }
 
-    /// Keeps the label in sync with `config.value()` for a few seconds after
-    /// a press, not just at the press itself — this row doesn't need to know
-    /// WHY the value might change asynchronously afterward, only that it can.
-    private func scheduleRefresh() {
-        refreshTimer?.invalidate()
-        let deadline = Date().addingTimeInterval(Self.refreshWindow)
-        let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { [weak self] pollTimer in
-            guard let self else { pollTimer.invalidate(); return }
-            self.valueLabel.text = self.config.value()
-            if Date() >= deadline { pollTimer.invalidate() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        refreshTimer = timer
+    /// Re-reads `config.value()` without a press — the owning list calls
+    /// this on a timer after ANY control in the panel changes, since this
+    /// row can't tell on its own when that happens.
+    func refreshValue() {
+        valueLabel.text = config.value()
     }
 }
 
