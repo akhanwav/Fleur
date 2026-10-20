@@ -468,7 +468,6 @@ final class ProviderPlaybackSourceTests: XCTestCase {
             userState: movie.userState, artwork: art("m1"), parentArtwork: nil, grandparentArtwork: nil
         )
         let vm = UniversalPlayerViewModel(providerPlayback: artPlayback(item), startOffset: nil)
-        XCTAssertEqual(vm.ambientBackdropURL, art("m1").backdrop)
         XCTAssertEqual(vm.nowPlayingArtworkURL, art("m1").poster)
     }
 
@@ -476,7 +475,6 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         let own = MediaArtwork(poster: nil, backdrop: nil, thumbnail: art("e1").thumbnail, logo: nil)
         let vm = UniversalPlayerViewModel(providerPlayback: artPlayback(artEpisode(own: own, show: art("show"))),
                                           startOffset: nil)
-        XCTAssertEqual(vm.ambientBackdropURL, art("show").backdrop)
         XCTAssertEqual(vm.nowPlayingArtworkURL, art("show").poster)
     }
 
@@ -497,8 +495,6 @@ final class ProviderPlaybackSourceTests: XCTestCase {
                        "key": "/library/streams/7"}]}]}]}
         """.utf8))
         let vm = UniversalPlayerViewModel(metadata: metadata, serverURL: "http://plex:32400", authToken: "tok")
-        XCTAssertEqual(vm.ambientBackdropURL?.absoluteString,
-                       "http://plex:32400/library/metadata/1/art/2?X-Plex-Token=tok")
         XCTAssertEqual(vm.nowPlayingArtworkURL?.absoluteString,
                        "http://plex:32400/library/metadata/1/thumb/3?X-Plex-Token=tok")
         XCTAssertEqual(vm.contentFilterTranscriptURL?.absoluteString,

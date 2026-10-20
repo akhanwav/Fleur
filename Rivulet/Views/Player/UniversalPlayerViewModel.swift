@@ -96,39 +96,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// or immediately on `commitScrub()` / `cancelScrub()`.
     @Published private(set) var wheelScrubbing = false
 
-    /// The three tiers of the paused ambient presentation: `.frame` is the
-    /// live video frame (no overlay); `.ambient` shows the full-res
-    /// crossfaded backdrop + title logo after `pausedPosterDelay` seconds
-    /// paused; `.dimmed` adds a deeper black overlay after
-    /// `pausedPosterDimDelay` seconds paused (OLED burn-in guard).
-    enum PausePresentation: Equatable {
-        case frame
-        case ambient
-        case dimmed
-    }
-    @Published private(set) var pausePresentation: PausePresentation = .frame
-
-    /// Kept for existing call sites; true in either ambient tier.
-    var showPausedPoster: Bool { pausePresentation != .frame }
-
-    /// Full-resolution backdrop for the ambient pause state: raw Plex art
-    /// path with token, NOT the `/photo/:/transcode` downscale that
-    /// `PlexNetworkManager.buildThumbnailURL` applies (the TV renders it at
-    /// native size, full-bleed).
-    var ambientBackdropURL: URL? {
-        artworkURL(
-            plex: {
-                guard let art = metadata.art,
-                      var components = URLComponents(string: "\(serverURL)\(art)") else { return nil }
-                components.queryItems = (components.queryItems ?? []) + [
-                    URLQueryItem(name: "X-Plex-Token", value: authToken)
-                ]
-                return components.url
-            },
-            provider: { $0.item.artwork.backdrop ?? $0.item.grandparentArtwork?.backdrop }
-        )
-    }
-
     /// Every image the player loads picks its URL here. A Plex path is
     /// server-relative and needs the server and token; a provider's art is
     /// already absolute and never gets a Plex token.
@@ -157,13 +124,6 @@ final class UniversalPlayerViewModel: ObservableObject {
             provider: { $0.item.grandparentArtwork?.poster ?? $0.item.artwork.poster ?? $0.item.artwork.thumbnail }
         )
     }
-
-    /// Title logo (clearArt) for the transport bar, resolved once per item:
-    /// prefer the Plex-provided clearLogo image, falling back to TMDB's
-    /// images API via the shared cache (same precedence the home hero and
-    /// media detail chrome use).
-    @Published private(set) var titleLogoImage: UIImage?
-    private var titleLogoResolveTask: Task<Void, Never>?
 
     @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
     @Published var compatibilityNotice: String?
@@ -568,26 +528,18 @@ final class UniversalPlayerViewModel: ObservableObject {
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
     private var seekIconHideTimer: Timer?
-    private var pausedPosterTimer: Timer?
-    private let pausedPosterDelay: TimeInterval = 10.0
-    private var pausedPosterDimTimer: Timer?
-    private let pausedPosterDimDelay: TimeInterval = 120.0
     /// True while a rail panel (Subtitles/Audio/Info/Up Next/Insights) is
-    /// presented. The ambient-pause backdrop is a full-screen visual that
-    /// otherwise shows through/around an open panel — set by
-    /// `PlayerContainerViewController` around `presentRailPanel`/dismiss so
-    /// the timer below can suppress itself while a panel is up.
+    /// presented — set by `PlayerContainerViewController` around
+    /// `presentRailPanel`/dismiss so the controls-hide timer can suppress
+    /// itself while a panel is up.
     var isRailPanelOpen = false {
         didSet {
             guard isRailPanelOpen != oldValue else { return }
-            if isRailPanelOpen {
-                cancelPausedPosterTimer()
-            } else {
+            if !isRailPanelOpen {
                 // A panel suspends the controls-hide timer (see
                 // `startControlsHideTimer`); closing it has to re-arm, or the
                 // rail sits there forever after one Info visit.
                 startControlsHideTimer()
-                if playbackState == .paused { startPausedPosterTimer() }
             }
         }
     }
@@ -1578,20 +1530,22 @@ final class UniversalPlayerViewModel: ObservableObject {
             if !isSwappingItem { currentItemHasStarted = true }
             startControlsHideTimer()
             UIApplication.shared.isIdleTimerDisabled = true
-            cancelPausedPosterTimer()
         } else {
             controlsTimer?.invalidate()
             if state == .paused || state == .ended || state == .idle {
                 UIApplication.shared.isIdleTimerDisabled = false
             }
             if state == .paused {
-                startPausedPosterTimer()
+                // Re-arms the same timer `pause()`'s own showControlsTemporarily()
+                // call just lost: this invalidate above runs AFTER that arm, on
+                // every pause path (not just the explicit pause()/togglePlayPause()
+                // callers), so without this the rail would never auto-hide while
+                // paused.
+                startControlsHideTimer()
                 // Every pause path funnels through here, so this is the one
                 // place that reliably disarms the stall watchdog when the user
                 // stops asking for playback (issue #247).
                 cancelAetherStallWatchdog()
-            } else {
-                cancelPausedPosterTimer()
             }
         }
 
@@ -1711,9 +1665,6 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Fetch season/show poster for Now Playing artwork (episodes)
         await fetchSeasonPosterIfNeeded()
-
-        // Resolve the title logo for the ambient-pause transport bar swap.
-        fetchTitleLogoIfNeeded()
 
         // Aether is the only VOD engine; ContentRouter.plan() emits the
         // .aether route (or an AVPlayer fallback route) and
@@ -2743,55 +2694,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// Resolve the title logo for the transport bar's ambient-pause swap:
-    /// prefer the Plex-provided clearLogo image (same precedence as the
-    /// home hero and media detail chrome), falling back to TMDB's images
-    /// API via `TMDBLogoCache` when Plex doesn't carry one. Cancels any
-    /// in-flight resolve from a previous item so an episode swap can't
-    /// stomp the new item's result with a stale one.
-    private func fetchTitleLogoIfNeeded() {
-        titleLogoResolveTask?.cancel()
-        titleLogoImage = nil
-
-        if let url = artworkURL(
-            plex: { plexImageURL(metadata.clearLogoPath) },
-            provider: { $0.item.artwork.logo ?? $0.item.grandparentArtwork?.logo }
-        ) {
-            titleLogoResolveTask = Task { [weak self] in
-                guard let image = await ImageCacheManager.shared.image(for: url) else { return }
-                guard !Task.isCancelled else { return }
-                await MainActor.run {
-                    guard let self, !Task.isCancelled else { return }
-                    self.titleLogoImage = image
-                }
-            }
-            return
-        }
-
-        // TMDB-mapped items (or episodes, which carry no logo of their own —
-        // fall back to the parent show's tmdbId) resolve via the shared cache.
-        // A provider episode's own ids are the episode's, so it asks for its show's.
-        let providerEpisode = providerEpisode
-        let knownTmdbID = providerEpisode == nil
-            ? metadata.tmdbId ?? metadata.parentShowTmdbId ?? metadata.showTmdbId
-            : nil
-        guard providerEpisode != nil || knownTmdbID != nil else { return }
-        let type: TMDBMediaType = metadata.type == "movie" ? .movie : .tv
-        titleLogoResolveTask = Task { [weak self] in
-            var tmdbID = knownTmdbID
-            if let providerEpisode { tmdbID = await self?.providerShowTmdbID(providerEpisode) }
-            guard let tmdbID, !Task.isCancelled,
-                  let url = await TMDBLogoCache.shared.logoURL(tmdbId: tmdbID, type: type) else { return }
-            guard !Task.isCancelled else { return }
-            guard let image = await ImageCacheManager.shared.image(for: url) else { return }
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, !Task.isCancelled else { return }
-                self.titleLogoImage = image
-            }
-        }
-    }
-
     /// Build a human-readable audio description from metadata.
     private func buildAudioDescription() -> String {
         let codec = metadata.Media?.first?.audioCodec?.uppercased() ?? ""
@@ -3809,8 +3711,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         longStallTask?.cancel()
         longStallTask = nil
         cancelAetherStallWatchdog()
-        titleLogoResolveTask?.cancel()
-        titleLogoResolveTask = nil
         clearReplayWindow()
         contentFilter.reset()
         subtitleImageReader.read([])
@@ -3858,7 +3758,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func togglePlayPause() {
-        hidePausedPoster()
         if isPlaying {
             activePlayer_pause()
         } else {
@@ -3870,7 +3769,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Resume playback (used by remote commands)
     func resume() {
         pausedDueToAppInactive = false
-        hidePausedPoster()
         activePlayer_play()
         showControlsTemporarily()
     }
@@ -3988,7 +3886,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func seekRelative(by seconds: TimeInterval) async {
-        hidePausedPoster()
         // The skip glyph shows on the press, not after the seek lands.
         let intSeconds = Int(abs(seconds))
         showSeekIndicator(seconds >= 0 ? .forward(intSeconds) : .backward(intSeconds))
@@ -4123,8 +4020,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// shows the level as AVKit's scan glyph; rates run 8x to 1536x.
     /// - Parameter forward: true for forward, false for backward
     func scrubInDirection(forward: Bool) {
-        hidePausedPoster()
-
         let speedBefore = scrubSpeed
         let newSpeed = ShuttleGrammar.step(current: isScrubbing ? scrubSpeed : 0, clickForward: forward)
         if newSpeed == 0 {
@@ -4166,7 +4061,6 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Start swipe-based scrubbing (proportional, no speed acceleration)
     func startSwipeScrubbing() {
-        hidePausedPoster()
         isScrubbing = true
         scrubTime = currentTime
         scrubSpeed = 0  // No direction-based speed for swipe scrubbing
@@ -4188,7 +4082,6 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Clickpad-ring rotation scrub; `seekDelta` is already converted from the rotation.
     func handleWheelScrub(by seekDelta: TimeInterval) {
         if !isScrubbing {
-            hidePausedPoster()
             isScrubbing = true
             scrubTime = currentTime
             scrubSpeed = 0
@@ -4891,9 +4784,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         controlsTimer?.invalidate()
         controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
             guard let self else { return }
-            let isPlaying = self.playbackState == .playing
+            // Hides after the same delay whether playing OR paused — paused
+            // used to hand off to the ambient-pause presentation instead;
+            // now it just fades the chrome and leaves the live frame up.
+            let shouldHide = self.playbackState == .playing || self.playbackState == .paused
             Task { @MainActor [weak self] in
-                guard let self, isPlaying else { return }
+                guard let self, shouldHide else { return }
                 // Re-check at FIRE time: a panel can open after the timer was
                 // already armed. The arm-time guard alone leaves that timer running.
                 guard !self.isRailPanelOpen else { return }
@@ -4918,54 +4814,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         compatibilityNoticeTimer?.invalidate()
         compatibilityNoticeTimer = nil
         compatibilityNotice = nil
-    }
-
-    // MARK: - Paused Poster Timer
-
-    /// Start timers for the ambient pause presentation: `.ambient` after
-    /// `pausedPosterDelay` seconds paused, `.dimmed` after
-    /// `pausedPosterDimDelay` seconds paused. No-ops while a rail panel is
-    /// open (`isRailPanelOpen`) — the ambient backdrop is a full-screen
-    /// visual that would otherwise show through/around the panel.
-    private func startPausedPosterTimer() {
-        guard !isRailPanelOpen else { return }
-        pausedPosterTimer?.invalidate()
-        pausedPosterTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
-                withAnimation(.easeIn(duration: 1.0)) {
-                    self.pausePresentation = .ambient
-                }
-            }
-        }
-
-        pausedPosterDimTimer?.invalidate()
-        pausedPosterDimTimer = Timer.scheduledTimer(withTimeInterval: pausedPosterDimDelay, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.playbackState == .paused, !self.isRailPanelOpen else { return }
-                withAnimation(.easeInOut(duration: 1.0)) {
-                    self.pausePresentation = .dimmed
-                }
-            }
-        }
-    }
-
-    /// Cancel both ambient-pause timers and drop back to the live frame.
-    private func cancelPausedPosterTimer() {
-        pausedPosterTimer?.invalidate()
-        pausedPosterTimer = nil
-        pausedPosterDimTimer?.invalidate()
-        pausedPosterDimTimer = nil
-        if pausePresentation != .frame {
-            withAnimation(.easeOut(duration: 0.5)) {
-                pausePresentation = .frame
-            }
-        }
-    }
-
-    /// Hide paused poster on any control input
-    func hidePausedPoster() {
-        cancelPausedPosterTimer()
     }
 
     // MARK: - Marker Detection & Skipping
@@ -5391,16 +5239,15 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     /// True when the skip pill is the lone on-screen affordance — chrome
-    /// hidden, not scrubbing, no post-video, live video frame — and should
-    /// own focus so a single Select jumps forward. Mirrors
-    /// `controlsFocusActive`: while true the SwiftUI content layer releases
-    /// focus and `PlayerContainerViewController` routes it to the pill.
+    /// hidden, not scrubbing, no post-video — and should own focus so a
+    /// single Select jumps forward. Mirrors `controlsFocusActive`: while
+    /// true the SwiftUI content layer releases focus and
+    /// `PlayerContainerViewController` routes it to the pill.
     var skipPillOwnsFocus: Bool {
         showSkipButton
             && !showControls
             && !isScrubbing
             && postVideoState == .hidden
-            && pausePresentation == .frame
     }
 
     /// Puts the chosen version of a server-ordered `Media` array first and records it.
@@ -6446,9 +6293,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Release the outgoing episode's BIF; preloadThumbnails() loads the new
         // one. Without this a binge retains every episode's trickplay frames.
         releaseThumbnailCache()
-
-        // Re-resolve the title logo for the new episode.
-        fetchTitleLogoIfNeeded()
 
         // Reset start offset so next episode starts from beginning (not resume position)
         startOffset = nil

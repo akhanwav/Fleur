@@ -626,11 +626,6 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 )
                 vm.cancelScrub()
                 onResetRemoteInput?()
-            } else if vm.showPausedPoster {
-                // Back with the ambient pause backdrop up returns to the
-                // paused frame — it does not exit the player. The timer does
-                // not re-arm until the next pause, so the frame stays clean.
-                vm.hidePausedPoster()
             } else if vm.controlsFocusActive || vm.showControls {
                 // Back from the transport buttons (or from any visible chrome)
                 // closes the whole chrome in one press, rather than first
@@ -659,14 +654,6 @@ struct UniversalPlayerView: View {
     /// Caption appearance for the Aether subtitle overlay. Refreshed on
     /// CaptionAppearance.changedNotification so restyles apply live.
     @State private var captionStyle: CaptionStyle = CaptionAppearance.current()
-
-    /// Full-resolution decode of the ambient-pause backdrop. Loaded via
-    /// ImageCacheManager at `.full` (3840px) so it matches the preview
-    /// carousel; CachedAsyncImage would decode at the `.thumb` 900px
-    /// default and look soft full-screen on a 4K panel.
-    @State private var ambientBackdropImage: UIImage?
-    /// The backdrop's artwork analysis, shared with Continue Watching and Top Shelf.
-    @State private var ambientSignals: ContinueWatchingCardCompositor.Signals?
 
     /// Initialize with metadata (creates viewModel internally)
     @MainActor
@@ -740,7 +727,6 @@ struct UniversalPlayerView: View {
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIconVisible)
-        .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
         // No press handling in this view at all: no .onPlayPauseCommand,
         // .onExitCommand, .onMoveCommand or .onTapGesture. Every press is
         // PlayerContainerViewController's (see its "Content-state presses"),
@@ -834,27 +820,15 @@ struct UniversalPlayerView: View {
             // PlayerContainerViewController above the video surface and below
             // the chrome. Nothing subtitle-related belongs in this layer.
 
-            // Loading State or Paused Poster (shows after 5s pause)
-            if viewModel.playbackState == .loading || viewModel.playbackState == .idle || viewModel.pausePresentation != .frame {
-                if viewModel.pausePresentation != .frame, let ambientURL = viewModel.ambientBackdropURL {
-                    // Ambient pause moment: full-resolution backdrop crossfade,
-                    // deeper dim once the second (2 minute) tier kicks in.
-                    ambientBackdropView(url: ambientURL)
-                        .transition(
-                            .asymmetric(
-                                insertion: .opacity.animation(.easeIn(duration: 1.0)),
-                                removal: .opacity.animation(.easeOut(duration: 0.5))
-                            )
+            // Loading State
+            if viewModel.playbackState == .loading || viewModel.playbackState == .idle {
+                loadingView
+                    .transition(
+                        .asymmetric(
+                            insertion: .opacity.animation(.easeIn(duration: 1.0)),
+                            removal: .opacity.animation(.easeOut(duration: 0.5))
                         )
-                } else {
-                    loadingView
-                        .transition(
-                            .asymmetric(
-                                insertion: .opacity.animation(.easeIn(duration: 1.0)),
-                                removal: .opacity.animation(.easeOut(duration: 0.5))
-                            )
-                        )
-                }
+                    )
             }
 
             // Mid-playback buffering has no centered indicator: the quiet
@@ -910,60 +884,6 @@ struct UniversalPlayerView: View {
         } else if let player = viewModel.player, viewModel.streamURL != nil {
             AVPlayerLayerView(player: player)
         }
-    }
-
-    // MARK: - Ambient Pause Backdrop
-
-    /// Full-resolution backdrop for the ambient pause moment: full-bleed
-    /// raw Plex art decoded at `.full` (3840px) via ImageCacheManager —
-    /// same source and decode ceiling as the preview carousel, so it reads
-    /// crisp on a 4K panel (CachedAsyncImage would decode at the `.thumb`
-    /// 900px default and look soft). A deeper dim overlay layers in once
-    /// `pausePresentation` reaches `.dimmed` (OLED burn-in guard after 2
-    /// minutes paused).
-    @ViewBuilder
-    private func ambientBackdropView(url: URL) -> some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea()
-
-            if let image = ambientBackdropImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .ignoresSafeArea()
-            }
-
-            if viewModel.pausePresentation == .dimmed {
-                Color.black
-                    .opacity(0.35)
-                    .ignoresSafeArea()
-            }
-
-            // Title logo where the Top Shelf would put it on this backdrop:
-            // clear of faces and busy artwork, above the rail's held title.
-            if let logo = viewModel.titleLogoImage, let signals = ambientSignals {
-                GeometryReader { proxy in
-                    let place = TopShelfImageCompositor.placement(logoSize: logo.size, signals: signals,
-                                                                  canvas: proxy.size)
-                    Image(uiImage: logo)
-                        .resizable()
-                        .frame(width: place.rect.width, height: place.rect.height)
-                        .shadow(color: .black.opacity(place.strongShadow ? 0.6 : 0),
-                                radius: proxy.size.height / 108, y: proxy.size.height / 270)
-                        .position(x: place.rect.midX, y: place.rect.midY)
-                }
-                .ignoresSafeArea()
-                .transition(.opacity)
-            }
-        }
-        .task(id: url) {
-            ambientSignals = nil
-            async let signals = ContinueWatchingCardCompositor.signals(for: url)
-            ambientBackdropImage = await ImageCacheManager.shared.image(for: url, quality: .full)
-            ambientSignals = await signals
-        }
-        .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
     }
 
     // MARK: - Loading View

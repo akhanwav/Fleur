@@ -28,7 +28,6 @@ class PlayerContainerViewController: UIViewController {
     private var pausedDimView: UIView?
     private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
-    private var ambientScrim: BottomScrimView?
     private var captionOverlay: CaptionOverlayView?
     private var cancellables = Set<AnyCancellable>()
     /// The one floating panel shared by CC/audio/info (Task 5) and Up
@@ -192,8 +191,6 @@ class PlayerContainerViewController: UIViewController {
             dim.alpha = 0
             dim.isUserInteractionEnabled = false
 
-            let ambientBottomScrim = BottomScrimView()
-            ambientBottomScrim.alpha = 0
             let railView = PlayerRailView()
             let bar = PlayerProgressBarView()
             let proxy = ScrubberFocusProxyView()
@@ -224,7 +221,7 @@ class PlayerContainerViewController: UIViewController {
             loadingLabel.text = "Loading"
             loadingLabel.isHidden = true
 
-            [chromeScrim, dim, ambientBottomScrim, railView, bar, proxy, pill, loadingLabel].forEach {
+            [chromeScrim, dim, railView, bar, proxy, pill, loadingLabel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
@@ -232,9 +229,6 @@ class PlayerContainerViewController: UIViewController {
             // matches, but state this is intentional, not incidental).
             view.bringSubviewToFront(chromeScrim)
             view.bringSubviewToFront(dim)
-            // Ambient bottom scrim sits above the dim/chrome scrim but below
-            // the scrubber, so during ambient pause the scrubber reads over it.
-            view.bringSubviewToFront(ambientBottomScrim)
             view.bringSubviewToFront(railView)
             view.bringSubviewToFront(bar)
             view.bringSubviewToFront(proxy)
@@ -251,14 +245,6 @@ class PlayerContainerViewController: UIViewController {
                 dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-                // Ambient bottom scrim: full-width, pinned to the bottom, tall
-                // enough to sit behind the scrubber (which is ~118pt off the
-                // bottom) during ambient pause.
-                ambientBottomScrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                ambientBottomScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                ambientBottomScrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                ambientBottomScrim.heightAnchor.constraint(equalToConstant: 320),
 
                 // Rail: the screen's bottom band, edge to edge (AVKit's layout).
                 railView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -314,7 +300,6 @@ class PlayerContainerViewController: UIViewController {
             progressBar = bar
             scrubberProxy = proxy
             skipPill = pill
-            ambientScrim = ambientBottomScrim
             pausedDimView = dim
             self.loadingLabel = loadingLabel
 
@@ -418,11 +403,11 @@ class PlayerContainerViewController: UIViewController {
             }
             // Back closes the Up Next page and puts the video back at full
             // size; it does NOT leave the player. Every other layer here
-            // (scrub, rail panel, ambient pause) already unwinds one step per
-            // press, and post-video was the odd one out — it took the whole
-            // player down with it, so a user who only wanted the credits back
-            // had to restart the episode. A second press then exits, through
-            // the checks below.
+            // (scrub, rail panel) already unwinds one step per press, and
+            // post-video was the odd one out — it took the whole player down
+            // with it, so a user who only wanted the credits back had to
+            // restart the episode. A second press then exits, through the
+            // checks below.
             if vm.postVideoState != .hidden {
                 vm.dismissPostVideo()
                 return
@@ -433,12 +418,6 @@ class PlayerContainerViewController: UIViewController {
             }
             if let panel = activeRailPanel {
                 panel.dismissPanel()
-                return
-            }
-            // Ambient pause backdrop: back returns to the paused frame, it
-            // does not exit the player.
-            if vm.showPausedPoster {
-                vm.hidePausedPoster()
                 return
             }
             // Back from the transport buttons closes the whole chrome in one
@@ -842,7 +821,6 @@ class PlayerContainerViewController: UIViewController {
     /// does: Up lands on the first tool button, Down opens the Info pane.
     private func handleContentVertical(up: Bool) {
         guard let vm = viewModel else { return }
-        vm.hidePausedPoster()
         if vm.isScrubbing {
             if up {
                 vm.chapterSnap()
@@ -970,8 +948,6 @@ class PlayerContainerViewController: UIViewController {
                 if !panel.contentHandlesMenuPress() {
                     panel.dismissPanel()
                 }
-            } else if vm.showPausedPoster {
-                vm.hidePausedPoster()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
             } else if vm.showControls {
@@ -985,12 +961,8 @@ class PlayerContainerViewController: UIViewController {
         }
 
         // If we're consuming this menu press in-app (not dismissing), block SwiftUI fallback dismiss briefly.
-        // showPausedPoster counts: the coordinator's .back consumes the press by
-        // returning to the paused frame, and by the time the fallback dismiss
-        // fires the poster flag is already cleared — without this term the
-        // fallback would exit the player anyway.
         let shouldBlockDismiss = vm.postVideoState == .hidden
-            && (vm.isScrubbing || vm.showControls || vm.showPausedPoster)
+            && (vm.isScrubbing || vm.showControls)
         if shouldBlockDismiss {
             blockDismissTemporarily()
         }
@@ -1248,8 +1220,7 @@ class PlayerContainerViewController: UIViewController {
             .store(in: &cancellables)
 
         // A skip with the chrome hidden also flashes the progress bar itself
-        // (playhead + elapsed time), same as ambient pause's read-only
-        // indicator and for the same reason: it must not touch showControls/
+        // (playhead + elapsed time); it must not touch showControls/
         // railVisible (raising the rail on every skip breaks Left/Right, see
         // the comment on the .seekRelative case). Rides seekIndicator's
         // existing show/clear lifecycle rather than its own timer.
@@ -1287,12 +1258,6 @@ class PlayerContainerViewController: UIViewController {
             .publisher(for: CaptionAppearance.changedNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.captionOverlay?.style = CaptionAppearance.current() }
-            .store(in: &cancellables)
-
-        // Ambient pause: the whole chrome yields to the clean backdrop.
-        vm.$pausePresentation
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.applyChromeVisibility() }
             .store(in: &cancellables)
 
         vm.$playbackState
@@ -1887,9 +1852,6 @@ class PlayerContainerViewController: UIViewController {
         activeRailPanel = panel
         // Disarm them for the panel that just came up (see above).
         applyChromeVisibility()
-        // A rail panel is a full-screen-adjacent overlay the ambient-pause
-        // backdrop must not show through/around — see
-        // UniversalPlayerViewModel.isRailPanelOpen.
         viewModel?.isRailPanelOpen = true
         view.setNeedsFocusUpdate(); view.updateFocusIfNeeded()
     }
@@ -1904,27 +1866,26 @@ class PlayerContainerViewController: UIViewController {
     /// here so no two sinks can fight over the same view's alpha (the old
     /// setChromeHidden / setAuxChromeHidden split let the ~0.5s time-sink
     /// re-reveal card/pill/panel over hidden controls). Called from the
-    /// showControls, pausePresentation, playbackState, and time sinks; the
-    /// guard-on-change makes per-tick calls free.
+    /// showControls, playbackState, and time sinks; the guard-on-change
+    /// makes per-tick calls free.
     ///
     /// Rules:
-    /// - chromeVisible: controls up AND the frame is live (not ambient
-    ///   pause). `|| isScrubbing` keeps the scrubber + scrim up during a
-    ///   scrub even on the one off-device path (MPRemoteCommand
-    ///   scrubNudge) that can begin a scrub without showControls being set.
+    /// - chromeVisible: controls up. `|| isScrubbing` keeps the scrubber +
+    ///   scrim up during a scrub even on the one off-device path
+    ///   (MPRemoteCommand scrubNudge) that can begin a scrub without
+    ///   showControls being set.
     /// - railVisible: chrome visible AND not scrubbing — scrubbing hides
     ///   the rail and skip pill so focus reads unambiguously on the
     ///   scrubber (user call 2026-07-03).
-    /// - paused: playback paused AND the frame is live (not ambient) —
-    ///   drives the full-frame dim.
+    /// - paused: playback paused — drives the full-frame dim.
     /// - loading: the top-left "Loading" label shows whenever loading/idle
-    ///   AND not ambient (the progress bar's own skeleton shimmer carries
-    ///   the rest of the loading look); it uses `isHidden` from the state
-    ///   sink too so it never intercepts focus while alpha is mid-fade.
+    ///   (the progress bar's own skeleton shimmer carries the rest of the
+    ///   loading look); it uses `isHidden` from the state sink too so it
+    ///   never intercepts focus while alpha is mid-fade.
     /// - scrubberProxy.isFocusEnabled: a FOCUS gate, not an alpha write (the
     ///   proxy is always invisible) — it must never be focusable while
-    ///   controls are hidden, mid-scrub, or ambient, and only actually
-    ///   reachable once controls-focus mode has moved focus onto the rail.
+    ///   controls are hidden or mid-scrub, and only actually reachable once
+    ///   controls-focus mode has moved focus onto the rail.
     // MARK: - Post-video (Up Next)
 
     /// Mount or unmount the Up Next page and hand it focus. The focus update
@@ -2014,13 +1975,12 @@ class PlayerContainerViewController: UIViewController {
 
     private func applyChromeVisibility() {
         guard let vm = viewModel else { return }
-        let ambient = vm.pausePresentation != .frame
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
         // Buffering shares the loading label but none of the other loading
         // treatment (no skeleton, no focus gate) — see the state sink.
         let showsActivityCue = isLoading || vm.playbackState == .buffering
         // The Up Next card sits over the video alone.
-        let chromeVisible = (vm.showControls || vm.isScrubbing) && !ambient && vm.postVideoState == .hidden
+        let chromeVisible = (vm.showControls || vm.isScrubbing) && vm.postVideoState == .hidden
         let railVisible = chromeVisible && !vm.isScrubbing
         if !chromeVisible { progressBar?.clearSkipIndicator() }
 
@@ -2033,18 +1993,9 @@ class PlayerContainerViewController: UIViewController {
         // counts as still-in-the-rail (see `railOwnsFocus`).
         if railVisible && !railWasVisible { rail?.resetFocusMemory() }
         railWasVisible = railVisible
-        let paused = vm.playbackState == .paused && !ambient && hasPlayedSinceLoad
-        // Ambient pause keeps the scrubber (and its bottom scrim) up as a
-        // read-only position indicator even though the rail fades. Not shown
-        // while loading — there is no meaningful position yet.
-        let scrubberVisible = chromeVisible || (ambient && !isLoading) || vm.seekIndicator != nil
-        // For a show, the episode title stays put in the rail during ambient
-        // (same place, same size) while the rest of the rail empties out. The
-        // rail view itself is held at alpha 1 so that held title shows; the
-        // plate/eyebrow/meta/buttons fade inside `setAmbient`. Movies keep
-        // nothing here (logo only).
-        let keepRailTitle = ambient && vm.metadata.type == "episode"
-        let railAlpha: CGFloat = keepRailTitle ? 1 : (railVisible ? 1 : 0)
+        let paused = vm.playbackState == .paused && hasPlayedSinceLoad
+        let scrubberVisible = chromeVisible || vm.seekIndicator != nil
+        let railAlpha: CGFloat = railVisible ? 1 : 0
 
         // The proxy is the rail's first focus landing, so it must be focusable
         // as soon as the chrome is up — NOT only after controls-focus mode has
@@ -2062,7 +2013,7 @@ class PlayerContainerViewController: UIViewController {
         // AVKit's info pane takes the bar's place while it is open.
         let paneOpen = activeRailPanel.map { $0.isPane && $0.window != nil } ?? false
         scrubberProxy?.isFocusEnabled = !paneOpen
-            && ((railVisible && !isLoading) || (proxyHasFocus && !isLoading && !ambient))
+            && ((railVisible && !isLoading) || (proxyHasFocus && !isLoading))
 
         // The content anchor holds focus whenever nothing else should: not
         // while the rail owns it, not while the skip pill does, not over
@@ -2104,9 +2055,9 @@ class PlayerContainerViewController: UIViewController {
 
         // The skip pill lives independently of the rail: it stays up whenever a
         // marker is active (chrome shown OR hidden), so the user can jump forward
-        // without first surfacing the controls. Hidden only while loading, during
-        // ambient pause, or when post-video has taken over.
-        let skipVisible = vm.showSkipButton && !isLoading && !ambient && vm.postVideoState == .hidden
+        // without first surfacing the controls. Hidden only while loading, or
+        // when post-video has taken over.
+        let skipVisible = vm.showSkipButton && !isLoading && vm.postVideoState == .hidden
             && !chromeVisible
 
         // Whether the pill owns focus (e.g. controls just hid with a marker up).
@@ -2117,9 +2068,9 @@ class PlayerContainerViewController: UIViewController {
         let ownershipChanged = ownsFocus != lastSkipPillOwnsFocus
         lastSkipPillOwnsFocus = ownsFocus
 
-        // The panel floats above the rail — a scrub/ambient/hide that
-        // takes the rail away must take the panel with it, since it
-        // has nothing to anchor to and no route back to visible.
+        // The panel floats above the rail — a scrub/hide that takes the
+        // rail away must take the panel with it, since it has nothing to
+        // anchor to and no route back to visible.
         if !railVisible {
             activeRailPanel?.dismissPanel()
         }
@@ -2127,17 +2078,11 @@ class PlayerContainerViewController: UIViewController {
         let targets: [(UIView?, CGFloat)] = [
             (chromeScrim, chromeVisible ? 1 : 0),
             (progressBar, scrubberVisible && !paneOpen ? 1 : 0),
-            (ambientScrim, (ambient && !isLoading) ? 1 : 0),
             (rail, railAlpha),
             (skipPill, skipVisible ? 1 : 0),
             (pausedDimView, paused ? 1 : 0),
-            (loadingLabel, showsActivityCue && !ambient ? 1 : 0),
+            (loadingLabel, showsActivityCue ? 1 : 0),
         ]
-        // `setAmbient` also drives the rail's sub-view alphas (plate/eyebrow/
-        // meta/buttons vs. the held title), which the `targets` diff below
-        // doesn't see, so fold its own change-detection in. (No rail → nothing
-        // to animate there, so treat as unchanged.)
-        let railAmbientChanged = rail.map { $0.ambientState != (ambient, keepRailTitle) } ?? false
         let targetsChanged = targets.contains(where: { view, alpha in
             view.map { abs($0.alpha - alpha) > 0.01 } == true
         })
@@ -2147,8 +2092,7 @@ class PlayerContainerViewController: UIViewController {
         // nothing visible is moving anyway.
         let captionLiftChanged = captionOverlay.map { $0.controlsVisible != chromeVisible } ?? false
         captionOverlay?.controlsVisible = chromeVisible
-        guard targetsChanged || railAmbientChanged || ownershipChanged
-                || captionLiftChanged else {
+        guard targetsChanged || ownershipChanged || captionLiftChanged else {
             if anchorNeedsFocusUpdate {
                 setNeedsFocusUpdate()
                 updateFocusIfNeeded()
@@ -2157,7 +2101,6 @@ class PlayerContainerViewController: UIViewController {
         }
         UIView.animate(withDuration: 0.25) {
             for (view, alpha) in targets { view?.alpha = alpha }
-            self.rail?.setAmbient(ambient, keepTitle: keepRailTitle)
             if captionLiftChanged { self.captionOverlay?.layoutIfNeeded() }
         }
         // Model alpha is now 1 for a visible pill, so the engine will accept it
@@ -2342,28 +2285,6 @@ final class SideScrimView: UIView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
-
-/// Bottom-anchored legibility gradient for the ambient-pause scrubber. The
-/// glass rail normally grounds the scrubber; during ambient the rail is gone,
-/// so this thin transparent→black gradient keeps the scrubber readable over
-/// bright backdrops.
-final class BottomScrimView: UIView {
-    override class var layerClass: AnyClass { CAGradientLayer.self }
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        let gradient = layer as! CAGradientLayer
-        gradient.colors = [
-            UIColor.black.withAlphaComponent(0).cgColor,
-            UIColor.black.withAlphaComponent(0.55).cgColor,
-        ]
-        gradient.locations = [0, 1]
-        gradient.startPoint = CGPoint(x: 0.5, y: 0)
-        gradient.endPoint = CGPoint(x: 0.5, y: 1)
-    }
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-}
-
 
 // MARK: - UIGestureRecognizerDelegate
 
