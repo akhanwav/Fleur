@@ -739,6 +739,7 @@ struct UniversalPlayerView: View {
         .animation(.easeInOut(duration: 1.0), value: viewModel.playbackState)
         .animation(.easeInOut(duration: 0.25), value: viewModel.showControls)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIndicator)
+        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: viewModel.seekIconVisible)
         .animation(.easeInOut(duration: 0.5), value: viewModel.pausePresentation)
         // No press handling in this view at all: no .onPlayPauseCommand,
         // .onExitCommand, .onMoveCommand or .onTapGesture. Every press is
@@ -862,7 +863,9 @@ struct UniversalPlayerView: View {
 
             // Seek Indicator (10s skip) with the chrome hidden; with it up,
             // the progress bar shows AVKit's glyph beside the time instead.
-            if let indicator = viewModel.seekIndicator, !viewModel.showControls {
+            // seekIconVisible (1s) is shorter than seekIndicator's own life
+            // (2s), which separately keeps the progress bar flashed up.
+            if let indicator = viewModel.seekIndicator, viewModel.seekIconVisible, !viewModel.showControls {
                 seekIndicatorView(indicator)
                     .transition(.scale.combined(with: .opacity))
             }

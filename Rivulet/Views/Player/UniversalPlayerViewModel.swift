@@ -171,6 +171,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Seek Indicator State
     /// Shows a brief indicator when user taps left/right to skip 10 seconds
     @Published var seekIndicator: SeekIndicator?
+    /// The centered icon's own, shorter half of the seek indicator's life —
+    /// the progress bar (gated on `seekIndicator != nil`) stays up longer.
+    /// A separate flag so the two can have separate durations without either
+    /// touching `showControls`/`railVisible`.
+    @Published private(set) var seekIconVisible = false
 
     // MARK: - Chapter Thumbnails
     private var chapterThumbnails: [Int: Data] = [:]  // index → image data
@@ -470,6 +475,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var pausedDueToAppInactive: Bool = false
     private let scrubUpdateInterval: TimeInterval = 0.1  // 100ms updates for smooth scrubbing
     private var seekIndicatorTimer: Timer?
+    private var seekIconHideTimer: Timer?
     private var pausedPosterTimer: Timer?
     private let pausedPosterDelay: TimeInterval = 10.0
     private var pausedPosterDimTimer: Timer?
@@ -3985,11 +3991,22 @@ final class UniversalPlayerViewModel: ObservableObject {
         replayWindow = nil
     }
 
-    /// Show seek indicator briefly (1.5 seconds)
+    /// Shows the centered skip icon for 1s and keeps `seekIndicator` itself
+    /// (which also flashes the progress bar, see `applyChromeVisibility`)
+    /// non-nil for 2s.
     private func showSeekIndicator(_ indicator: SeekIndicator) {
         seekIndicatorTimer?.invalidate()
+        seekIconHideTimer?.invalidate()
         withAnimation(.easeOut(duration: 0.15)) {
             seekIndicator = indicator
+            seekIconVisible = true
+        }
+        seekIconHideTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                withAnimation(.easeOut(duration: 0.25)) {
+                    self?.seekIconVisible = false
+                }
+            }
         }
         seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
@@ -6630,6 +6647,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         wheelScrubbingTimer?.invalidate()
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
+        seekIconHideTimer?.invalidate()
         skipCountdownTimer?.invalidate()
         aetherStallWatchdogTask?.cancel()
         insightsRecheckTask?.cancel()
