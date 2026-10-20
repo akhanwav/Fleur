@@ -383,17 +383,59 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// re-renders on a step. aether route only (see `AudioSyncAdjustments`).
     @Published private(set) var audioSyncOffsetMs: Int = 0
 
-    /// Steps this title's delta — not the global default — persists it, and
-    /// re-applies the new effective value live via the engine's own
-    /// `setAudioDelay`. Guarded here too (not just in the panel that hides
+    /// True for a couple of seconds right when a debounced change actually
+    /// reaches the engine — the Audio panel shows "Applying…" in place of the
+    /// value so the reload (a full source reopen on the loopback route, not
+    /// a lightweight re-anchor) doesn't read as a frozen video.
+    @Published private(set) var isApplyingAudioSync = false
+
+    private var audioSyncDebounceTimer: Timer?
+    private var audioSyncApplyingTimer: Timer?
+    /// Time to let a burst of presses settle before telling the engine.
+    private static let audioSyncDebounceDelay: TimeInterval = 0.5
+    /// How long the "Applying…" note stays up once a change is sent.
+    private static let audioSyncApplyingNoteDuration: TimeInterval = 2.0
+
+    /// Steps this title's delta — not the global default — and persists it
+    /// and updates the DISPLAYED value immediately, so every press feels
+    /// responsive. The engine call is debounced: on the loopback route
+    /// (Rivulet's default for direct play) `setAudioDelay` is a full source
+    /// reopen, not an in-place correction, so applying every press live let a
+    /// burst of presses queue overlapping reloads and break playback.
+    /// Guarded on `aetherPlayer` here too (not just in the panel that hides
     /// this stepper on the hls route): a held button's closure can't observe
     /// a mid-hold route change.
     func adjustAudioSync(bySteps steps: Int) {
-        guard let ap = aetherPlayer else { return }
+        guard aetherPlayer != nil else { return }
         let perTitle = AudioSyncAdjustments.perTitleMs(forMediaKey: subtitleMediaKey) + steps * AudioSyncAdjustments.stepMs
         AudioSyncAdjustments.setPerTitleMs(perTitle, forMediaKey: subtitleMediaKey)
         audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+
+        audioSyncDebounceTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.audioSyncDebounceDelay, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.applyAudioSyncNow()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        audioSyncDebounceTimer = timer
+    }
+
+    /// Fires once presses have settled: tells the engine, and shows
+    /// "Applying…" for a beat since this is the expensive part.
+    private func applyAudioSyncNow() {
+        guard let ap = aetherPlayer else { return }
+        isApplyingAudioSync = true
         ap.setAudioDelay(Double(audioSyncOffsetMs) / 1000.0)
+
+        audioSyncApplyingTimer?.invalidate()
+        let timer = Timer(timeInterval: Self.audioSyncApplyingNoteDuration, repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.isApplyingAudioSync = false
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        audioSyncApplyingTimer = timer
     }
 
     /// Loads this item's effective offset BEFORE the engine load, so
@@ -6567,6 +6609,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func reportFinalProgress(time: TimeInterval, duration: TimeInterval) async {
+        // A session that ended in .failed has nothing truthful to report:
+        // `time` is wherever a broken pipeline got stuck, often far short of
+        // where the user actually was (a reload storm can freeze it seconds
+        // into a session that resumed much later in the title). Reporting
+        // "stopped" there would overwrite — or fall below the resume floor
+        // and erase — the server's real position. Leave it alone.
+        guard !playbackState.isFailed else { return }
+
         if case .provider(let playback) = source {
             await stopProviderReporter(at: time)
             if duration > 0 && time / duration > 0.9 {
@@ -6681,6 +6731,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         countdownTimer?.invalidate()
         seekIndicatorTimer?.invalidate()
         seekIconHideTimer?.invalidate()
+        audioSyncDebounceTimer?.invalidate()
+        audioSyncApplyingTimer?.invalidate()
         skipCountdownTimer?.invalidate()
         aetherStallWatchdogTask?.cancel()
         insightsRecheckTask?.cancel()

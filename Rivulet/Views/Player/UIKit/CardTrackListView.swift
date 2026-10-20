@@ -336,9 +336,32 @@ final class CardStepperRowView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    private var refreshTimer: Timer?
+    /// Long enough to span a debounced change: presses settle, then the
+    /// value transitions again on its own (e.g. Audio Sync's "Applying…"
+    /// note) with no further press to trigger a label update.
+    private static let refreshWindow: TimeInterval = 3.0
+    private static let refreshInterval: TimeInterval = 0.15
+
     private func step(_ direction: Int) {
         config.onStep(direction)
         valueLabel.text = config.value()
+        scheduleRefresh()
+    }
+
+    /// Keeps the label in sync with `config.value()` for a few seconds after
+    /// a press, not just at the press itself — this row doesn't need to know
+    /// WHY the value might change asynchronously afterward, only that it can.
+    private func scheduleRefresh() {
+        refreshTimer?.invalidate()
+        let deadline = Date().addingTimeInterval(Self.refreshWindow)
+        let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { [weak self] pollTimer in
+            guard let self else { pollTimer.invalidate(); return }
+            self.valueLabel.text = self.config.value()
+            if Date() >= deadline { pollTimer.invalidate() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
     }
 }
 

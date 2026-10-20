@@ -1482,7 +1482,11 @@ class PlayerContainerViewController: UIViewController {
                         // only — AVPlayer (hls) has no audio-delay hook.
                         CardStepperConfig(
                             title: "Sync",
-                            value: { [weak vm] in AudioSyncAdjustments.formatted(vm?.audioSyncOffsetMs ?? 0) },
+                            value: { [weak vm] in
+                                guard let vm else { return AudioSyncAdjustments.formatted(0) }
+                                return vm.isApplyingAudioSync
+                                    ? "Applying…" : AudioSyncAdjustments.formatted(vm.audioSyncOffsetMs)
+                            },
                             onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) }),
                     ],
                     onSelect: { [weak vm, weak self] id in
