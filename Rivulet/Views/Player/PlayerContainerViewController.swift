@@ -25,7 +25,6 @@ class PlayerContainerViewController: UIViewController {
     private var progressBar: PlayerProgressBarView?
     private var scrubberProxy: ScrubberFocusProxyView?
     private var skipPill: SkipPillButton?
-    private var pausedDimView: UIView?
     private var loadingLabel: UILabel?
     private var chromeScrim = ChromeScrimView()
     private var captionOverlay: CaptionOverlayView?
@@ -183,14 +182,6 @@ class PlayerContainerViewController: UIViewController {
         if let vm = viewModel {
             chromeScrim.isUserInteractionEnabled = false
 
-            // Full-frame pause dim sits just above the video, below every
-            // other chrome layer (z-order bottom-up: scrim, dim, rail,
-            // progress bar, skip pill, loading label).
-            let dim = UIView()
-            dim.backgroundColor = UIColor.black.withAlphaComponent(0.28)
-            dim.alpha = 0
-            dim.isUserInteractionEnabled = false
-
             let railView = PlayerRailView()
             let bar = PlayerProgressBarView()
             let proxy = ScrubberFocusProxyView()
@@ -221,14 +212,13 @@ class PlayerContainerViewController: UIViewController {
             loadingLabel.text = "Loading"
             loadingLabel.isHidden = true
 
-            [chromeScrim, dim, railView, bar, proxy, pill, loadingLabel].forEach {
+            [chromeScrim, railView, bar, proxy, pill, loadingLabel].forEach {
                 view.addSubview($0)
                 $0.translatesAutoresizingMaskIntoConstraints = false
             }
             // Z-order bottom-up, explicit (subview-add order above already
             // matches, but state this is intentional, not incidental).
             view.bringSubviewToFront(chromeScrim)
-            view.bringSubviewToFront(dim)
             view.bringSubviewToFront(railView)
             view.bringSubviewToFront(bar)
             view.bringSubviewToFront(proxy)
@@ -240,11 +230,6 @@ class PlayerContainerViewController: UIViewController {
                 chromeScrim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
                 chromeScrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 chromeScrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-
-                dim.topAnchor.constraint(equalTo: view.topAnchor),
-                dim.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                dim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                dim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
                 // Rail: the screen's bottom band, edge to edge (AVKit's layout).
                 railView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -300,7 +285,6 @@ class PlayerContainerViewController: UIViewController {
             progressBar = bar
             scrubberProxy = proxy
             skipPill = pill
-            pausedDimView = dim
             self.loadingLabel = loadingLabel
 
             bindChrome(to: vm)
@@ -1877,7 +1861,6 @@ class PlayerContainerViewController: UIViewController {
     /// - railVisible: chrome visible AND not scrubbing — scrubbing hides
     ///   the rail and skip pill so focus reads unambiguously on the
     ///   scrubber (user call 2026-07-03).
-    /// - paused: playback paused — drives the full-frame dim.
     /// - loading: the top-left "Loading" label shows whenever loading/idle
     ///   (the progress bar's own skeleton shimmer carries the rest of the
     ///   loading look); it uses `isHidden` from the state sink too so it
@@ -1993,7 +1976,6 @@ class PlayerContainerViewController: UIViewController {
         // counts as still-in-the-rail (see `railOwnsFocus`).
         if railVisible && !railWasVisible { rail?.resetFocusMemory() }
         railWasVisible = railVisible
-        let paused = vm.playbackState == .paused && hasPlayedSinceLoad
         let scrubberVisible = chromeVisible || vm.seekIndicator != nil
         let railAlpha: CGFloat = railVisible ? 1 : 0
 
@@ -2080,7 +2062,6 @@ class PlayerContainerViewController: UIViewController {
             (progressBar, scrubberVisible && !paneOpen ? 1 : 0),
             (rail, railAlpha),
             (skipPill, skipVisible ? 1 : 0),
-            (pausedDimView, paused ? 1 : 0),
             (loadingLabel, showsActivityCue ? 1 : 0),
         ]
         let targetsChanged = targets.contains(where: { view, alpha in
