@@ -74,6 +74,11 @@ struct SettingsRowItem {
         case textEntry(value: () -> String, placeholder: String, hint: String?,
                        suggestions: [(label: String, value: String)],
                        keyboardType: UIKeyboardType, isSecure: Bool = false, set: (String) -> Void)
+        /// Shows a live formatted value and presents a dedicated modal on
+        /// select, mirroring `.textEntry`'s "shows a value, presents its own
+        /// VC" shape for a setting with no on/off or multiple-choice form —
+        /// currently just the Audio Sync global default.
+        case stepperEntry(value: () -> String, present: (UIViewController) -> Void)
     }
 
     let id: String
@@ -142,6 +147,7 @@ struct SettingsRowItem {
             let current = value()
             if current.isEmpty { return placeholder.isEmpty ? "Not set" : placeholder }
             return isSecure ? "Set" : current
+        case .stepperEntry(let value, _): return value()
         case .navigation, .action, .option: return nil
         }
     }
@@ -359,6 +365,15 @@ enum SettingsContent {
                             kind: .navigationValue(.skipBackIntervalPicker, value: {
                                 SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
                             })),
+            SettingsRowItem(id: "audioSyncOffset", title: "Audio Sync",
+                            kind: .stepperEntry(
+                                value: { AudioSyncAdjustments.formatted(AudioSyncAdjustments.globalDefaultMs) },
+                                present: { vc in
+                                    let modal = AudioSyncOffsetViewController(onChange: {
+                                        (vc as? SettingsPageViewController)?.reloadRows()
+                                    })
+                                    vc.present(modal, animated: true)
+                                })),
             toggle("showPostVideoUpNext", "Show Up Next Panel", key: "showPostVideoUpNext", default: true),
             SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
                             kind: .navigationValue(.contentFilter, value: {

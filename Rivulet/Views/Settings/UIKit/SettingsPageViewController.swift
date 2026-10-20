@@ -289,6 +289,8 @@ extension SettingsPageViewController: UICollectionViewDataSource, UICollectionVi
                     self?.reloadRows()
                 })
             present(entry, animated: true)
+        case .stepperEntry(_, let presentModal):
+            presentModal(self)
         case .info:
             break
         }

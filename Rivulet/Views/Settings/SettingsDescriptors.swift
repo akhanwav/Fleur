@@ -174,6 +174,10 @@ enum SettingsDescriptorStore {
             icon: "backward.fill",
             description: "How far a single Left press skips back during playback."
         ),
+        "audioSyncOffset": SettingDescriptor(
+            icon: "waveform",
+            description: "A fixed audio delay applied to every title, for a soundbar or AVR's own processing lag. Adjust per title from the player's Audio menu on top of this."
+        ),
         "showPostVideoUpNext": SettingDescriptor(
             icon: "rectangle.stack",
             description: "When off, closing credits play uninterrupted and the player returns to Home at the end of the episode."

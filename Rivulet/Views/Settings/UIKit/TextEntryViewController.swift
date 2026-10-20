@@ -225,7 +225,9 @@ extension TextEntryViewController: UITextFieldDelegate {
 /// Focusable pill matching the confirm-popup vocabulary: bright white + dark
 /// text on focus, translucent glass otherwise. Owns Select via a press-typed
 /// tap recognizer, since a bare control's primaryAction doesn't fire on tvOS.
-private final class TextEntryPillButton: UIView {
+/// Not file-private: `AudioSyncOffsetViewController` reuses it for its own
+/// Done button, in the same glass-card modal family.
+final class TextEntryPillButton: UIView {
 
     private let labelView = UILabel()
     private let onPress: () -> Void

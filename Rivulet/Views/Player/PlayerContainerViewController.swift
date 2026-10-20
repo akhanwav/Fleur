@@ -1476,6 +1476,15 @@ class PlayerContainerViewController: UIViewController {
                     header: "Audio", tracks: vm.audioTracks,
                     selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
                     toggles: SystemAudioAdjustment.menuToggles,
+                    steppers: vm.aetherPlayer == nil ? [] : [
+                        // Sync: sticky per title, added on top of Settings'
+                        // global default (AudioSyncAdjustments). aether route
+                        // only — AVPlayer (hls) has no audio-delay hook.
+                        CardStepperConfig(
+                            title: "Sync",
+                            value: { [weak vm] in AudioSyncAdjustments.formatted(vm?.audioSyncOffsetMs ?? 0) },
+                            onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) }),
+                    ],
                     onSelect: { [weak vm, weak self] id in
                         if let id { vm?.selectAudioTrack(id: id) }
                         self?.activeRailPanel?.dismissPanel()

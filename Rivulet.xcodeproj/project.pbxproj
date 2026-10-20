@@ -65,19 +65,19 @@
 			);
 			target = A70B44382F05AF3200DEF5ED /* TopShelfExtension */;
 		};
-		A72E03E72EDA297E003A73DA /* Exceptions for "Rivulet" folder in "Rivulet" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				Info.plist,
-			);
-			target = A72E03D92EDA297D003A73DA /* Rivulet */;
-		};
 		A70B44492F05B00000DEF5ED /* Exceptions for "Rivulet" folder in "TopShelfExtension" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Models/Shared/RivuletLink.swift,
 			);
 			target = A70B44382F05AF3200DEF5ED /* TopShelfExtension */;
+		};
+		A72E03E72EDA297E003A73DA /* Exceptions for "Rivulet" folder in "Rivulet" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A72E03D92EDA297D003A73DA /* Rivulet */;
 		};
 		B30000160000000000000016 /* Exceptions for "RivuletiOS" folder in "Rivulet iOS" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;

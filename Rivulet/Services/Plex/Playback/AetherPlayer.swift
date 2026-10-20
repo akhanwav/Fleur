@@ -1056,6 +1056,7 @@ final class AetherPlayer: PlayerProtocol {
         preferredAudioLanguages: [String] = [],
         preferredSubtitleLanguages: [String] = [],
         externalSubtitles: [SidecarSubtitle] = [],
+        audioDelaySeconds: Double = 0,
         isLive: Bool = false
     ) async throws {
         // .lossless: FLAC encode for non-stream-copy audio (TrueHD, DTS,
@@ -1110,7 +1111,11 @@ final class AetherPlayer: PlayerProtocol {
             },
             // Same teletext rule as Live TV: a teletext stream decodes the same
             // way whichever surface plays it (VOD recordings/rips included).
-            teletextPage: Self.regionTeletextPage()
+            teletextPage: Self.regionTeletextPage(),
+            // Starting the engine with the effective offset already set is
+            // free (no reload); only an in-session stepper nudge after this
+            // pays the engine's own re-anchor cost (see `setAudioDelay`).
+            audioDelaySeconds: audioDelaySeconds
         )
         // New content, so the previous item's aspect ratio describes nothing.
         // Reset HERE rather than when `currentItem` goes nil: the engine also
@@ -1291,6 +1296,20 @@ final class AetherPlayer: PlayerProtocol {
         engine.volume = muted ? 0 : 1
         currentAVPlayer?.isMuted = muted
     }
+
+    /// The audio/video sync offset the engine is currently applying, in
+    /// seconds; positive = audio plays later. See `AudioSyncAdjustments` for
+    /// the host-side global-default + per-title layering that produces the
+    /// value passed to `setAudioDelay(_:)`.
+    var audioDelaySeconds: Double { engine.audioDelaySeconds }
+
+    /// Live-adjusts the audio delay. No host-driven reload needed — the
+    /// engine re-anchors its own pipeline (AE#464): a brief session-preserving
+    /// reload-at-position on the loopback route, a flush-seek on software.
+    func setAudioDelay(_ seconds: Double) {
+        engine.setAudioDelay(seconds)
+    }
+
     func seek(to time: TimeInterval) async { await engine.seek(to: time) }
 
     // MARK: - Live timeshift

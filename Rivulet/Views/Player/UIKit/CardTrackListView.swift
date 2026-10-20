@@ -281,6 +281,12 @@ final class CardStepperRowView: UIView {
 
     private let config: CardStepperConfig
     private let valueLabel = UILabel()
+    private let minus = CardStepperButton(symbolName: "minus")
+    private let plus = CardStepperButton(symbolName: "plus")
+
+    /// The `+` button — the natural first-focus landing when this row is the
+    /// only control on a dedicated page (Settings' global-default modal).
+    var incrementButton: UIView { plus }
 
     init(config: CardStepperConfig) {
         self.config = config
@@ -291,8 +297,6 @@ final class CardStepperRowView: UIView {
         titleLabel.font = CardTrackListView.Metrics.titleFont
         titleLabel.textColor = .white
 
-        let minus = CardStepperButton(symbolName: "minus")
-        let plus = CardStepperButton(symbolName: "plus")
         minus.onTap = { [weak self] in self?.step(-1) }
         plus.onTap = { [weak self] in self?.step(+1) }
 
@@ -345,6 +349,14 @@ final class CardStepperButton: UIControl {
 
     var onTap: (() -> Void)?
     private let symbolView: UIImageView
+    private var repeatTimer: Timer?
+    private var holdStarted: Date?
+    /// Repeat cadence once held past `InputConfig.holdThreshold`.
+    private static let repeatInterval: TimeInterval = 0.25
+    /// Faster cadence once the hold has run this long — a big adjustment
+    /// doesn't take forever at 10ms/press, a small one stays precise.
+    private static let fastRepeatInterval: TimeInterval = 0.08
+    private static let fastRepeatDelay: TimeInterval = 1.5
 
     init(symbolName: String) {
         symbolView = UIImageView(image: UIImage(
@@ -374,9 +386,63 @@ final class CardStepperButton: UIControl {
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .select {
             onTap?()
+            beginHold()
             return
         }
         super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .select {
+            endHold()
+            return
+        }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .select {
+            endHold()
+            return
+        }
+        super.pressesCancelled(presses, with: event)
+    }
+
+    /// `onTap` already fired once (above, on press-down, matching this
+    /// button's existing single-press feel). This only covers a CONTINUED
+    /// hold: nothing repeats for an ordinary tap released before the
+    /// threshold, since `endHold` invalidates the pending timer first.
+    private func beginHold() {
+        holdStarted = Date()
+        repeatTimer?.invalidate()
+        let pending = Timer(timeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
+            self?.startRepeating(interval: Self.repeatInterval)
+        }
+        RunLoop.main.add(pending, forMode: .common)
+        repeatTimer = pending
+    }
+
+    private func startRepeating(interval: TimeInterval) {
+        repeatTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.onTap?()
+            // Swap to the faster cadence once the hold has run long enough,
+            // rather than trying to retime the running timer in place.
+            if interval != Self.fastRepeatInterval,
+               let started = self.holdStarted,
+               Date().timeIntervalSince(started) >= Self.fastRepeatDelay {
+                self.startRepeating(interval: Self.fastRepeatInterval)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        repeatTimer = timer
+    }
+
+    private func endHold() {
+        repeatTimer?.invalidate()
+        repeatTimer = nil
+        holdStarted = nil
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {

@@ -376,6 +376,35 @@ final class UniversalPlayerViewModel: ObservableObject {
         subtitleHeightUnits = SubtitleAdjustments.heightUnits(forMediaKey: subtitleMediaKey)
     }
 
+    // MARK: - Audio sync (OSD stepper, sticky per item, additive with a global default)
+
+    /// This item's EFFECTIVE audio sync offset in ms: the Settings global
+    /// default plus this title's own delta. Published so the Audio panel
+    /// re-renders on a step. aether route only (see `AudioSyncAdjustments`).
+    @Published private(set) var audioSyncOffsetMs: Int = 0
+
+    /// Steps this title's delta — not the global default — persists it, and
+    /// re-applies the new effective value live via the engine's own
+    /// `setAudioDelay`. Guarded here too (not just in the panel that hides
+    /// this stepper on the hls route): a held button's closure can't observe
+    /// a mid-hold route change.
+    func adjustAudioSync(bySteps steps: Int) {
+        guard let ap = aetherPlayer else { return }
+        let perTitle = AudioSyncAdjustments.perTitleMs(forMediaKey: subtitleMediaKey) + steps * AudioSyncAdjustments.stepMs
+        AudioSyncAdjustments.setPerTitleMs(perTitle, forMediaKey: subtitleMediaKey)
+        audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+        ap.setAudioDelay(Double(audioSyncOffsetMs) / 1000.0)
+    }
+
+    /// Loads this item's effective offset BEFORE the engine load, so
+    /// `runAetherLoadWithDeadline` can start the engine with it already set
+    /// (free — no reload cost) instead of correcting it with a live
+    /// `setAudioDelay` call right after. Called on every playback setup,
+    /// including next-episode swaps, same as `loadStoredSubtitleDelay`.
+    private func loadStoredAudioSync() {
+        audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+    }
+
     // MARK: - Metadata
 
     private(set) var metadata: PlexMetadata
@@ -1036,6 +1065,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Sticky per-item subtitle delay (OSD stepper).
         loadStoredSubtitleDelay()
+        // Sticky per-item audio sync offset (global default + per-title delta).
+        loadStoredAudioSync()
 
         // A provider item plays the stream its provider resolved. Returns
         // before the Plex metadata fetch and ContentRouter, both of which
@@ -2053,6 +2084,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         let audioLanguages = aetherPreferredAudioLanguages()
         let subtitleLanguages = aetherPreferredSubtitleLanguages()
         let externalSubtitles = aetherExternalSubtitles()
+        let audioDelaySeconds = Double(audioSyncOffsetMs) / 1000.0
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor in
@@ -2063,7 +2095,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                     subtitleLanguageHintsByStreamIndex: hints,
                     preferredAudioLanguages: audioLanguages,
                     preferredSubtitleLanguages: subtitleLanguages,
-                    externalSubtitles: externalSubtitles
+                    externalSubtitles: externalSubtitles,
+                    audioDelaySeconds: audioDelaySeconds
                 )
             }
             group.addTask {
