@@ -56,7 +56,7 @@ final class CardTrackListView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private var rowButtons: [CardTrackRowButton] = []
-    private var stepperRows: [CardStepperRowView] = []
+    private var stepperRows: [UIView & CardStepperRowControl] = []
     /// Pin focus to the selected row only for the FIRST landing. After focus
     /// has entered the list once, `preferredFocusEnvironments` holds the row
     /// focus is on, so an edge press stops instead of bouncing to the selection.
@@ -202,7 +202,9 @@ final class CardTrackListView: UIView {
             stack.addArrangedSubview(MenuSeparatorView())
         }
         for config in steppers {
-            let row = CardStepperRowView(config: config)
+            let row: UIView & CardStepperRowControl = config.usesArrowKeys
+                ? CardArrowStepperRowView(config: config)
+                : CardStepperRowView(config: config)
             row.onStep = { [weak self] in self?.scheduleStepperRefresh() }
             stack.addArrangedSubview(row)
             stepperRows.append(row)
@@ -249,7 +251,9 @@ final class CardTrackListView: UIView {
             hasPinnedInitialFocus = true
             lastFocusedControl = row
         } else if stepperRows.contains(where: { next.isDescendant(of: $0) }) {
-            // The stepper row isn't focusable; its -/+ buttons are.
+            // Either the row itself is focusable (CardArrowStepperRowView,
+            // which `isDescendant(of:)` counts as true for itself) or one of
+            // its -/+ buttons is (CardStepperRowView).
             hasPinnedInitialFocus = true
             lastFocusedControl = next
         }
@@ -303,13 +307,86 @@ struct CardStepperConfig {
     let title: String
     let value: () -> String
     let onStep: (Int) -> Void
+    /// True to render as a single focusable row where Left/Right step the
+    /// value directly (hold to repeat-accelerate), instead of separate -/+
+    /// buttons — used where a dedicated row earns it (Audio Sync). Defaults
+    /// to false: Height/Delay keep the two-button form.
+    var usesArrowKeys: Bool = false
+}
+
+/// Shared by both stepper row kinds, so `CardTrackListView` can hold either
+/// in one array without caring which it has.
+protocol CardStepperRowControl: AnyObject {
+    /// Fires after every step, so the owning list can keep every row (not
+    /// just this one) in sync for a few seconds afterward — a press here can
+    /// change a value shown elsewhere, and a control elsewhere (Audio Sync's
+    /// "Reset to 0 ms" action) can change THIS row's value.
+    var onStep: (() -> Void)? { get set }
+    /// Re-reads the config's `value()` without a press — the owning list
+    /// calls this on a timer after ANY control in the panel changes, since a
+    /// row can't tell on its own when that happens.
+    func refreshValue()
+}
+
+// MARK: - HoldRepeater
+
+/// Fires once immediately, then repeats while held — starting after
+/// `InputConfig.holdThreshold`, speeding up the longer the hold continues.
+/// Shared by `CardStepperButton` (a held Select) and `CardArrowStepperRowView`
+/// (a held Left/Right), which each just supply what firing means.
+final class HoldRepeater {
+    private var repeatTimer: Timer?
+    private var holdStarted: Date?
+    /// Repeat cadence once held past `InputConfig.holdThreshold`.
+    private static let repeatInterval: TimeInterval = 0.25
+    /// Faster cadence once the hold has run this long — a big adjustment
+    /// doesn't take forever at 10ms/press, a small one stays precise.
+    private static let fastRepeatInterval: TimeInterval = 0.08
+    private static let fastRepeatDelay: TimeInterval = 1.5
+
+    /// `fire` also runs immediately, matching the single-press feel of an
+    /// ordinary tap; nothing repeats for one released before the threshold,
+    /// since `end()` invalidates the pending timer first.
+    func begin(fire: @escaping () -> Void) {
+        fire()
+        holdStarted = Date()
+        repeatTimer?.invalidate()
+        let pending = Timer(timeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
+            self?.startRepeating(interval: Self.repeatInterval, fire: fire)
+        }
+        RunLoop.main.add(pending, forMode: .common)
+        repeatTimer = pending
+    }
+
+    private func startRepeating(interval: TimeInterval, fire: @escaping () -> Void) {
+        repeatTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            fire()
+            // Swap to the faster cadence once the hold has run long enough,
+            // rather than trying to retime the running timer in place.
+            if interval != Self.fastRepeatInterval,
+               let started = self.holdStarted,
+               Date().timeIntervalSince(started) >= Self.fastRepeatDelay {
+                self.startRepeating(interval: Self.fastRepeatInterval, fire: fire)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        repeatTimer = timer
+    }
+
+    func end() {
+        repeatTimer?.invalidate()
+        repeatTimer = nil
+        holdStarted = nil
+    }
 }
 
 // MARK: - CardStepperRowView
 
-/// `Title        (-)  value  (+)` in a menu row. The -/+ buttons are focusable;
-/// the value updates on every press.
-final class CardStepperRowView: UIView {
+/// `Title        (-)  value  (+)` in a menu row — the two-button form. The
+/// -/+ buttons are focusable; the value updates on every press.
+final class CardStepperRowView: UIView, CardStepperRowControl {
 
     private let config: CardStepperConfig
     private let valueLabel = UILabel()
@@ -320,10 +397,6 @@ final class CardStepperRowView: UIView {
     /// only control on a dedicated page (Settings' global-default modal).
     var incrementButton: UIView { plus }
 
-    /// Fires after every press, so the owning list can keep every row (not
-    /// just this one) in sync for a few seconds afterward — a press here can
-    /// change a value shown elsewhere, and a control elsewhere (Audio Sync's
-    /// "Reset to Default" action) can change THIS row's value.
     var onStep: (() -> Void)?
 
     init(config: CardStepperConfig) {
@@ -380,9 +453,6 @@ final class CardStepperRowView: UIView {
         onStep?()
     }
 
-    /// Re-reads `config.value()` without a press — the owning list calls
-    /// this on a timer after ANY control in the panel changes, since this
-    /// row can't tell on its own when that happens.
     func refreshValue() {
         valueLabel.text = config.value()
     }
@@ -395,14 +465,7 @@ final class CardStepperButton: UIControl {
 
     var onTap: (() -> Void)?
     private let symbolView: UIImageView
-    private var repeatTimer: Timer?
-    private var holdStarted: Date?
-    /// Repeat cadence once held past `InputConfig.holdThreshold`.
-    private static let repeatInterval: TimeInterval = 0.25
-    /// Faster cadence once the hold has run this long — a big adjustment
-    /// doesn't take forever at 10ms/press, a small one stays precise.
-    private static let fastRepeatInterval: TimeInterval = 0.08
-    private static let fastRepeatDelay: TimeInterval = 1.5
+    private let holdRepeater = HoldRepeater()
 
     init(symbolName: String) {
         symbolView = UIImageView(image: UIImage(
@@ -431,8 +494,7 @@ final class CardStepperButton: UIControl {
     // Select does not fire .primaryActionTriggered on a plain UIControl on tvOS.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .select {
-            onTap?()
-            beginHold()
+            holdRepeater.begin { [weak self] in self?.onTap?() }
             return
         }
         super.pressesBegan(presses, with: event)
@@ -440,7 +502,7 @@ final class CardStepperButton: UIControl {
 
     override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .select {
-            endHold()
+            holdRepeater.end()
             return
         }
         super.pressesEnded(presses, with: event)
@@ -448,47 +510,10 @@ final class CardStepperButton: UIControl {
 
     override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses where press.type == .select {
-            endHold()
+            holdRepeater.end()
             return
         }
         super.pressesCancelled(presses, with: event)
-    }
-
-    /// `onTap` already fired once (above, on press-down, matching this
-    /// button's existing single-press feel). This only covers a CONTINUED
-    /// hold: nothing repeats for an ordinary tap released before the
-    /// threshold, since `endHold` invalidates the pending timer first.
-    private func beginHold() {
-        holdStarted = Date()
-        repeatTimer?.invalidate()
-        let pending = Timer(timeInterval: InputConfig.holdThreshold, repeats: false) { [weak self] _ in
-            self?.startRepeating(interval: Self.repeatInterval)
-        }
-        RunLoop.main.add(pending, forMode: .common)
-        repeatTimer = pending
-    }
-
-    private func startRepeating(interval: TimeInterval) {
-        repeatTimer?.invalidate()
-        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.onTap?()
-            // Swap to the faster cadence once the hold has run long enough,
-            // rather than trying to retime the running timer in place.
-            if interval != Self.fastRepeatInterval,
-               let started = self.holdStarted,
-               Date().timeIntervalSince(started) >= Self.fastRepeatDelay {
-                self.startRepeating(interval: Self.fastRepeatInterval)
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        repeatTimer = timer
-    }
-
-    private func endHold() {
-        repeatTimer?.invalidate()
-        repeatTimer = nil
-        holdStarted = nil
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
@@ -499,6 +524,163 @@ final class CardStepperButton: UIControl {
             self.symbolView.tintColor = isFocused ? .black : .white
             self.transform = isFocused ? CGAffineTransform(scaleX: 1.1, y: 1.1) : .identity
         }
+    }
+}
+
+// MARK: - CardArrowStepperRowView
+
+/// `Title                      value` in a menu row, itself focusable: while
+/// focused, Left/Right step the value directly (hold to repeat-accelerate,
+/// via the same `HoldRepeater` `CardStepperButton` uses), rather than
+/// separate -/+ buttons. Focus styling mirrors `CardTrackRowButton`'s pill.
+final class CardArrowStepperRowView: UIView, CardStepperRowControl {
+
+    private let config: CardStepperConfig
+    private let pill = UIView()
+    private let content = UIView()
+    private let titleLabel = UILabel()
+    private let valueLabel = UILabel()
+    private let holdRepeater = HoldRepeater()
+    /// The touch-remote / iPhone-Remote twin of the press handling below:
+    /// those arrive as indirect-touch swipes, never as arrow presses at all,
+    /// so without this a touch-only remote couldn't adjust this row. Gated
+    /// to fire only while this row holds focus, same as the press half.
+    private var swipeBinding: DirectionalInputBinding?
+
+    var onStep: (() -> Void)?
+
+    init(config: CardStepperConfig) {
+        self.config = config
+        super.init(frame: .zero)
+        typealias M = CardTrackListView.Metrics
+
+        pill.layer.cornerRadius = M.rowRadius
+        pill.layer.cornerCurve = .continuous
+        pill.layer.shadowColor = UIColor.black.cgColor
+        pill.layer.shadowOffset = CGSize(width: 0, height: 20)
+        pill.layer.shadowRadius = 15
+        pill.isUserInteractionEnabled = false
+        content.isUserInteractionEnabled = false
+
+        titleLabel.text = config.title
+        titleLabel.font = M.titleFont
+        titleLabel.textColor = .white
+
+        valueLabel.text = config.value()
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .medium)
+        valueLabel.textColor = M.secondaryColor
+        valueLabel.textAlignment = .right
+
+        addSubview(pill)
+        addSubview(content)
+        [titleLabel, valueLabel].forEach { content.addSubview($0) }
+        [content, titleLabel, valueLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: M.rowHeight),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: M.titleX),
+            titleLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+
+            valueLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -M.checkColumnX),
+            valueLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            valueLabel.leadingAnchor.constraint(greaterThanOrEqualTo: titleLabel.trailingAnchor, constant: 12),
+        ])
+        applyFocus(false)
+
+        swipeBinding = DirectionalInputBinding(
+            gatedSwipesOn: self,
+            directions: [.left, .right],
+            shouldHandle: { [weak self] _ in self?.isFocused == true },
+            onSwipe: { [weak self] direction in
+                switch direction {
+                case .left: self?.step(-1)
+                case .right: self?.step(1)
+                case .up, .down: break
+                }
+            }
+        )
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var canBecomeFocused: Bool { true }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let isFocused = self.isFocused
+        pill.frame = isFocused ? bounds.insetBy(dx: -CardTrackListView.Metrics.focusGrowth,
+                                                dy: -CardTrackListView.Metrics.focusGrowth) : bounds
+        pill.layer.shadowPath = UIBezierPath(roundedRect: pill.bounds, cornerRadius: pill.layer.cornerRadius).cgPath
+    }
+
+    // Left/Right step the value directly while focused. Everything else —
+    // Up/Down to leave the row, Select, Menu — passes through untouched.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses {
+            switch press.type {
+            case .leftArrow:
+                holdRepeater.begin { [weak self] in self?.step(-1) }
+                return
+            case .rightArrow:
+                holdRepeater.begin { [weak self] in self?.step(1) }
+                return
+            default:
+                break
+            }
+        }
+        super.pressesBegan(presses, with: event)
+    }
+
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .leftArrow || press.type == .rightArrow {
+            holdRepeater.end()
+            return
+        }
+        super.pressesEnded(presses, with: event)
+    }
+
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        for press in presses where press.type == .leftArrow || press.type == .rightArrow {
+            holdRepeater.end()
+            return
+        }
+        super.pressesCancelled(presses, with: event)
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let isFocused = context.nextFocusedView === self
+        coordinator.animateFocusChange(gained: isFocused) {
+            self.applyFocus(isFocused)
+        }
+    }
+
+    private func applyFocus(_ focused: Bool) {
+        typealias M = CardTrackListView.Metrics
+        let growth = focused ? M.focusGrowth : 0
+        pill.frame = bounds.insetBy(dx: -growth, dy: -growth)
+        pill.layer.cornerRadius = M.rowRadius + growth
+        pill.layer.shadowPath = UIBezierPath(roundedRect: pill.bounds, cornerRadius: pill.layer.cornerRadius).cgPath
+        pill.backgroundColor = focused ? .white : .clear
+        pill.layer.shadowOpacity = focused ? 0.3 : 0
+        content.transform = focused ? CGAffineTransform(scaleX: M.focusScale, y: M.focusScale) : .identity
+        titleLabel.textColor = focused ? .black : .white
+        valueLabel.textColor = focused ? UIColor.black.withAlphaComponent(0.6) : M.secondaryColor
+    }
+
+    private func step(_ direction: Int) {
+        config.onStep(direction)
+        valueLabel.text = config.value()
+        onStep?()
+    }
+
+    func refreshValue() {
+        valueLabel.text = config.value()
     }
 }
 

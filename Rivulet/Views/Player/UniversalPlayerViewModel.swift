@@ -392,7 +392,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private var audioSyncDebounceTimer: Timer?
     private var audioSyncApplyingTimer: Timer?
     /// Time to let a burst of presses settle before telling the engine.
-    private static let audioSyncDebounceDelay: TimeInterval = 0.5
+    private static let audioSyncDebounceDelay: TimeInterval = 1.5
     /// How long the "Applying…" note stays up once a change is sent.
     private static let audioSyncApplyingNoteDuration: TimeInterval = 2.0
     /// How long the stall tracker ignores buffering after a reload: longer

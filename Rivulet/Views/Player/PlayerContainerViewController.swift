@@ -1488,6 +1488,8 @@ class PlayerContainerViewController: UIViewController {
                         // Sync: one global value, shared live with Settings'
                         // Audio Sync row (AudioSyncAdjustments). aether route
                         // only — AVPlayer (hls) has no audio-delay hook.
+                        // usesArrowKeys: Left/Right step it directly while
+                        // this row is focused, instead of separate -/+ buttons.
                         CardStepperConfig(
                             title: "Sync",
                             value: { [weak vm] in
@@ -1495,7 +1497,8 @@ class PlayerContainerViewController: UIViewController {
                                 return vm.isApplyingAudioSync
                                     ? "Applying…" : AudioSyncAdjustments.formatted(vm.audioSyncOffsetMs)
                             },
-                            onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) }),
+                            onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) },
+                            usesArrowKeys: true),
                     ],
                     onSelect: { [weak vm, weak self] id in
                         if let id { vm?.selectAudioTrack(id: id) }
