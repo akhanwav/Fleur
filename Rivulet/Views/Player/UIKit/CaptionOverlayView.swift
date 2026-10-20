@@ -158,7 +158,9 @@ final class CaptionOverlayView: UIView {
         static let sizeLadder: [(reported: CGFloat, fraction: CGFloat)] = [
             (0.35, 0.0172),
             (0.60, 0.0287),
-            (1.00, 0.0428),
+            // Default (1.00) lowered from 0.0428: ~2pt smaller at a 1080p
+            // presentation height (46.2pt -> 44.2pt).
+            (1.00, 0.0409),
             (1.50, 0.0722),
             (2.00, 0.0964)
         ]
