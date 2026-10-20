@@ -1447,7 +1447,15 @@ class PlayerContainerViewController: UIViewController {
                                     ? "Applying…" : AudioSyncAdjustments.formatted(vm.audioSyncOffsetMs)
                             },
                             onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) },
-                            usesArrowKeys: true),
+                            usesArrowKeys: true,
+                            // Refreshes the row exactly when the debounced
+                            // apply lands or clears "Applying…" — not just
+                            // on this row's own press (also covers "Reset
+                            // to 0 ms", a different control in this panel).
+                            changePublisher: Publishers.Merge(
+                                vm.$audioSyncOffsetMs.map { _ in () },
+                                vm.$isApplyingAudioSync.map { _ in () }
+                            ).eraseToAnyPublisher()),
                     ],
                     onSelect: { [weak vm, weak self] id in
                         if let id { vm?.selectAudioTrack(id: id) }

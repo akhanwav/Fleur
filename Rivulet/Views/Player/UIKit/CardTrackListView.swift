@@ -2,6 +2,7 @@
 // Copyright (C) 2025-2026 Bain Gurley
 
 import UIKit
+import Combine
 
 // MARK: - CardTrackListView
 
@@ -65,12 +66,14 @@ final class CardTrackListView: UIView {
     private weak var lastFocusedControl: UIView?
 
     private var stepperRefreshTimer: Timer?
-    /// Long enough to span a debounced change elsewhere in this panel:
-    /// presses (or an action, e.g. Audio Sync's "Reset to Default") settle,
-    /// then a stepper's value transitions again on its own with nothing left
-    /// to trigger a label update.
+    /// Fallback only, for a stepper with no `changePublisher`: long enough to
+    /// span a debounced change elsewhere in this panel (a press, or an
+    /// action like Audio Sync's "Reset to 0 ms", settling). A stepper that
+    /// DOES supply a `changePublisher` is refreshed precisely instead (see
+    /// `setupViews`) and doesn't depend on this window being long enough.
     private static let stepperRefreshWindow: TimeInterval = 3.0
     private static let stepperRefreshInterval: TimeInterval = 0.15
+    private var cancellables = Set<AnyCancellable>()
 
     convenience init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool,
                      actions: [CardActionConfig] = [],
@@ -206,6 +209,16 @@ final class CardTrackListView: UIView {
                 ? CardArrowStepperRowView(config: config)
                 : CardStepperRowView(config: config)
             row.onStep = { [weak self] in self?.scheduleStepperRefresh() }
+            // A stepper whose value can change on its own after a press
+            // lands (Audio Sync's debounced apply) supplies a publisher so
+            // this refreshes exactly when that happens, rather than relying
+            // on `scheduleStepperRefresh`'s fixed window being long enough.
+            if let changePublisher = config.changePublisher {
+                changePublisher
+                    .receive(on: DispatchQueue.main)
+                    .sink { [weak row] in row?.refreshValue() }
+                    .store(in: &cancellables)
+            }
             stack.addArrangedSubview(row)
             stepperRows.append(row)
         }
@@ -312,6 +325,13 @@ struct CardStepperConfig {
     /// buttons — used where a dedicated row earns it (Audio Sync). Defaults
     /// to false: Height/Delay keep the two-button form.
     var usesArrowKeys: Bool = false
+    /// Fires whenever `value()` might have changed WITHOUT a press on this
+    /// row — a debounced apply landing (Audio Sync), or another control in
+    /// the same panel changing it (its "Reset to 0 ms" action). Lets the row
+    /// refresh exactly when that happens instead of guessing how long to
+    /// keep polling. Optional: a stepper whose value only ever changes on
+    /// its own press (Height, Delay) can leave this nil.
+    var changePublisher: AnyPublisher<Void, Never>? = nil
 }
 
 /// Shared by both stepper row kinds, so `CardTrackListView` can hold either

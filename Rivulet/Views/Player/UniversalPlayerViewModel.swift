@@ -343,17 +343,30 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// here so the Audio panel can show and step it live. aether route only.
     @Published private(set) var audioSyncOffsetMs: Int = 0
 
-    /// True for a couple of seconds right when a debounced change actually
-    /// reaches the engine — the Audio panel shows "Applying…" in place of the
-    /// value so the reload (a full source reopen on the loopback route, not
-    /// a lightweight re-anchor) doesn't read as a frozen video.
+    /// True from right when a debounced change reaches the engine until the
+    /// reload it causes actually finishes — the Audio panel shows "Applying…"
+    /// in place of the value so the reload (a full source reopen on the
+    /// loopback route, not a lightweight re-anchor) doesn't read as a frozen
+    /// video. Cleared by `updatePlaybackState` observing the reload's own
+    /// buffering come back to a settled state (see `audioSyncReloadObserved`);
+    /// `audioSyncApplyingTimer` is only a fallback for a reload that never
+    /// visibly buffers (already fast, e.g. on a local server).
     @Published private(set) var isApplyingAudioSync = false
 
     private var audioSyncDebounceTimer: Timer?
     private var audioSyncApplyingTimer: Timer?
+    /// True once a `.loading`/`.buffering` state has been seen WHILE
+    /// `isApplyingAudioSync` is true — i.e. this particular reload has
+    /// actually started disrupting playback, not just been requested. Only
+    /// then does a later settled state count as that SAME reload finishing;
+    /// without this gate, a settled state already true at the moment
+    /// `setAudioDelay` was called (before any buffering appears) would clear
+    /// the flag immediately, before the reload it's meant to cover even began.
+    private var audioSyncReloadObserved = false
     /// Time to let a burst of presses settle before telling the engine.
     private static let audioSyncDebounceDelay: TimeInterval = 1.5
-    /// How long the "Applying…" note stays up once a change is sent.
+    /// Fallback only: clears "Applying…" if no buffering excursion is ever
+    /// observed (the reload finished too fast to show one).
     private static let audioSyncApplyingNoteDuration: TimeInterval = 2.0
     /// How long the stall tracker ignores buffering after a reload: longer
     /// than a seek's grace (`StallTracker.grace`) and past `StallTracker.
@@ -400,10 +413,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     /// Fires once presses have settled: tells the engine, and shows
-    /// "Applying…" for a beat since this is the expensive part.
+    /// "Applying…" until `updatePlaybackState` sees the reload actually
+    /// finish (or, failing that, the fallback timer below).
     private func applyAudioSyncNow() {
         guard let ap = aetherPlayer else { return }
         isApplyingAudioSync = true
+        audioSyncReloadObserved = false
         // Must be told BEFORE setAudioDelay, not after: the reload's own
         // buffering can start within the same runloop turn.
         stallTracker.noteExpectedPause(at: Date(), quietFor: Self.audioSyncReloadGrace)
@@ -413,10 +428,29 @@ final class UniversalPlayerViewModel: ObservableObject {
         let timer = Timer(timeInterval: Self.audioSyncApplyingNoteDuration, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.isApplyingAudioSync = false
+                self?.audioSyncReloadObserved = false
             }
         }
         RunLoop.main.add(timer, forMode: .common)
         audioSyncApplyingTimer = timer
+    }
+
+    /// Called from `updatePlaybackState` on every transition. Only a settled
+    /// state (playing/paused) AFTER this specific reload has shown itself as
+    /// buffering counts as that reload finishing — a settled state that was
+    /// already true the instant `setAudioDelay` was called (before any
+    /// buffering appears) must not clear the flag before the reload it's
+    /// meant to cover has even begun.
+    private func trackAudioSyncReloadCompletion(_ state: UniversalPlaybackState) {
+        guard isApplyingAudioSync else { return }
+        if state == .loading || state == .buffering {
+            audioSyncReloadObserved = true
+        } else if audioSyncReloadObserved, state == .playing || state == .paused {
+            audioSyncApplyingTimer?.invalidate()
+            audioSyncApplyingTimer = nil
+            isApplyingAudioSync = false
+            audioSyncReloadObserved = false
+        }
     }
 
     /// Loads the global offset BEFORE the engine load, so
@@ -1519,6 +1553,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func updatePlaybackState(_ state: UniversalPlaybackState) {
         recordStallTransition(from: playbackState, to: state)
         trackQualityStall(from: playbackState, to: state)
+        trackAudioSyncReloadCompletion(state)
         playbackState = state
         isBuffering = state == .buffering
 
