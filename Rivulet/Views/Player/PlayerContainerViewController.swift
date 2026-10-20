@@ -897,7 +897,7 @@ class PlayerContainerViewController: UIViewController {
     private func endContentPress(_ type: UIPress.PressType) {
         if type == .select, contentSelectPending {
             contentSelectPending = false
-            toggleControlsFromContent()
+            inputCoordinator.handle(action: .playPause, source: .irPress)
             return
         }
         if type == contentDirectionalPressType {
@@ -911,20 +911,6 @@ class PlayerContainerViewController: UIViewController {
         if type == contentDirectionalPressType {
             contentDirectionalPressType = nil
             contentPressDetector.cancel()
-        }
-    }
-
-    /// Select with nothing else focused shows or hides the controls. It never
-    /// toggles playback (that is the play/pause button, and Select on the
-    /// focused scrubber).
-    private func toggleControlsFromContent() {
-        guard let vm = viewModel, !vm.playbackState.isFailed else { return }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            if vm.showControls {
-                vm.showControls = false
-            } else {
-                vm.showControlsTemporarily()
-            }
         }
     }
 
