@@ -108,7 +108,7 @@ enum SubtitleAdjustments {
     /// the black bar, and so the placement holds at any presentation size.
     /// Tuned against AVPlayer's own placement (a two-line caption centres at
     /// roughly 8% of picture height); lowered here by about one caption line.
-    static let bottomMarginFraction: CGFloat = 0.03
+    static let bottomMarginFraction: CGFloat = 0.02
 
     /// The lowest a caption may sit while the rail is showing. Lives here
     /// because BOTH overlays need it and they must agree: captions should not

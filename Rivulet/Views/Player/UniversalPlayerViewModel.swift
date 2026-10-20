@@ -3991,7 +3991,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         withAnimation(.easeOut(duration: 0.15)) {
             seekIndicator = indicator
         }
-        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+        seekIndicatorTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
                 withAnimation(.easeOut(duration: 0.25)) {
                     self?.seekIndicator = nil

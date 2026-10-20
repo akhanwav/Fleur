@@ -1247,6 +1247,17 @@ class PlayerContainerViewController: UIViewController {
             }
             .store(in: &cancellables)
 
+        // A skip with the chrome hidden also flashes the progress bar itself
+        // (playhead + elapsed time), same as ambient pause's read-only
+        // indicator and for the same reason: it must not touch showControls/
+        // railVisible (raising the rail on every skip breaks Left/Right, see
+        // the comment on the .seekRelative case). Rides seekIndicator's
+        // existing show/clear lifecycle rather than its own timer.
+        vm.$seekIndicator
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.applyChromeVisibility() }
+            .store(in: &cancellables)
+
         // Caption inputs. The overlay measures against the picture, so a new
         // aspect ratio has to reach it; the height stepper is per-title and can
         // change mid-playback.
@@ -2002,7 +2013,7 @@ class PlayerContainerViewController: UIViewController {
         // Ambient pause keeps the scrubber (and its bottom scrim) up as a
         // read-only position indicator even though the rail fades. Not shown
         // while loading — there is no meaningful position yet.
-        let scrubberVisible = chromeVisible || (ambient && !isLoading)
+        let scrubberVisible = chromeVisible || (ambient && !isLoading) || vm.seekIndicator != nil
         // For a show, the episode title stays put in the rail during ambient
         // (same place, same size) while the rest of the rail empties out. The
         // rail view itself is held at alpha 1 so that held title shows; the
