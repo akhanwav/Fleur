@@ -3719,8 +3719,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                         // Transcode not started yet
                         diagnostics.recordPreflightAttempt(attempt, outcome: "HTTP \(httpResponse.statusCode) (transcode not started)")
                     } else {
-                        print("🎬 [HLSPreflight] Unexpected status \(httpResponse.statusCode)")
-                        diagnostics.recordPreflightAttempt(attempt, outcome: "HTTP \(httpResponse.statusCode) (unexpected)")
+                        let body = String(data: data.prefix(500), encoding: .utf8) ?? "<\(data.count) non-UTF8 bytes>"
+                        print("🎬 [HLSPreflight] Unexpected status \(httpResponse.statusCode): \(body)")
+                        diagnostics.recordPreflightAttempt(
+                            attempt, outcome: "HTTP \(httpResponse.statusCode) (unexpected): \(body)")
                     }
                 }
             } catch {

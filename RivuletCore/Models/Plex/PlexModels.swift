@@ -27,18 +27,30 @@ enum PlexAPI: Sendable {
     static var deviceName = "Apple TV"
     static var platform = "tvOS"
 
-    /// Per-install UUID generated on first launch and persisted in UserDefaults.
-    /// Plex uses this to distinguish devices in its Dashboard, attribute transcode
-    /// sessions, and route /player control messages — sharing one identifier across
-    /// devices causes Dashboard merges and cross-device transcode session collisions.
+    /// Per-install UUID generated on first launch and persisted in the
+    /// Keychain, which (unlike UserDefaults) survives a reinstall. Plex uses
+    /// this to distinguish devices in its Dashboard, attribute transcode
+    /// sessions, and route /player control messages — sharing one identifier
+    /// across devices causes Dashboard merges and cross-device transcode
+    /// session collisions, and so does regenerating one on every reinstall,
+    /// which mints a new "device" each time and fragments that history.
+    ///
+    /// A value from before this moved to the Keychain is adopted once (from
+    /// UserDefaults) rather than discarded, so an existing install keeps its
+    /// identifier instead of appearing as a brand new device.
     static let clientIdentifier: String = {
         let key = "plexClientIdentifier"
-        let defaults = UserDefaults.standard
-        if let stored = defaults.string(forKey: key), !stored.isEmpty {
+        if let stored = KeychainHelper.get(key), !stored.isEmpty {
             return stored
         }
+        let defaults = UserDefaults.standard
+        if let legacy = defaults.string(forKey: key), !legacy.isEmpty {
+            KeychainHelper.set(legacy, forKey: key)
+            defaults.removeObject(forKey: key)
+            return legacy
+        }
         let generated = UUID().uuidString
-        defaults.set(generated, forKey: key)
+        KeychainHelper.set(generated, forKey: key)
         return generated
     }()
 }

@@ -1896,9 +1896,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             request.addValue(value, forHTTPHeaderField: key)
         }
         do {
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
             if let status = (response as? HTTPURLResponse)?.statusCode, status != 200 {
-                print("[Plex] Transcode decision returned HTTP \(status)")
+                let body = String(data: data.prefix(500), encoding: .utf8) ?? "<\(data.count) non-UTF8 bytes>"
+                print("[Plex] Transcode decision returned HTTP \(status): \(body)")
             }
         } catch {
             print("[Plex] Decision request failed: \(error.localizedDescription)")
