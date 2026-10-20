@@ -176,7 +176,7 @@ enum SettingsDescriptorStore {
         ),
         "audioSyncOffset": SettingDescriptor(
             icon: "waveform",
-            description: "A fixed audio delay applied to every title, for a soundbar or AVR's own processing lag. Adjust per title from the player's Audio menu on top of this."
+            description: "A fixed audio delay applied to every title, for a soundbar or AVR's own processing lag. Also adjustable live from the player's Audio menu — both show the same value."
         ),
         "showPostVideoUpNext": SettingDescriptor(
             icon: "rectangle.stack",

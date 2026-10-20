@@ -1299,8 +1299,7 @@ final class AetherPlayer: PlayerProtocol {
 
     /// The audio/video sync offset the engine is currently applying, in
     /// seconds; positive = audio plays later. See `AudioSyncAdjustments` for
-    /// the host-side global-default + per-title layering that produces the
-    /// value passed to `setAudioDelay(_:)`.
+    /// the host-side global value passed to `setAudioDelay(_:)`.
     var audioDelaySeconds: Double { engine.audioDelaySeconds }
 
     /// Live-adjusts the audio delay. No host-driven reload needed — the

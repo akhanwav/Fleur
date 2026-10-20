@@ -1476,17 +1476,17 @@ class PlayerContainerViewController: UIViewController {
                     header: "Audio", tracks: vm.audioTracks,
                     selectedTrackId: vm.currentAudioTrackId, showsOffRow: false,
                     actions: vm.aetherPlayer == nil ? [] : [
-                        // Clears this title's own Sync value back to
-                        // Settings' global default; stays open so the
-                        // stepper below is seen jumping to it.
-                        CardActionConfig(title: "Reset to Default") { [weak vm] _ in
-                            vm?.resetAudioSyncToDefault()
+                        // Zeroes the global Sync value (same one Settings
+                        // shows); stays open so the stepper below is seen
+                        // jumping to it.
+                        CardActionConfig(title: "Reset to 0 ms") { [weak vm] _ in
+                            vm?.resetAudioSyncToZero()
                         },
                     ],
                     toggles: SystemAudioAdjustment.menuToggles,
                     steppers: vm.aetherPlayer == nil ? [] : [
-                        // Sync: sticky per title, added on top of Settings'
-                        // global default (AudioSyncAdjustments). aether route
+                        // Sync: one global value, shared live with Settings'
+                        // Audio Sync row (AudioSyncAdjustments). aether route
                         // only — AVPlayer (hls) has no audio-delay hook.
                         CardStepperConfig(
                             title: "Sync",

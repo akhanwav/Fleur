@@ -5,10 +5,11 @@
 //  AudioSyncOffsetViewController.swift
 //  Rivulet
 //
-//  Settings' global Audio Sync default. Same glass-card shell as
+//  Settings' Audio Sync offset. Same glass-card shell as
 //  TextEntryViewController, holding one CardStepperRowView — the exact
-//  control the player's own Audio panel uses for its per-title delta — bound
-//  here to AudioSyncAdjustments.globalDefaultMs instead.
+//  control the player's own Audio panel uses — bound here to the same
+//  AudioSyncAdjustments.globalDefaultMs, so either place shows live changes
+//  made in the other.
 //
 
 import UIKit
@@ -57,7 +58,7 @@ final class AudioSyncOffsetViewController: UIViewController {
         titleLabel.textAlignment = .center
 
         let hintLabel = UILabel()
-        hintLabel.text = "Applied to every title, on top of any per-title adjustment made from the player's Audio menu."
+        hintLabel.text = "Applies to every title. Also adjustable live from the player's Audio menu — both show the same value."
         hintLabel.font = .systemFont(ofSize: 24, weight: .regular)
         hintLabel.textColor = UIColor.white.withAlphaComponent(0.45)
         hintLabel.textAlignment = .center

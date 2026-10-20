@@ -376,12 +376,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         subtitleHeightUnits = SubtitleAdjustments.heightUnits(forMediaKey: subtitleMediaKey)
     }
 
-    // MARK: - Audio sync (OSD stepper, sticky per item, absolute per title)
+    // MARK: - Audio sync (OSD stepper, one global value shared with Settings)
 
-    /// This item's EFFECTIVE audio sync offset in ms: its own stored
-    /// absolute value, or the Settings global default when it has never
-    /// been adjusted. Published so the Audio panel re-renders on a step.
-    /// aether route only (see `AudioSyncAdjustments`).
+    /// The audio sync offset in ms, applied to every title — the same value
+    /// Settings → Playback reads and writes (`AudioSyncAdjustments`), mirrored
+    /// here so the Audio panel can show and step it live. aether route only.
     @Published private(set) var audioSyncOffsetMs: Int = 0
 
     /// True for a couple of seconds right when a debounced change actually
@@ -405,32 +404,27 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// tracker wasn't told to expect it).
     private static let audioSyncReloadGrace: TimeInterval = 12
 
-    /// Steps this title's own ABSOLUTE offset — starting from whatever is
-    /// currently in force (its own prior value, or the global default if
-    /// never touched) — and persists it and updates the DISPLAYED value
-    /// immediately, so every press feels responsive. The engine call is
-    /// debounced: on the loopback route (Rivulet's default for direct play)
-    /// `setAudioDelay` is a full source reopen, not an in-place correction,
-    /// so applying every press live let a burst of presses queue overlapping
-    /// reloads and break playback. Guarded on `aetherPlayer` here too (not
-    /// just in the panel that hides this stepper on the hls route): a held
-    /// button's closure can't observe a mid-hold route change.
+    /// Steps the GLOBAL offset — the same value Settings shows — and updates
+    /// the DISPLAYED value immediately, so every press feels responsive. The
+    /// engine call is debounced: on the loopback route (Rivulet's default for
+    /// direct play) `setAudioDelay` is a full source reopen, not an in-place
+    /// correction, so applying every press live let a burst of presses queue
+    /// overlapping reloads and break playback. Guarded on `aetherPlayer` here
+    /// too (not just in the panel that hides this stepper on the hls route):
+    /// a held button's closure can't observe a mid-hold route change.
     func adjustAudioSync(bySteps steps: Int) {
         guard aetherPlayer != nil else { return }
-        let newValue = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
-            + steps * AudioSyncAdjustments.stepMs
-        AudioSyncAdjustments.setStoredMs(newValue, forMediaKey: subtitleMediaKey)
-        audioSyncOffsetMs = newValue
+        AudioSyncAdjustments.setGlobalDefaultMs(AudioSyncAdjustments.globalDefaultMs + steps * AudioSyncAdjustments.stepMs)
+        audioSyncOffsetMs = AudioSyncAdjustments.globalDefaultMs
         scheduleDebouncedAudioSyncApply()
     }
 
-    /// Clears this title's own override; it goes back to tracking Settings'
-    /// global default live, including any later change to it. A no-op when
-    /// the title has no override, so it can't trigger a pointless reload.
-    func resetAudioSyncToDefault() {
-        guard aetherPlayer != nil, AudioSyncAdjustments.storedMs(forMediaKey: subtitleMediaKey) != nil else { return }
-        AudioSyncAdjustments.resetToDefault(forMediaKey: subtitleMediaKey)
-        audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+    /// Zeroes the global offset. A no-op when it's already 0, so it can't
+    /// trigger a pointless reload.
+    func resetAudioSyncToZero() {
+        guard aetherPlayer != nil, AudioSyncAdjustments.globalDefaultMs != 0 else { return }
+        AudioSyncAdjustments.setGlobalDefaultMs(0)
+        audioSyncOffsetMs = 0
         scheduleDebouncedAudioSyncApply()
     }
 
@@ -465,13 +459,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         audioSyncApplyingTimer = timer
     }
 
-    /// Loads this item's effective offset BEFORE the engine load, so
+    /// Loads the global offset BEFORE the engine load, so
     /// `runAetherLoadWithDeadline` can start the engine with it already set
     /// (free — no reload cost) instead of correcting it with a live
     /// `setAudioDelay` call right after. Called on every playback setup,
     /// including next-episode swaps, same as `loadStoredSubtitleDelay`.
     private func loadStoredAudioSync() {
-        audioSyncOffsetMs = AudioSyncAdjustments.effectiveMs(forMediaKey: subtitleMediaKey)
+        audioSyncOffsetMs = AudioSyncAdjustments.globalDefaultMs
     }
 
     // MARK: - Metadata
@@ -1134,7 +1128,7 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Sticky per-item subtitle delay (OSD stepper).
         loadStoredSubtitleDelay()
-        // Sticky per-item audio sync offset (global default + per-title delta).
+        // Global audio sync offset, shared with Settings.
         loadStoredAudioSync()
 
         // A provider item plays the stream its provider resolved. Returns
