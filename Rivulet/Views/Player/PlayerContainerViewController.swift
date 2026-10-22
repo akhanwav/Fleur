@@ -1724,14 +1724,18 @@ class PlayerContainerViewController: UIViewController {
             value: { [weak vm] in SubtitleAdjustments.formattedDelay(vm?.subtitleDelaySeconds ?? 0) },
             onStep: { [weak vm] step in vm?.adjustSubtitleDelay(bySteps: step) },
             usesArrowKeys: true))
-        // Last row: Down here has nowhere else to go, so it dismisses the
-        // panel instead of dead-ending.
         steppers.append(CardStepperConfig(
             title: "Subtitle Position",
             value: { [weak vm] in SubtitleAdjustments.formattedHeight(vm?.subtitleHeightUnits ?? 0) },
             onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) },
-            usesArrowKeys: true,
-            onDownAtEnd: { [weak self] in self?.dismissTopPanel() }))
+            usesArrowKeys: true))
+        // First row: Up here has nowhere else to go, so it closes the panel
+        // (it slides back up, mirroring how it opened). Down past the last
+        // row does nothing instead — no onDownAtEnd set anywhere above.
+        if var first = steppers.first {
+            first.onUpAtStart = { [weak self] in self?.dismissTopPanel() }
+            steppers[0] = first
+        }
         return steppers
     }
 

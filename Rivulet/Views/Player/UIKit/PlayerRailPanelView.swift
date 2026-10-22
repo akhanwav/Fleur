@@ -212,8 +212,10 @@ final class PlayerRailPanelView: UIView {
     /// Docked to the top edge, independent of the bottom rail (can be shown
     /// while it's hidden): the player's Infuse-style quick-adjust panel.
     /// Slides down from off-screen instead of growing from a button; Menu
-    /// dismisses it like any other panel (`pressesBegan` below), and Down
-    /// past its last row is the content's own job (`CardStepperConfig.onDownAtEnd`).
+    /// dismisses it like any other panel (`pressesBegan` below), and so does
+    /// Up past the first row — it slides back up, mirroring how it opened —
+    /// while Down past the last row does nothing (the content's own job,
+    /// `CardStepperConfig.onUpAtStart` / `onDownAtEnd`).
     @discardableResult
     static func presentTop(content: UIView, width: CGFloat, in container: UIView) -> PlayerRailPanelView {
         let panel = PlayerRailPanelView(content: content)
@@ -229,12 +231,7 @@ final class PlayerRailPanelView: UIView {
 
         panel.transform = panel.topOffscreenTransform
         content.alpha = 0
-        let motion = UIViewPropertyAnimator(duration: Metrics.springDuration, timingParameters: Metrics.spring)
-        motion.addAnimations { panel.transform = .identity }
-        motion.startAnimation()
-        let fade = UIViewPropertyAnimator(duration: Metrics.contentFade, timingParameters: Metrics.contentFadeCurve)
-        fade.addAnimations { content.alpha = 1 }
-        fade.startAnimation()
+        panel.animate(toTransform: .identity, contentAlpha: 1, completion: nil)
 
         container.setNeedsFocusUpdate()
         container.updateFocusIfNeeded()
@@ -413,13 +410,13 @@ final class PlayerRailPanelView: UIView {
             motion.addCompletion { [weak self] _ in self?.removeFromSuperview() }
             motion.startAnimation()
         } else if isTopPanel {
-            let motion = UIViewPropertyAnimator(duration: Metrics.springDuration, timingParameters: Metrics.spring)
-            motion.addAnimations { self.transform = self.topOffscreenTransform }
-            motion.addCompletion { [weak self] _ in self?.removeFromSuperview() }
-            motion.startAnimation()
-            let fade = UIViewPropertyAnimator(duration: Metrics.contentFade, timingParameters: Metrics.contentFadeCurve)
-            fade.addAnimations { self.content.alpha = 0 }
-            fade.startAnimation()
+            // clearsGlass: true is load-bearing here, not just cosmetic
+            // symmetry with the popup branch below — without it the glass
+            // effect and wash don't fade with the rest, and linger on
+            // screen well past the transform/removeFromSuperview.
+            animate(toTransform: topOffscreenTransform, contentAlpha: 0, clearsGlass: true) { [weak self] in
+                self?.removeFromSuperview()
+            }
         } else {
             animate(toTransform: collapsedTransform, contentAlpha: 0, clearsGlass: true) { [weak self] in
                 self?.removeFromSuperview()
