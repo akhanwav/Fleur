@@ -174,7 +174,7 @@ class PlayerContainerViewController: UIViewController {
         if let vm = viewModel {
             let overlay = CaptionOverlayView(
                 model: vm.aetherSubtitleModel,
-                style: CaptionAppearance.current(),
+                style: SubtitleStylePreset.effectiveStyle,
                 videoSize: vm.videoSize,
                 heightUnits: vm.subtitleHeightUnits
             )
@@ -1269,7 +1269,7 @@ class PlayerContainerViewController: UIViewController {
         NotificationCenter.default
             .publisher(for: CaptionAppearance.changedNotification)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.captionOverlay?.style = CaptionAppearance.current() }
+            .sink { [weak self] _ in self?.captionOverlay?.style = SubtitleStylePreset.effectiveStyle }
             .store(in: &cancellables)
 
         vm.$playbackState
@@ -1440,6 +1440,15 @@ class PlayerContainerViewController: UIViewController {
                             },
                             onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) }),
                     ],
+                    styleOptions: SubtitleStylePreset.allCases.map { preset in
+                        CardStyleOptionConfig(
+                            title: preset.title,
+                            isSelected: { SubtitleStylePreset.selected == preset },
+                            onFocus: { [weak self] in
+                                SubtitleStylePreset.selected = preset
+                                self?.captionOverlay?.style = SubtitleStylePreset.effectiveStyle
+                            })
+                    },
                     onSelect: { [weak vm, weak self] id in
                         vm?.selectSubtitleTrack(id: id)
                         self?.activeRailPanel?.dismissPanel()

@@ -158,9 +158,11 @@ final class CaptionOverlayView: UIView {
         static let sizeLadder: [(reported: CGFloat, fraction: CGFloat)] = [
             (0.35, 0.0172),
             (0.60, 0.0287),
-            // Default (1.00) lowered from 0.0428: ~2pt smaller at a 1080p
-            // presentation height (46.2pt -> 44.2pt).
-            (1.00, 0.0409),
+            // Default (1.00): two successive ~2pt-at-1080p reductions from
+            // the original 0.0428 (46.2pt) -> 0.0409 (44.2pt) -> 0.0390
+            // (42.1pt). Bottom position is unaffected either time: the
+            // caption box is anchored by its bottom edge and grows upward.
+            (1.00, 0.0390),
             (1.50, 0.0722),
             (2.00, 0.0964)
         ]

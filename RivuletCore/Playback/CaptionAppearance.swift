@@ -220,3 +220,92 @@ enum CaptionAppearance {
         kMACaptionAppearanceSettingsChangedNotification as String
     )
 }
+
+// MARK: - SubtitleStylePreset
+
+/// An app-local caption style, picked from the player's Subtitles panel
+/// instead of tvOS Settings > Accessibility > Subtitles & Captioning >
+/// Style. These are hand-picked approximations of that screen's built-in
+/// named presets, NOT Apple's own values: MediaAccessibility only exposes
+/// the CURRENTLY ACTIVE, already-resolved attributes (everything `current()`
+/// above reads), with no API to list preset names or a user's own saved
+/// custom styles. `.useSystemSetting` is what Rivulet has always done, stays
+/// the default, and is the only way to see a custom system style reflected.
+enum SubtitleStylePreset: String, CaseIterable {
+    case useSystemSetting
+    case defaultStyle
+    case largeText
+    case transparentBackground
+    case classic
+
+    var title: String {
+        switch self {
+        case .useSystemSetting: return "Use System Setting"
+        case .defaultStyle: return "Default"
+        case .largeText: return "Large Text"
+        case .transparentBackground: return "Transparent Background"
+        case .classic: return "Classic"
+        }
+    }
+
+    /// `nil` for `.useSystemSetting` — the caller reads `CaptionAppearance.current()` instead.
+    /// Every other case ignores the content's own styling (`allowsContent* = false`): picking
+    /// an explicit preset here is the user overriding it on purpose, same as forcing a color
+    /// in system Settings does.
+    var captionStyle: CaptionStyle? {
+        switch self {
+        case .useSystemSetting:
+            return nil
+        case .defaultStyle:
+            return CaptionStyle(
+                foreground: .white, allowsContentColor: false, foregroundOpacity: 1.0,
+                backgroundColor: .black, backgroundOpacity: 0.75,
+                fontScale: 1.0, allowsContentFontSize: false,
+                fontDescriptor: nil, allowsContentFont: false, edge: .dropShadow)
+        case .largeText:
+            return CaptionStyle(
+                foreground: .white, allowsContentColor: false, foregroundOpacity: 1.0,
+                backgroundColor: .black, backgroundOpacity: 0.75,
+                fontScale: 1.5, allowsContentFontSize: false,
+                fontDescriptor: nil, allowsContentFont: false, edge: .dropShadow)
+        case .transparentBackground:
+            return CaptionStyle(
+                foreground: .white, allowsContentColor: false, foregroundOpacity: 1.0,
+                backgroundColor: .black, backgroundOpacity: 0.0,
+                fontScale: 1.0, allowsContentFontSize: false,
+                fontDescriptor: nil, allowsContentFont: false, edge: .dropShadow)
+        case .classic:
+            return CaptionStyle(
+                foreground: .white, allowsContentColor: false, foregroundOpacity: 1.0,
+                backgroundColor: .black, backgroundOpacity: 1.0,
+                fontScale: 1.0, allowsContentFontSize: false,
+                fontDescriptor: nil, allowsContentFont: false, edge: .none)
+        }
+    }
+
+    private static let defaultsKey = "subtitleStylePreset"
+
+    /// The persisted app-local choice. `.useSystemSetting` (the default) when
+    /// never set or when the stored value no longer matches a known case.
+    static var selected: SubtitleStylePreset {
+        get {
+            guard let raw = UserDefaults.standard.string(forKey: defaultsKey),
+                  let preset = SubtitleStylePreset(rawValue: raw) else { return .useSystemSetting }
+            return preset
+        }
+        set {
+            if newValue == .useSystemSetting {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+            }
+        }
+    }
+
+    /// The style to actually render with: the persisted preset's own value,
+    /// or the live system setting — the same value Rivulet has always read —
+    /// when `.useSystemSetting` is selected (or nothing was ever chosen).
+    static var effectiveStyle: CaptionStyle {
+        selected.captionStyle ?? CaptionAppearance.current()
+    }
+}
