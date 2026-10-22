@@ -920,6 +920,16 @@ class PlayerContainerViewController: UIViewController {
             blockDismissTemporarily()
             return
         }
+        // Same contract for the top panel — this branch is the edge case,
+        // since the normal path is PlayerRailPanelView.pressesBegan getting
+        // there first while focus is inside it.
+        if let panel = activeTopPanel, panel.window != nil {
+            if !panel.contentHandlesMenuPress() {
+                panel.dismissPanel()
+            }
+            blockDismissTemporarily()
+            return
+        }
 
         if inputCoordinator.target == nil {
             if vm.postVideoState != .hidden {
@@ -937,6 +947,10 @@ class PlayerContainerViewController: UIViewController {
                 // before this VC). This branch covers a Menu press arriving
                 // with focus OUTSIDE the panel; same content-first-refusal
                 // contract, see RailPanelMenuHandling.
+                if !panel.contentHandlesMenuPress() {
+                    panel.dismissPanel()
+                }
+            } else if let panel = activeTopPanel {
                 if !panel.contentHandlesMenuPress() {
                     panel.dismissPanel()
                 }
@@ -996,6 +1010,12 @@ class PlayerContainerViewController: UIViewController {
             && vm.postVideoState == .hidden
             && descriptionOverlay == nil
             && !focusIsOnTransportButton
+            // Otherwise a touch-remote horizontal swipe on one of its rows
+            // can be grabbed by this full-screen recognizer instead of the
+            // row's own gated swipe binding — the top panel doesn't set
+            // `controlsFocusActive` (that's reserved for the bottom rail),
+            // so `focusIsOnTransportButton` alone wouldn't catch this.
+            && activeTopPanel == nil
     }
 
     /// Focus is parked on a transport button rather than the scrubber. While
@@ -1652,15 +1672,27 @@ class PlayerContainerViewController: UIViewController {
         let content = CardTrackListView(
             header: "Quick Adjust", rows: [], steppers: topPanelSteppers(vm: vm), onSelect: { _ in })
         let panel = PlayerRailPanelView.presentTop(content: content, width: CardTrackListView.menuWidth, in: view)
+        activeTopPanel = panel
+        // Disabling the anchor (now that `anchorEnabled` accounts for
+        // `activeTopPanel`) and THEN asking for an update is what actually
+        // moves focus — a bare setNeedsFocusUpdate does nothing while the
+        // anchor is still a fully valid, currently-focused candidate. Same
+        // mechanism the bottom rail's own panels use for Up.
+        applyChromeVisibility()
         panel.onDismiss = { [weak self, weak panel] in
             guard let self, self.activeTopPanel === panel else { return }
             self.activeTopPanel = nil
+            // Re-enables the anchor; `anchorNeedsFocusUpdate` inside this
+            // call won't fire for this transition (the anchor isn't the one
+            // losing focus here, the panel's row is), so the explicit,
+            // unconditional update below is what actually sends focus back
+            // — the panel's own `shouldUpdateFocus` already refuses to keep
+            // it inside itself once `didDismiss` is set. Matches
+            // `adoptRailPanel`'s onDismiss for the bottom rail's panels.
+            self.applyChromeVisibility()
             self.setNeedsFocusUpdate()
             self.updateFocusIfNeeded()
         }
-        activeTopPanel = panel
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
     }
 
     private func dismissTopPanel() {
@@ -2087,6 +2119,11 @@ class PlayerContainerViewController: UIViewController {
             && !failed
             && !vm.controlsFocusActive
             && !vm.skipPillOwnsFocus
+            // The top panel owns focus the same way a rail panel does, but
+            // opens WITHOUT `controlsFocusActive` (that flag is tied to
+            // `showControls`, which the top panel deliberately leaves
+            // false) — so it needs its own term here.
+            && activeTopPanel == nil
         // Focus must move when the anchor gives it up, and when it comes back
         // from the error state (focus is on an error button that is about to
         // disappear). The request is made AFTER the alpha writes below, like
