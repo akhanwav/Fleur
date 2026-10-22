@@ -33,6 +33,13 @@ class PlayerContainerViewController: UIViewController {
     /// Next (Task 6). Only one can be up at a time — presenting a new
     /// one dismisses whatever's showing first.
     private var activeRailPanel: PlayerRailPanelView?
+    /// The top quick-adjust panel (Audio Sync / Subtitle Delay / Subtitle
+    /// Position). Tracked separately from `activeRailPanel`: it opens
+    /// straight from the content state without revealing the bottom rail,
+    /// so it must not trip the "rail panel needs a visible rail" plumbing
+    /// (`applyChromeVisibility`'s `!railVisible` dismiss, `presentRailPanel`'s
+    /// `rail.alpha > 0.5` guard) that the bottom rail's own panels rely on.
+    private var activeTopPanel: PlayerRailPanelView?
     private var subtitleSearchTask: Task<Void, Never>?
 
     /// Previous `railVisible`, so `applyChromeVisibility()` can spot the rail
@@ -713,6 +720,7 @@ class PlayerContainerViewController: UIViewController {
         else { return false }
         // A presented rail panel owns its own content's presses.
         if let panel = activeRailPanel, panel.window != nil { return false }
+        if let panel = activeTopPanel, panel.window != nil { return false }
         guard let focused = UIFocusSystem.focusSystem(for: view)?.focusedItem else { return true }
         // Rail buttons and the scrubber proxy: the focus engine (or the proxy's
         // own press handling) already acted on this press.
@@ -801,8 +809,10 @@ class PlayerContainerViewController: UIViewController {
     }
 
     /// Up/Down: while scrubbing, Up snaps to the next chapter in the direction
-    /// of travel and Down cancels. Otherwise they surface the controls as AVKit
-    /// does: Up lands on the first tool button, Down opens the Info pane.
+    /// of travel and Down cancels. Otherwise Up surfaces the bottom rail as
+    /// AVKit does, landing on the first tool button; Down opens the top
+    /// quick-adjust panel instead, WITHOUT revealing the bottom rail — Info
+    /// stays reachable the normal way, via the pill row once the rail is up.
     private func handleContentVertical(up: Bool) {
         guard let vm = viewModel else { return }
         if vm.isScrubbing {
@@ -813,19 +823,17 @@ class PlayerContainerViewController: UIViewController {
             }
             return
         }
-        if !vm.showControls {
-            vm.showControlsTemporarily()
-        }
-        // The chrome sink runs a pass later; the rail must be up now for the
-        // landing and the pane.
-        applyChromeVisibility()
         if up {
+            if !vm.showControls {
+                vm.showControlsTemporarily()
+            }
+            // The chrome sink runs a pass later; the rail must be up now for
+            // the landing.
+            applyChromeVisibility()
             if let tool = rail?.firstToolButton { rail?.setFocusLanding(tool) }
             vm.enterControlsFocus()
         } else {
-            if let info = rail?.infoButton { rail?.setFocusLanding(info) }
-            vm.enterControlsFocus()
-            presentPane(.info)
+            presentTopPanel()
         }
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
@@ -1629,6 +1637,70 @@ class PlayerContainerViewController: UIViewController {
             self?.setNeedsFocusUpdate()
             self?.updateFocusIfNeeded()
         }
+    }
+
+    // MARK: - Top panel (quick adjust)
+
+    /// Down from the content state: Audio Sync, Subtitle Delay, Subtitle
+    /// Position in one short list, docked to the top edge. Independent of
+    /// the bottom rail — playback keeps running and nothing else about the
+    /// chrome changes. Stays open until dismissed with Menu (handled by
+    /// `PlayerRailPanelView.pressesBegan` like any other panel) or Down past
+    /// the last row (`CardStepperConfig.onDownAtEnd`, below).
+    private func presentTopPanel() {
+        guard let vm = viewModel, activeTopPanel == nil, activeRailPanel == nil else { return }
+        let content = CardTrackListView(
+            header: "Quick Adjust", rows: [], steppers: topPanelSteppers(vm: vm), onSelect: { _ in })
+        let panel = PlayerRailPanelView.presentTop(content: content, width: CardTrackListView.menuWidth, in: view)
+        panel.onDismiss = { [weak self, weak panel] in
+            guard let self, self.activeTopPanel === panel else { return }
+            self.activeTopPanel = nil
+            self.setNeedsFocusUpdate()
+            self.updateFocusIfNeeded()
+        }
+        activeTopPanel = panel
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    private func dismissTopPanel() {
+        activeTopPanel?.dismissPanel()
+    }
+
+    /// Audio Sync only applies on the aether route (AVPlayer/hls has no
+    /// audio-delay hook) — same gating as the Audio panel's own Sync
+    /// stepper, and the SAME global value, shared live with both.
+    private func topPanelSteppers(vm: UniversalPlayerViewModel) -> [CardStepperConfig] {
+        var steppers: [CardStepperConfig] = []
+        if vm.aetherPlayer != nil {
+            steppers.append(CardStepperConfig(
+                title: "Audio Sync",
+                value: { [weak vm] in
+                    guard let vm else { return AudioSyncAdjustments.formatted(0) }
+                    return vm.isApplyingAudioSync
+                        ? "Applying…" : AudioSyncAdjustments.formatted(vm.audioSyncOffsetMs)
+                },
+                onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) },
+                usesArrowKeys: true,
+                changePublisher: Publishers.Merge(
+                    vm.$audioSyncOffsetMs.map { _ in () },
+                    vm.$isApplyingAudioSync.map { _ in () }
+                ).eraseToAnyPublisher()))
+        }
+        steppers.append(CardStepperConfig(
+            title: "Subtitle Delay",
+            value: { [weak vm] in SubtitleAdjustments.formattedDelay(vm?.subtitleDelaySeconds ?? 0) },
+            onStep: { [weak vm] step in vm?.adjustSubtitleDelay(bySteps: step) },
+            usesArrowKeys: true))
+        // Last row: Down here has nowhere else to go, so it dismisses the
+        // panel instead of dead-ending.
+        steppers.append(CardStepperConfig(
+            title: "Subtitle Position",
+            value: { [weak vm] in SubtitleAdjustments.formattedHeight(vm?.subtitleHeightUnits ?? 0) },
+            onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) },
+            usesArrowKeys: true,
+            onDownAtEnd: { [weak self] in self?.dismissTopPanel() }))
+        return steppers
     }
 
     // MARK: - Info pane

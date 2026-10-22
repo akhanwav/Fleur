@@ -104,6 +104,10 @@ final class PlayerRailPanelView: UIView {
     /// An info pane (opened from a pill below the bar) rather than a popup.
     private(set) var isPane = false
     private weak var paneRail: PlayerRailView?
+    /// The top quick-adjust panel: docked to the top edge instead of growing
+    /// from a button's corner, and slides straight up on dismiss instead of
+    /// shrinking into one.
+    private var isTopPanel = false
 
     private init(content: UIView, style: Style = .popup) {
         self.content = content
@@ -198,6 +202,39 @@ final class PlayerRailPanelView: UIView {
         panel.transform = panel.collapsedTransform
         content.alpha = 0
         panel.animate(toTransform: .identity, contentAlpha: 1, completion: nil)
+
+        container.setNeedsFocusUpdate()
+        container.updateFocusIfNeeded()
+
+        return panel
+    }
+
+    /// Docked to the top edge, independent of the bottom rail (can be shown
+    /// while it's hidden): the player's Infuse-style quick-adjust panel.
+    /// Slides down from off-screen instead of growing from a button; Menu
+    /// dismisses it like any other panel (`pressesBegan` below), and Down
+    /// past its last row is the content's own job (`CardStepperConfig.onDownAtEnd`).
+    @discardableResult
+    static func presentTop(content: UIView, width: CGFloat, in container: UIView) -> PlayerRailPanelView {
+        let panel = PlayerRailPanelView(content: content)
+        panel.isTopPanel = true
+        container.addSubview(panel)
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            panel.widthAnchor.constraint(equalToConstant: content is CardTrackListView ? CardTrackListView.menuWidth : width),
+            panel.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: Metrics.screenMargin),
+            panel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+        ])
+        container.layoutIfNeeded()
+
+        panel.transform = panel.topOffscreenTransform
+        content.alpha = 0
+        let motion = UIViewPropertyAnimator(duration: Metrics.springDuration, timingParameters: Metrics.spring)
+        motion.addAnimations { panel.transform = .identity }
+        motion.startAnimation()
+        let fade = UIViewPropertyAnimator(duration: Metrics.contentFade, timingParameters: Metrics.contentFadeCurve)
+        fade.addAnimations { content.alpha = 1 }
+        fade.startAnimation()
 
         container.setNeedsFocusUpdate()
         container.updateFocusIfNeeded()
@@ -316,6 +353,12 @@ final class PlayerRailPanelView: UIView {
         removeFromSuperview()
     }
 
+    /// Clear of the top edge entirely, so the panel starts/ends above the
+    /// safe area rather than visibly growing in place.
+    private var topOffscreenTransform: CGAffineTransform {
+        CGAffineTransform(translationX: 0, y: -(bounds.height + Metrics.screenMargin))
+    }
+
     /// Scale about the bottom-right corner, the one nearest the button.
     private var collapsedTransform: CGAffineTransform {
         let corner = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
@@ -369,6 +412,14 @@ final class PlayerRailPanelView: UIView {
             }
             motion.addCompletion { [weak self] _ in self?.removeFromSuperview() }
             motion.startAnimation()
+        } else if isTopPanel {
+            let motion = UIViewPropertyAnimator(duration: Metrics.springDuration, timingParameters: Metrics.spring)
+            motion.addAnimations { self.transform = self.topOffscreenTransform }
+            motion.addCompletion { [weak self] _ in self?.removeFromSuperview() }
+            motion.startAnimation()
+            let fade = UIViewPropertyAnimator(duration: Metrics.contentFade, timingParameters: Metrics.contentFadeCurve)
+            fade.addAnimations { self.content.alpha = 0 }
+            fade.startAnimation()
         } else {
             animate(toTransform: collapsedTransform, contentAlpha: 0, clearsGlass: true) { [weak self] in
                 self?.removeFromSuperview()

@@ -332,6 +332,13 @@ struct CardStepperConfig {
     /// keep polling. Optional: a stepper whose value only ever changes on
     /// its own press (Height, Delay) can leave this nil.
     var changePublisher: AnyPublisher<Void, Never>? = nil
+    /// Fires when Down (press or swipe) arrives on this row with nowhere to
+    /// go — only meaningful for the LAST stepper in a list that wants Down
+    /// to dismiss rather than dead-end (the player's top quick-adjust
+    /// panel). Consumed before the focus engine ever sees the press, so it
+    /// works regardless of what a container's own edge-of-list fencing
+    /// would otherwise do. Nil everywhere else.
+    var onDownAtEnd: (() -> Void)? = nil
 }
 
 /// Shared by both stepper row kinds, so `CardTrackListView` can hold either
@@ -614,13 +621,17 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
 
         swipeBinding = DirectionalInputBinding(
             gatedSwipesOn: self,
-            directions: [.left, .right],
-            shouldHandle: { [weak self] _ in self?.isFocused == true },
+            directions: [.left, .right, .down],
+            shouldHandle: { [weak self] direction in
+                guard let self, self.isFocused else { return false }
+                return direction == .down ? self.config.onDownAtEnd != nil : true
+            },
             onSwipe: { [weak self] direction in
                 switch direction {
                 case .left: self?.step(-1)
                 case .right: self?.step(1)
-                case .up, .down: break
+                case .down: self?.config.onDownAtEnd?()
+                case .up: break
                 }
             }
         )
@@ -638,8 +649,9 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
         pill.layer.shadowPath = UIBezierPath(roundedRect: pill.bounds, cornerRadius: pill.layer.cornerRadius).cgPath
     }
 
-    // Left/Right step the value directly while focused. Everything else —
-    // Up/Down to leave the row, Select, Menu — passes through untouched.
+    // Left/Right step the value directly while focused. Down dismisses only
+    // when this row opted in (the last row of the player's top quick-adjust
+    // panel); everything else — Up, Select, Menu — passes through untouched.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
         for press in presses {
             switch press.type {
@@ -648,6 +660,9 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
                 return
             case .rightArrow:
                 holdRepeater.begin { [weak self] in self?.step(1) }
+                return
+            case .downArrow where config.onDownAtEnd != nil:
+                config.onDownAtEnd?()
                 return
             default:
                 break
