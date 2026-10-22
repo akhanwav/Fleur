@@ -57,6 +57,9 @@ final class PlayerRailPanelView: UIView {
         static let padding: CGFloat = 20
         static let maxHeight: CGFloat = 560
         static let screenMargin: CGFloat = 80
+        /// The top quick-adjust panel's own gap from the safe area — closer
+        /// than `screenMargin`, which is the side-popup/pane margin.
+        static let topPanelInset: CGFloat = 32
         /// AVKit grows the platter from 10% scale on this spring, both ways.
         static let collapsedScale: CGFloat = 0.1
         static let spring = UISpringTimingParameters(mass: 1, stiffness: 200, damping: 23, initialVelocity: .zero)
@@ -224,7 +227,7 @@ final class PlayerRailPanelView: UIView {
         panel.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             panel.widthAnchor.constraint(equalToConstant: content is CardTrackListView ? CardTrackListView.menuWidth : width),
-            panel.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: Metrics.screenMargin),
+            panel.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: Metrics.topPanelInset),
             panel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
         ])
         container.layoutIfNeeded()
@@ -353,7 +356,7 @@ final class PlayerRailPanelView: UIView {
     /// Clear of the top edge entirely, so the panel starts/ends above the
     /// safe area rather than visibly growing in place.
     private var topOffscreenTransform: CGAffineTransform {
-        CGAffineTransform(translationX: 0, y: -(bounds.height + Metrics.screenMargin))
+        CGAffineTransform(translationX: 0, y: -(bounds.height + Metrics.topPanelInset))
     }
 
     /// Scale about the bottom-right corner, the one nearest the button.
