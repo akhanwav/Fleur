@@ -548,8 +548,14 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// depends on when the engine happens to publish that state.
     private var currentItemHasStarted = false
     private var controlsTimer: Timer?
+    /// During playback the bar fades fast — a swipe or press always brings it
+    /// right back, and sitting up any longer reads as sluggish chrome over a
+    /// moving picture. AVKit's own 8s (`pausedControlsHideDelay`) is still
+    /// right for a static paused frame, where there's no playback racing the
+    /// user's ability to read it.
+    private let playingControlsHideDelay: TimeInterval = 3
     /// AVKit hides its controls 8s after the last press or focus move.
-    private let controlsHideDelay: TimeInterval = 8
+    private let pausedControlsHideDelay: TimeInterval = 8
     private var scrubTimer: Timer?
     /// Holds the rail at a seek's target until the picture lands there. Fed by
     /// Aether's `seekEvents`; inert on the hls route, whose AVPlayer seek
@@ -4832,11 +4838,17 @@ final class UniversalPlayerViewModel: ObservableObject {
         // content layer (the same path Menu already takes).
         guard !isRailPanelOpen else { return }
         controlsTimer?.invalidate()
-        controlsTimer = Timer.scheduledTimer(withTimeInterval: controlsHideDelay, repeats: false) { [weak self] _ in
+        // Read fresh at arm time: every transition into `.playing` or
+        // `.paused` re-arms this timer (see `updatePlaybackState`), so the
+        // delay picked here already matches the state the chrome is
+        // actually sitting in, not a stale one from whenever the timer
+        // object was first created.
+        let delay = playbackState == .paused ? pausedControlsHideDelay : playingControlsHideDelay
+        controlsTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             guard let self else { return }
-            // Hides after the same delay whether playing OR paused — paused
-            // used to hand off to the ambient-pause presentation instead;
-            // now it just fades the chrome and leaves the live frame up.
+            // Paused used to hand off to the ambient-pause presentation
+            // instead of hiding; now it just fades the chrome and leaves the
+            // live frame up, on its own (longer) delay.
             let shouldHide = self.playbackState == .playing || self.playbackState == .paused
             Task { @MainActor [weak self] in
                 guard let self, shouldHide else { return }

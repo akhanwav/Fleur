@@ -48,8 +48,9 @@ final class PlayerRailPanelView: UIView {
     /// The top quick-adjust panel's own wash: AVKit's panels sit in a
     /// corner the content behind them rarely fills, but this one is docked
     /// top-center over whatever's playing, so `glassWash`'s light 18% reads
-    /// as barely-there over a bright scene. Near-opaque black instead.
-    static let topPanelWash = UIColor(white: 0, alpha: 0.78)
+    /// as barely-there over a bright scene. 60% black sits between that and
+    /// fully opaque — dark enough to stay readable, not a solid slab.
+    static let topPanelWash = UIColor(white: 0, alpha: 0.6)
 
     /// Height available to panel CONTENT at the panel's full size. Content that
     /// wants a constant panel (rather than one that grows and shrinks with what
@@ -62,6 +63,13 @@ final class PlayerRailPanelView: UIView {
         /// Inset for free-form content. Menus (`CardTrackListView`) fill the platter.
         static let padding: CGFloat = 20
         static let maxHeight: CGFloat = 560
+        /// The top panel's own cap, well above `maxHeight`: it is the one
+        /// style whose content (Quick Adjust's tabs) is meant to show in
+        /// full without an inner scroll, and at up to three boxed, scaled
+        /// rows a tab can now need more than a corner popup ever does. Still
+        /// a cap, not a blank check — a tab that someday needs more than
+        /// this scrolls within itself rather than growing the panel further.
+        static let topPanelMaxHeight: CGFloat = 760
         /// The side-popup/pane margin, and the top panel's own leading/trailing
         /// margin (its top gap is `topPanelInset` instead, closer than this).
         static let screenMargin: CGFloat = 80
@@ -158,7 +166,7 @@ final class PlayerRailPanelView: UIView {
         }
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(lessThanOrEqualToConstant: Metrics.maxHeight),
+            heightAnchor.constraint(lessThanOrEqualToConstant: style == .topPanel ? Metrics.topPanelMaxHeight : Metrics.maxHeight),
 
             backgroundEffectView.topAnchor.constraint(equalTo: topAnchor),
             backgroundEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
