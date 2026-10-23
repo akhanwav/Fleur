@@ -1677,7 +1677,7 @@ class PlayerContainerViewController: UIViewController {
         ])
         panelRef = content
         content.onCloseRequested = { [weak self] in self?.dismissTopPanel() }
-        let panel = PlayerRailPanelView.presentTop(content: content, width: CardTrackListView.menuWidth, in: view)
+        let panel = PlayerRailPanelView.presentTop(content: content, width: PlayerTopPanelView.width, in: view)
         activeTopPanel = panel
         // Disabling the anchor (now that `anchorEnabled` accounts for
         // `activeTopPanel`) and THEN asking for an update is what actually

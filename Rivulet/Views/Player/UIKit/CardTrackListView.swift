@@ -158,7 +158,10 @@ final class CardTrackListView: UIView {
         if let infoLine, !infoLine.isEmpty {
             let label = UILabel()
             label.text = infoLine
-            label.font = Metrics.secondaryFont
+            // Reads alone here (not as a second line under a focused row's
+            // title, where secondaryFont's 23pt is sized to stay quieter
+            // than it), so it gets the same size as a row title.
+            label.font = Metrics.titleFont
             label.textColor = Metrics.secondaryColor
             label.numberOfLines = 0
             let row = UIView()

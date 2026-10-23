@@ -71,16 +71,25 @@ final class PlayerTopPanelTabBar: UIView {
         stack.alignment = .center
         addSubview(stack)
         stack.translatesAutoresizingMaskIntoConstraints = false
+        // Below every pill's compression resistance (set below): if the row
+        // ever runs out of room, the STACK gives way, not the pills' own
+        // text — three legible pills matter more than respecting this
+        // trailing margin to the point. Mirrors `PlayerRailPanelView.present`'s
+        // own trailing constraint, same reasoning.
+        let trailing = stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor)
+        trailing.priority = .defaultLow + 250
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            trailing,
         ])
 
         for tab in PlayerTopPanelTab.allCases {
             let pill = PlayerInfoPillButton(title: tab.title)
             pill.isSelectedTab = tab == activeTab
+            pill.setContentCompressionResistancePriority(.required, for: .horizontal)
+            pill.setContentHuggingPriority(.required, for: .horizontal)
             // Up with nothing above: close the panel, same for every tab
             // (they're all in this one topmost row).
             pill.onUpAtStart = { [weak self] in self?.onCloseRequested?() }
@@ -122,6 +131,15 @@ final class PlayerTopPanelTabBar: UIView {
 /// switch, and it keeps whatever each tab's `CardTrackListView` already
 /// tracks about its own focus.
 final class PlayerTopPanelView: UIView {
+    /// Wide enough for three comfortably-sized pills ("Subtitles" being the
+    /// long one) plus real margin either side — the narrow 450pt popup/menu
+    /// width (sized for a single column of choices) left them crushed
+    /// against each other and, with the stack's own trailing constraint
+    /// required against a too-small bound, produced an unsatisfiable Auto
+    /// Layout pass whose resulting frames weren't just visually cramped but
+    /// geometrically broken enough to throw off focus navigation too.
+    static let width: CGFloat = 720
+
     private enum Metrics {
         static let tabBarTop: CGFloat = 24
         static let tabBarToContent: CGFloat = 24
@@ -144,10 +162,16 @@ final class PlayerTopPanelView: UIView {
 
         addSubview(tabBar)
         tabBar.translatesAutoresizingMaskIntoConstraints = false
+        // Same reasoning as the tab bar's own stack trailing constraint:
+        // required-vs-required against a too-small width is how the
+        // previous layout broke. At `width` above this never actually
+        // binds, but it stays a soft bound rather than a hard one.
+        let tabBarTrailing = tabBar.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.sideInset)
+        tabBarTrailing.priority = .defaultLow + 250
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.tabBarTop),
             tabBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideInset),
-            tabBar.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.sideInset),
+            tabBarTrailing,
         ])
 
         for tab in PlayerTopPanelTab.allCases {
