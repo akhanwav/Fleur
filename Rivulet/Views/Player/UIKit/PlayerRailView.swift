@@ -432,10 +432,18 @@ final class PlayerInfoPillButton: UIControl {
     /// bar). Consumed before the focus engine ever sees the press, same
     /// pattern as `CardStepperConfig.onUpAtStart`. Nil everywhere else.
     var onUpAtStart: (() -> Void)?
+    /// Left/Right (true = right) and Down, handled explicitly rather than
+    /// left to the focus engine's own directional search — the top panel's
+    /// tab bar needs this because that search was not reliably finding a
+    /// sibling pill or the content below on its own (diagnosed with
+    /// temporary logging; the engine's own `shouldUpdateFocus` never once
+    /// proposed anything but the already-focused pill). Nil everywhere else.
+    var onLeftRight: ((Bool) -> Void)?
+    var onDownAtEnd: (() -> Void)?
     private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .clear))
     private let highlight = UIView()
     private let label = UILabel()
-    private var upSwipeBinding: DirectionalInputBinding?
+    private var directionalSwipeBinding: DirectionalInputBinding?
 
     /// `compact` is the smaller pill Insights' sub-tabs use, so they read as a second level.
     init(title: String, compact: Bool = false) {
@@ -480,11 +488,25 @@ final class PlayerInfoPillButton: UIControl {
 
         // The touch-remote / iPhone-Remote twin of the press half below:
         // those arrive as indirect-touch swipes, never as arrow presses.
-        upSwipeBinding = DirectionalInputBinding(
+        directionalSwipeBinding = DirectionalInputBinding(
             gatedSwipesOn: self,
-            directions: [.up],
-            shouldHandle: { [weak self] _ in self?.isFocused == true && self?.onUpAtStart != nil },
-            onSwipe: { [weak self] _ in self?.onUpAtStart?() }
+            directions: [.up, .left, .right, .down],
+            shouldHandle: { [weak self] direction in
+                guard let self, self.isFocused else { return false }
+                switch direction {
+                case .up: return self.onUpAtStart != nil
+                case .left, .right: return self.onLeftRight != nil
+                case .down: return self.onDownAtEnd != nil
+                }
+            },
+            onSwipe: { [weak self] direction in
+                switch direction {
+                case .up: self?.onUpAtStart?()
+                case .left: self?.onLeftRight?(false)
+                case .right: self?.onLeftRight?(true)
+                case .down: self?.onDownAtEnd?()
+                }
+            }
         )
     }
 
@@ -518,6 +540,15 @@ final class PlayerInfoPillButton: UIControl {
                 return
             case .upArrow where onUpAtStart != nil:
                 onUpAtStart?()
+                return
+            case .leftArrow where onLeftRight != nil:
+                onLeftRight?(false)
+                return
+            case .rightArrow where onLeftRight != nil:
+                onLeftRight?(true)
+                return
+            case .downArrow where onDownAtEnd != nil:
+                onDownAtEnd?()
                 return
             default:
                 break

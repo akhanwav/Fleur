@@ -7,16 +7,22 @@
 //
 //  Content for the player's top quick-adjust panel
 //  (PlayerRailPanelView.presentTop): a tab bar (Video/Audio/Subtitles) over
-//  a content area that swaps per tab. Left/Right between tabs switches on
-//  FOCUS — the same way PlayerRailView's own info pills switch panes on
-//  focus, not on a separate select. Down from the tab bar enters the tab's
-//  controls (plain geometric focus — the content sits directly under the
-//  bar, nothing more is needed); Up from the first control returns to the
-//  tab bar, and Up from the tab bar closes the whole panel, both via
-//  `CardStepperConfig.onUpAtStart` / the pill's own equivalent, consumed
-//  before the focus engine ever sees the press (see CardTrackListView.swift's
-//  doc comment on `onDownAtEnd` for why that's the robust way to do this,
-//  not a focus guide).
+//  a content area that swaps per tab.
+//
+//  Every move here — Left/Right between pills, Down into the active tab's
+//  controls, Up back out to the tab bar, Up from the tab bar closing the
+//  panel — is handled EXPLICITLY in code, not left to the focus engine's
+//  own directional search. That search was diagnosed (temporary focus
+//  logging, since reverted) to never once propose a sibling pill or the
+//  content below as a candidate from inside this panel, for reasons that
+//  didn't resolve with the fixes that normally cover this ground elsewhere
+//  in the file (CardTrackListView's `onDownAtEnd`/`onUpAtStart`, a
+//  `lastFocusedPill` fix mirroring `PlayerRailView.lastFocusedButton`).
+//  Rather than a third theory about the engine's internals, every
+//  direction here now just calls `setNeedsFocusUpdate()`/`updateFocusIfNeeded()`
+//  from an environment that currently contains focus, same mechanism
+//  `focusActiveTab()`/`focusTabBar()` already used reliably for the
+//  dismiss-on-Up path.
 //
 
 import UIKit
@@ -57,6 +63,10 @@ final class PlayerTopPanelTabBar: UIView {
 
     var onTabChanged: ((PlayerTopPanelTab) -> Void)?
     var onCloseRequested: (() -> Void)?
+    /// Down on any pill: move into the active tab's content. The tab bar
+    /// doesn't know about that content (`PlayerTopPanelView` does), so this
+    /// just reports the request upward.
+    var onEnterContent: (() -> Void)?
 
     private(set) var activeTab: PlayerTopPanelTab
     private var pills: [PlayerTopPanelTab: PlayerInfoPillButton] = [:]
@@ -101,6 +111,8 @@ final class PlayerTopPanelTabBar: UIView {
             // Up with nothing above: close the panel, same for every tab
             // (they're all in this one topmost row).
             pill.onUpAtStart = { [weak self] in self?.onCloseRequested?() }
+            pill.onLeftRight = { [weak self] forward in self?.moveFocus(from: tab, forward: forward) }
+            pill.onDownAtEnd = { [weak self] in self?.onEnterContent?() }
             stack.addArrangedSubview(pill)
             pills[tab] = pill
         }
@@ -115,6 +127,19 @@ final class PlayerTopPanelTabBar: UIView {
 
     /// Returns focus here — the content's Up-at-first-row hook.
     func focusActiveTab() {
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    /// Explicit Left/Right: step to the neighboring tab (clamped, not
+    /// wrapping) and request focus directly, rather than relying on the
+    /// focus engine to find it on its own. See the file header.
+    private func moveFocus(from tab: PlayerTopPanelTab, forward: Bool) {
+        let all = PlayerTopPanelTab.allCases
+        guard let index = all.firstIndex(of: tab) else { return }
+        let nextIndex = forward ? index + 1 : index - 1
+        guard all.indices.contains(nextIndex), let nextPill = pills[all[nextIndex]] else { return }
+        lastFocusedPill = nextPill
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
     }
@@ -154,8 +179,18 @@ final class PlayerTopPanelView: UIView {
         static let sideInset: CGFloat = 35
     }
 
+    /// Which half of the panel `preferredFocusEnvironments` should hand
+    /// focus to. Needed because that choice is no longer a static "always
+    /// the tab bar" — Down on a pill (`onEnterContent`) needs it to resolve
+    /// to the active tab's content instead, explicitly.
+    private enum FocusTarget {
+        case tabBar
+        case content
+    }
+
     private let tabBar: PlayerTopPanelTabBar
     private let contentByTab: [PlayerTopPanelTab: UIView]
+    private var focusTarget: FocusTarget = .tabBar
 
     var onCloseRequested: (() -> Void)? {
         get { tabBar.onCloseRequested }
@@ -199,12 +234,32 @@ final class PlayerTopPanelView: UIView {
             guard let self else { return }
             for (t, view) in self.contentByTab { view.isHidden = t != tab }
         }
+        tabBar.onEnterContent = { [weak self] in self?.enterContent() }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var preferredFocusEnvironments: [UIFocusEnvironment] { [tabBar] }
+    override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        switch focusTarget {
+        case .tabBar: return [tabBar]
+        case .content: return contentByTab[tabBar.activeTab].map { [$0] } ?? [tabBar]
+        }
+    }
 
     /// Exposed so each tab's first control can return focus to the tab bar on Up.
-    func focusTabBar() { tabBar.focusActiveTab() }
+    func focusTabBar() {
+        focusTarget = .tabBar
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    /// Down on the tab bar: explicit move into the active tab's content,
+    /// same reasoning as `PlayerTopPanelTabBar.moveFocus` — `self` (not
+    /// `content` directly) issues the request because `self`, not the
+    /// content, is what currently contains focus.
+    private func enterContent() {
+        focusTarget = .content
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
 }
