@@ -623,30 +623,28 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// server ahead of the start it follows.
     private var providerReportTail: Task<Void, Never>?
 
-    // MARK: - Fresh-start report gate (Plex only)
+    // MARK: - Minimum-played report gate (Plex only)
     //
     // A few seconds of a quick tap-and-back-out used to be enough to put a
-    // never-watched title at the front of Continue Watching: reportFinalProgress
-    // sends "stopped" at whatever `currentTime` is the moment the player goes
-    // away, with no minimum-watched floor, and Plex itself creates/updates an
-    // On Deck entry from that alone. A session that RESUMED a real saved
-    // position is exempt — there is already a Continue Watching entry for it,
-    // and updating it immediately is correct. This does not touch
+    // title at the front of Continue Watching: reportFinalProgress sends
+    // "stopped" at whatever `currentTime` is the moment the player goes
+    // away, with no minimum-played floor, and Plex itself creates/updates an
+    // On Deck entry from that alone. Applies uniformly to every session,
+    // fresh start or resumed: a resumed session stopped under the floor
+    // reports nothing, so the saved position and Continue Watching order are
+    // left exactly as the server already had them — the accepted trade-off
+    // being that such a session's own few seconds of progress are not saved,
+    // and next time resumes from the old spot. This does not touch
     // WatchProgressPolicy, the resume prompt's own 10s floor, or Continue
-    // Watching's own display rule — only whether PLEX REPORTING fires for a
-    // from-the-start session.
+    // Watching's own display rule — only whether PLEX REPORTING fires.
 
     /// 60s of ACTUAL playback (wall clock, not counting pauses) before a
-    /// from-the-start session may report progress to Plex at all.
-    private static let freshStartReportGateSeconds: TimeInterval = 60
+    /// session may report progress to Plex at all.
+    private static let minimumPlayedSecondsBeforeReporting: TimeInterval = 60
 
-    /// Set at `init` from the original `startOffset`, and reset alongside it
-    /// at every episode transition (`playNextEpisode` always starts the next
-    /// episode from 0, regardless of that episode's own resume point —
-    /// existing behavior, untouched here), so a binge's second episode gets
-    /// its own fresh gate rather than inheriting the first episode's resumed
-    /// status.
-    private var startedFromSavedPosition = false
+    /// Reset at every episode transition (`playNextEpisode`), so a binge's
+    /// next episode earns its own 60s rather than inheriting whatever the
+    /// outgoing episode had already accumulated.
     private var accumulatedPlayedSeconds: TimeInterval = 0
     private var lastPlayingSampleDate: Date?
 
@@ -658,8 +656,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         return accumulatedPlayedSeconds + Date().timeIntervalSince(lastPlayingSampleDate)
     }
 
-    private var passesFreshStartReportGate: Bool {
-        startedFromSavedPosition || liveAccumulatedPlayedSeconds >= Self.freshStartReportGateSeconds
+    private var passesMinimumPlayedReportGate: Bool {
+        liveAccumulatedPlayedSeconds >= Self.minimumPlayedSecondsBeforeReporting
     }
 
     /// Folds wall-clock played time into `accumulatedPlayedSeconds` on every
@@ -802,7 +800,6 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.serverURL = serverURL
         self.authToken = authToken
         self.startOffset = startOffset
-        self.startedFromSavedPosition = (startOffset ?? 0) > 0
         self.shuffledQueue = shuffledQueue
         self.loadingArtImage = loadingArtImage
         self.loadingThumbImage = loadingThumbImage
@@ -6413,9 +6410,8 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Reset start offset so next episode starts from beginning (not resume position)
         startOffset = nil
-        // The new episode gets its own fresh-start report gate rather than
-        // inheriting the outgoing episode's resumed status or played time.
-        startedFromSavedPosition = false
+        // The new episode earns its own 60s report gate rather than
+        // inheriting whatever the outgoing episode had already played.
         accumulatedPlayedSeconds = 0
         lastPlayingSampleDate = nil
 
@@ -6548,7 +6544,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        guard passesFreshStartReportGate else { return }
+        guard passesMinimumPlayedReportGate else { return }
 
         Task {
             await PlexProgressReporter.shared.reportProgress(
@@ -6586,7 +6582,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         guard let state = plexState else { return }
-        guard passesFreshStartReportGate else { return }
+        guard passesMinimumPlayedReportGate else { return }
 
         Task {
             await PlexProgressReporter.shared.reportProgress(
@@ -6623,12 +6619,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // 1. Report stopped state to Plex — gated for a from-the-start
-        // session under the played-time floor, so quitting out of a title
-        // within the first ~60s of real play doesn't put it in Continue
-        // Watching. Marking watched below is a different, stronger signal
+        // 1. Report stopped state to Plex — gated under the played-time
+        // floor regardless of whether this session started fresh or
+        // resumed, so quitting within the first ~60s of real play never
+        // moves a title's Continue Watching position (fresh or resumed
+        // alike). Marking watched below is a different, stronger signal
         // (the title was actually finished) and stays unconditional.
-        if passesFreshStartReportGate {
+        if passesMinimumPlayedReportGate {
             await PlexProgressReporter.shared.reportProgress(
                 ratingKey: metadata.ratingKey ?? "",
                 time: time,
