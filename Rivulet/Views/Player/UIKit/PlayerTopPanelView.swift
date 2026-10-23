@@ -60,6 +60,14 @@ final class PlayerTopPanelTabBar: UIView {
 
     private(set) var activeTab: PlayerTopPanelTab
     private var pills: [PlayerTopPanelTab: PlayerInfoPillButton] = [:]
+    /// The pill that actually holds focus right now (or last held it),
+    /// returned first from `preferredFocusEnvironments` below — mirrors
+    /// `PlayerRailView.lastFocusedButton`. Without it, every directional
+    /// press that makes the engine fall back to asking an ancestor for its
+    /// preference landed back on `pills[activeTab]` — which only updates
+    /// AFTER a move completes — so the fallback kept re-proposing the pill
+    /// focus was already on, and Left/Right/Down all silently no-opped.
+    private weak var lastFocusedPill: PlayerInfoPillButton?
     private let stack = UIStackView()
 
     init(initialTab: PlayerTopPanelTab) {
@@ -101,7 +109,8 @@ final class PlayerTopPanelTabBar: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        pills[activeTab].map { [$0] } ?? []
+        if let last = lastFocusedPill, !last.isHidden, last.window != nil { return [last] }
+        return pills[activeTab].map { [$0] } ?? []
     }
 
     /// Returns focus here — the content's Up-at-first-row hook.
@@ -112,10 +121,9 @@ final class PlayerTopPanelTabBar: UIView {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
-        guard let next = context.nextFocusedView as? PlayerInfoPillButton,
-              let tab = pills.first(where: { $0.value === next })?.key,
-              tab != activeTab
-        else { return }
+        guard let next = context.nextFocusedView as? PlayerInfoPillButton else { return }
+        lastFocusedPill = next
+        guard let tab = pills.first(where: { $0.value === next })?.key, tab != activeTab else { return }
         activeTab = tab
         for (t, pill) in pills { pill.isSelectedTab = t == tab }
         PlayerTopPanelTab.lastUsed = tab
