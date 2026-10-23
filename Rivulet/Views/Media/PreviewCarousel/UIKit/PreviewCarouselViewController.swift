@@ -1189,15 +1189,36 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    private func playMediaItem(_ item: MediaItem, sourceID: String? = nil) {
+    /// The detail page's Play pill, episode-list thumbnails, the Versions
+    /// picker and (via `playHeroItem`) the season Play button all land here —
+    /// this file's one play entry point, so it's the one place that needed
+    /// `ResumePrompt` added (`PlexHomeViewController`'s tile taps/hero/CW
+    /// already had an equivalent). `fromBeginning` has no explicit-bypass
+    /// caller in this file today (no "Watch from Beginning" action exists on
+    /// these surfaces), so every call goes through the decision.
+    private func playMediaItem(_ item: MediaItem, fromBeginning: Bool = false, sourceID: String? = nil) {
+        guard !fromBeginning else {
+            playMediaItemResolved(item, fromBeginning: true, sourceID: sourceID)
+            return
+        }
+        ResumePrompt.resolve(offsetSeconds: item.userState.viewOffset, isInProgress: item.isInProgress, from: self) { [weak self] startOver in
+            self?.playMediaItemResolved(item, fromBeginning: startOver, sourceID: sourceID)
+        }
+    }
+
+    private func playMediaItemResolved(_ item: MediaItem, fromBeginning: Bool, sourceID: String? = nil) {
         // presentPlayer resolves a Plex ratingKey; any other item plays through
         // its own provider.
         if !item.ref.isPlex {
-            ProviderPlayer.play(item, fromBeginning: false, sourceID: sourceID, from: self, onDismiss: nil)
+            ProviderPlayer.play(item, fromBeginning: fromBeginning, sourceID: sourceID, from: self, onDismiss: nil)
             return
         }
+        // A nil resumeOffset below means "ask the server", NOT "start at
+        // zero" (see `presentPlayer`'s own doc comment) — so "start over"
+        // needs an explicit 0, never nil.
         let offsetSec = item.userState.viewOffset
-        presentPlayer(ratingKey: item.ref.itemID, resumeOffset: offsetSec > 0 ? offsetSec : nil, mediaID: sourceID)
+        let resumeOffset: Double? = fromBeginning ? 0 : (offsetSec > 0 ? offsetSec : nil)
+        presentPlayer(ratingKey: item.ref.itemID, resumeOffset: resumeOffset, mediaID: sourceID)
     }
 
     /// Resolve a Plex ratingKey → metadata → present the player. Used for the

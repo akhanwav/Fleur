@@ -138,13 +138,13 @@ enum SettingsDescriptorStore {
             icon: "magnifyingglass",
             description: "Fills in missing intro, recap, and credits markers from the community database introdb.app, sending only the show's ID and episode number. Your own server's markers are always used first."
         ),
-        "promptResumeOrRestart": SettingDescriptor(
+        "resumeBehavior": SettingDescriptor(
             icon: "questionmark.circle",
-            description: "In-progress items show a Resume / Start from Beginning prompt before playing, like Apple TV."
+            description: "What happens when you play an in-progress movie or episode: ask every time with a Resume / Start from Beginning prompt, always resume, or always start over. Applies everywhere Play starts directly — detail pages, episode lists, Continue Watching, and tile menus."
         ),
         "instantResume": SettingDescriptor(
             icon: "play.rectangle.on.rectangle",
-            description: "Selecting a Continue Watching tile resumes it immediately. Turn this off to open the preview instead, the same as every other Home row, which also disables the Resume or Restart Prompt below."
+            description: "Selecting a Continue Watching tile resumes it immediately. Turn this off to open the preview instead, the same as every other Home row."
         ),
         "homeStreamingQuality": SettingDescriptor(
             icon: "house.fill",
@@ -445,6 +445,7 @@ enum SettingsDescriptorStore {
         case .skipBackIntervalPicker: return ("backward.fill", .systemBlue)
         case .homeQualityPicker: return ("house.fill", .systemBlue)
         case .awayQualityPicker: return ("antenna.radiowaves.left.and.right", .systemBlue)
+        case .resumeBehaviorPicker: return ("questionmark.circle", .systemBlue)
         case .contentFilter: return ("hand.raised.fill", .systemOrange)
         case .contentFilterStrength: return ("dial.medium.fill", .systemOrange)
         case .liveTVSourceDetail: return ("tv.and.mediabox", .systemBlue)

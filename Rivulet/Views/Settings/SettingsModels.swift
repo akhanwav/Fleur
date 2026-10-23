@@ -53,6 +53,7 @@ enum SettingsPage: Hashable, CaseIterable {
     case addLiveTVSource, addOwnServer, addPlaylistURL
     case displaySizePicker, autoplayCountdownPicker, skipIntervalPicker, skipBackIntervalPicker
     case homeQualityPicker, awayQualityPicker
+    case resumeBehaviorPicker
     case contentFilter, contentFilterStrength
 
     var title: String {
@@ -81,6 +82,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .skipBackIntervalPicker: return "Skip Back Length"
         case .homeQualityPicker: return "Home Streaming"
         case .awayQualityPicker: return "Away Streaming"
+        case .resumeBehaviorPicker: return "When Resuming"
         case .contentFilter: return "Content Filtering"
         case .contentFilterStrength: return "Profanity Strength"
         }

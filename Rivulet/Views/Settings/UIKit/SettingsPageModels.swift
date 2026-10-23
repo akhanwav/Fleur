@@ -199,6 +199,7 @@ enum SettingsContent {
         case .skipBackIntervalPicker: return skipBackIntervalPicker
         case .homeQualityPicker:      return qualityPicker(home: true)
         case .awayQualityPicker:      return qualityPicker(home: false)
+        case .resumeBehaviorPicker:   return resumeBehaviorPicker
         case .contentFilter:          return contentFilter
         case .contentFilterStrength:  return contentFilterStrength
         }
@@ -235,6 +236,14 @@ enum SettingsContent {
             SettingsRowItem(id: "sbi_\(opt.rawValue)", title: opt.description, kind: .option(
                 isSelected: { Int(InputConfig.tapSeekBackSeconds) == opt.rawValue },
                 select: { SettingsStore.setInt(SkipInterval.backStorageKey, opt.rawValue) }))
+        }
+    }
+
+    private static var resumeBehaviorPicker: [SettingsRowItem] {
+        [ResumeBehavior.alwaysAsk, .alwaysResume, .alwaysStartOver].map { opt in
+            SettingsRowItem(id: "rb_\(opt.rawValue)", title: opt.description, kind: .option(
+                isSelected: { ResumeBehavior.current == opt },
+                select: { SettingsStore.setString(ResumeBehavior.storageKey, opt.rawValue) }))
         }
     }
 
@@ -334,10 +343,10 @@ enum SettingsContent {
             toggle("autoSkipRecap", "Auto-Skip Recap", key: "autoSkipRecap", default: false),
             toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
             toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
-            // The prompt only has anything to interrupt while a Continue
-            // Watching tile plays on Select, so it dims with Instant Resume off.
-            toggle("promptResumeOrRestart", "Resume or Restart Prompt", key: "promptResumeOrRestart", default: false,
-                   enabledWhen: { SettingsStore.bool("continueWatchingInstantResume", default: true) }),
+            SettingsRowItem(id: "resumeBehavior", title: "When Resuming",
+                            kind: .navigationValue(.resumeBehaviorPicker, value: {
+                                ResumeBehavior.current.description
+                            })),
             SettingsRowItem(id: "homeStreamingQuality", title: "Home Streaming Quality",
                             kind: .navigationValue(.homeQualityPicker, value: {
                                 StreamingQuality.setting(home: true).label

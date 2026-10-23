@@ -790,11 +790,6 @@ final class PlexHomeViewController: UIViewController {
     private var enablePersonalizedRecommendations: Bool {
         UserDefaults.standard.bool(forKey: "enablePersonalizedRecommendations")
     }
-    /// `promptResumeOrRestart` AppStorage gate.
-    private var promptResumeOrRestart: Bool {
-        UserDefaults.standard.bool(forKey: "promptResumeOrRestart")
-    }
-
     // MARK: - Lifecycle
 
     /// Search mode's top inset IS the safe area (see `updateContentTopInset`),
@@ -5385,65 +5380,23 @@ final class PlexHomeViewController: UIViewController {
     /// MediaItem, but the player VM + resume flow genuinely need a PlexMetadata
     /// (Stage 4 keeps direct-play on PlexMetadata). We resolve the metadata
     /// lazily by ratingKey — the same escape hatch the preview carousel uses at
-    /// play — then forward to the existing PlexMetadata flow. The resume-or-
-    /// restart decision is driven off the MediaItem so the prompt appears
-    /// instantly without waiting on the metadata fetch.
+    /// play — then forward to the existing PlexMetadata flow. The resume
+    /// decision is driven off the MediaItem so `ResumePrompt` (when it needs
+    /// to ask) appears instantly without waiting on the metadata fetch.
+    /// `fromBeginning: true` (the tile menu's explicit "Watch from Beginning")
+    /// skips the decision entirely — it already has its answer.
     private func playItem(_ item: MediaItem, fromBeginning: Bool = false, sourceID: String? = nil) {
-        // Every Home, library and search play routes here. Only the Plex path
-        // resolves a ratingKey; any other item plays through its own provider,
-        // behind the same resume prompt.
-        if !item.ref.isPlex {
-            let offsetSec = item.userState.viewOffset
-            if promptResumeOrRestart, !fromBeginning, item.isInProgress, offsetSec > 0 {
-                presentResumeChoice(forMediaItem: item, offsetSec: offsetSec, sourceID: sourceID)
-            } else {
-                resolveAndPlay(item, fromBeginning: fromBeginning, sourceID: sourceID)
-            }
+        guard !fromBeginning else {
+            resolveAndPlay(item, fromBeginning: true, sourceID: sourceID)
             return
         }
-        let ratingKey = item.ref.itemID
-        guard !ratingKey.isEmpty,
-              let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return }
-
-        // Resume prompt: gate on the MediaItem's own progress, then resolve
-        // the metadata for the chosen branch.
-        let offsetSec = item.userState.viewOffset
-        if promptResumeOrRestart, !fromBeginning, item.isInProgress, offsetSec > 0 {
-            presentResumeChoice(forMediaItem: item, offsetSec: offsetSec, sourceID: sourceID)
-            return
-        }
-
-        Task { @MainActor in
-            guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
-                serverURL: serverURL, authToken: token, ratingKey: ratingKey
-            ) else { return }
-            playItemDirectly(meta, fromBeginning: fromBeginning, mediaID: sourceID)
+        ResumePrompt.resolve(offsetSeconds: item.userState.viewOffset, isInProgress: item.isInProgress, from: self) { [weak self] startOver in
+            self?.resolveAndPlay(item, fromBeginning: startOver, sourceID: sourceID)
         }
     }
 
-    /// Resume-or-restart prompt driven by a MediaItem (CW play path). Resolves
-    /// PlexMetadata lazily inside the chosen action so the prompt itself never
-    /// blocks on the network.
-    private func presentResumeChoice(forMediaItem item: MediaItem, offsetSec: TimeInterval, sourceID: String? = nil) {
-        let offsetMs = Int(offsetSec * 1000)
-        let alert = UIAlertController(
-            title: "Resume Playback?",
-            message: nil,
-            preferredStyle: .actionSheet
-        )
-        alert.addAction(UIAlertAction(title: "Resume from \(PlexMetadata.formatResumeTime(offsetMs))", style: .default) { [weak self] _ in
-            self?.resolveAndPlay(item, fromBeginning: false, sourceID: sourceID)
-        })
-        alert.addAction(UIAlertAction(title: "Start from Beginning", style: .default) { [weak self] _ in
-            self?.resolveAndPlay(item, fromBeginning: true, sourceID: sourceID)
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(alert, animated: true)
-    }
-
-    /// Resolve a MediaItem to PlexMetadata by ratingKey and play it, bypassing
-    /// the resume prompt (the caller already made the resume/restart choice).
+    /// Resolve a MediaItem to PlexMetadata by ratingKey and play it. The
+    /// resume decision is already made by the time anything calls this.
     private func resolveAndPlay(_ item: MediaItem, fromBeginning: Bool, sourceID: String? = nil) {
         if !item.ref.isPlex {
             ProviderPlayer.play(item, fromBeginning: fromBeginning, sourceID: sourceID, from: self, onDismiss: nil)
@@ -5461,33 +5414,19 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Mirrors the SwiftUI `playItemDirectly` flow including the
-    /// resume-or-restart prompt (when `promptResumeOrRestart` is on).
+    /// PlexMetadata entry point (the home/discover hero's Play button, and
+    /// "Details"-matched Discover items) — everything else funnels through
+    /// `playItem` above. Same `ResumePrompt` decision, same explicit-bypass
+    /// rule for `fromBeginning: true`.
     private func playItemDirectly(_ item: PlexMetadata, fromBeginning: Bool = false, mediaID: String? = nil) {
-        if promptResumeOrRestart,
-           !fromBeginning,
-           item.isInProgress,
-           let offsetMs = item.viewOffset, offsetMs > 0 {
-            presentResumeChoice(for: item, offsetMs: offsetMs, mediaID: mediaID)
-        } else {
-            presentPlayer(for: item, fromBeginning: fromBeginning, mediaID: mediaID)
+        guard !fromBeginning else {
+            presentPlayer(for: item, fromBeginning: true, mediaID: mediaID)
+            return
         }
-    }
-
-    private func presentResumeChoice(for item: PlexMetadata, offsetMs: Int, mediaID: String? = nil) {
-        let alert = UIAlertController(
-            title: "Resume Playback?",
-            message: nil,
-            preferredStyle: .actionSheet
-        )
-        alert.addAction(UIAlertAction(title: "Resume from \(PlexMetadata.formatResumeTime(offsetMs))", style: .default) { [weak self] _ in
-            self?.presentPlayer(for: item, fromBeginning: false, mediaID: mediaID)
-        })
-        alert.addAction(UIAlertAction(title: "Start from Beginning", style: .default) { [weak self] _ in
-            self?.presentPlayer(for: item, fromBeginning: true, mediaID: mediaID)
-        })
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(alert, animated: true)
+        let offsetSeconds = item.viewOffset.map { TimeInterval($0) / 1000 } ?? 0
+        ResumePrompt.resolve(offsetSeconds: offsetSeconds, isInProgress: item.isInProgress, from: self) { [weak self] startOver in
+            self?.presentPlayer(for: item, fromBeginning: startOver, mediaID: mediaID)
+        }
     }
 
     private func presentPlayer(for item: PlexMetadata, fromBeginning: Bool, mediaID: String? = nil) {
