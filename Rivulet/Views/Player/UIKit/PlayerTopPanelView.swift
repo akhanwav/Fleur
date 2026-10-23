@@ -166,7 +166,7 @@ final class PlayerTopPanelTabBar: UIView {
 final class PlayerTopPanelView: UIView {
     private enum Metrics {
         static let tabBarTop: CGFloat = 24
-        static let tabBarToContent: CGFloat = 24
+        static let tabBarToContent: CGFloat = 12
         static let sideInset: CGFloat = 35
         /// Each tab's settings sit at this width, centered in the panel —
         /// the panel itself now spans close to the full screen

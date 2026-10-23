@@ -553,7 +553,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// moving picture. AVKit's own 8s (`pausedControlsHideDelay`) is still
     /// right for a static paused frame, where there's no playback racing the
     /// user's ability to read it.
-    private let playingControlsHideDelay: TimeInterval = 3
+    private let playingControlsHideDelay: TimeInterval = 4
     /// AVKit hides its controls 8s after the last press or focus move.
     private let pausedControlsHideDelay: TimeInterval = 8
     private var scrubTimer: Timer?

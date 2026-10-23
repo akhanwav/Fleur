@@ -1076,7 +1076,15 @@ class PlayerContainerViewController: UIViewController {
         guard !vm.isScrubbing,
               vm.postVideoState == .hidden,
               !vm.playbackState.isFailed,
-              descriptionOverlay == nil
+              descriptionOverlay == nil,
+              // A bare touch that lands short of the pan's own movement
+              // threshold still reaches the tap recognizer even when
+              // `panCanDriveScrub` correctly declined the pan — without this,
+              // that leftover tap called `showControlsTemporarily()`, which
+              // (via the panel/rail mutual-exclusion in `applyChromeVisibility`)
+              // closed Quick Adjust out from under a touch that was never a
+              // deliberate Back or Up-past-the-tabs.
+              activeTopPanel == nil
         else { return }
 
         // With the controls up, a bare tap (not a click) cycles the bar
