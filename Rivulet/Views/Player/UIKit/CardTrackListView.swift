@@ -36,6 +36,10 @@ final class CardTrackListView: UIView {
         static let focusScale: CGFloat = 416 / 408
         static let titleFont = UIFont.systemFont(ofSize: 25, weight: .medium)
         static let secondaryFont = UIFont.systemFont(ofSize: 23, weight: .medium)
+        /// Gap between rows when `rowsAreBoxed` — each row now draws its own
+        /// resting container, so they need daylight between them to read as
+        /// separate controls instead of one solid block.
+        static let boxedRowSpacing: CGFloat = 10
         /// AVKit draws secondary text white 0.5 and rules white 0.3 plus-lighter over
         /// its glass; these normal-blend alphas land on the same pixels over it.
         static let secondaryColor = UIColor.white.withAlphaComponent(0.8)
@@ -103,17 +107,25 @@ final class CardTrackListView: UIView {
     /// player's Quick Adjust panel, the one caller that wants larger text,
     /// so there was nothing to plumb it into there.
     private let rowScale: CGFloat
+    /// Gives each arrow-key stepper row its own visible resting container
+    /// (a faint fill and thin border) instead of the plain, see-through pill
+    /// the bottom-rail Subtitles/Audio/Filter/Quality popups keep — those
+    /// pass the default `false` and stay exactly as they were. Also spaces
+    /// the rows apart (`Metrics.boxedRowSpacing`) so the containers read as
+    /// separate controls rather than a touching block.
+    private let rowsAreBoxed: Bool
 
     /// A plain list of choices: each row's `trackId` is what `onSelect` receives.
     init(header: String, rows: [Row], actions: [CardActionConfig] = [], toggles: [CardToggleConfig] = [],
          steppers: [CardStepperConfig] = [], infoLine: String? = nil, rowScale: CGFloat = 1.0,
-         onSelect: @escaping (Int?) -> Void) {
+         rowsAreBoxed: Bool = false, onSelect: @escaping (Int?) -> Void) {
         self.rows = rows
         self.actions = actions
         self.toggles = toggles
         self.steppers = steppers
         self.infoLine = infoLine
         self.rowScale = rowScale
+        self.rowsAreBoxed = rowsAreBoxed
         self.onSelect = onSelect
         super.init(frame: .zero)
         setupViews(header: header)
@@ -131,6 +143,7 @@ final class CardTrackListView: UIView {
         addSubview(headerLabel)
 
         stack.axis = .vertical
+        stack.spacing = rowsAreBoxed ? Metrics.boxedRowSpacing : 0
         scrollView.addSubview(stack)
         scrollView.clipsToBounds = true
         addSubview(scrollView)
@@ -241,7 +254,7 @@ final class CardTrackListView: UIView {
         }
         for config in steppers {
             let row: UIView & CardStepperRowControl = config.usesArrowKeys
-                ? CardArrowStepperRowView(config: config, scale: rowScale)
+                ? CardArrowStepperRowView(config: config, scale: rowScale, boxed: rowsAreBoxed)
                 : CardStepperRowView(config: config)
             row.onStep = { [weak self] in self?.scheduleStepperRefresh() }
             // A stepper whose value can change on its own after a press
@@ -620,10 +633,17 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
     /// larger row stays proportioned rather than just gaining dead space —
     /// see `CardTrackListView.rowScale`.
     private let scale: CGFloat
+    /// Gives the row a visible resting container (see `CardTrackListView.rowsAreBoxed`)
+    /// instead of the plain `.clear` pill every other popup using this row
+    /// kind keeps — each setting reads as its own control rather than bare
+    /// floating text. Doesn't touch the focused look, which was already a
+    /// solid white pill — clearly brighter on its own.
+    private let boxed: Bool
 
-    init(config: CardStepperConfig, scale: CGFloat = 1.0) {
+    init(config: CardStepperConfig, scale: CGFloat = 1.0, boxed: Bool = false) {
         self.config = config
         self.scale = scale
+        self.boxed = boxed
         super.init(frame: .zero)
         typealias M = CardTrackListView.Metrics
 
@@ -754,7 +774,17 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
         pill.frame = bounds.insetBy(dx: -growth, dy: -growth)
         pill.layer.cornerRadius = M.rowRadius * scale + growth
         pill.layer.shadowPath = UIBezierPath(roundedRect: pill.bounds, cornerRadius: pill.layer.cornerRadius).cgPath
-        pill.backgroundColor = focused ? .white : .clear
+        if focused {
+            pill.backgroundColor = .white
+            pill.layer.borderWidth = 0
+        } else if boxed {
+            pill.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+            pill.layer.borderWidth = 1
+            pill.layer.borderColor = UIColor.white.withAlphaComponent(0.2).cgColor
+        } else {
+            pill.backgroundColor = .clear
+            pill.layer.borderWidth = 0
+        }
         pill.layer.shadowOpacity = focused ? 0.3 : 0
         content.transform = focused ? CGAffineTransform(scaleX: M.focusScale, y: M.focusScale) : .identity
         titleLabel.textColor = focused ? .black : .white

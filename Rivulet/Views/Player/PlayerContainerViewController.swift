@@ -1092,6 +1092,24 @@ class PlayerContainerViewController: UIViewController {
 
     private static let clockTimesKey = "playerShowsClockTimes"
 
+    /// Whether a swipe already in progress may move the playhead, decided
+    /// once at `.began` and held for the gesture's whole lifetime — see
+    /// `panMaySeek`.
+    private var activePanIsScrub = false
+
+    /// `panCanDriveScrub` only decides whether this recognizer claims the
+    /// touch at all (same as before — vertical swipes still go to the focus
+    /// engine). This is the narrower, separate question of whether THIS
+    /// touch stream should actually move the playhead: with the bar down and
+    /// the item playing, a bare touchpad swipe is far too sensitive to seek
+    /// blind. `isScrubbing` covers a shuttle already running from a
+    /// press-and-hold, which can have the bar up without `showControls`
+    /// (see `applyChromeVisibility`'s `chromeVisible`).
+    private var panMaySeek: Bool {
+        guard let vm = viewModel else { return false }
+        return vm.showControls || vm.isScrubbing || vm.playbackState == .paused
+    }
+
     @objc private func handlePanGesture(_ gesture: UIPanGestureRecognizer) {
         // Kept in sync with `panCanDriveScrub`, which stops the recognizer from
         // beginning (and thus stealing the gesture) in these same states.
@@ -1099,19 +1117,23 @@ class PlayerContainerViewController: UIViewController {
         // A touch that turned into a ring jog belongs to the jog from then on.
         guard !RemoteInputHandler.isRingJogging else { return }
 
-        // Touch-surface pan drives continuous swipe-to-scrub whether the item
-        // is playing or paused. It used to require `.paused`, so a swipe during
-        // playback did nothing at all — the recognizer still began and swallowed
-        // the gesture, but the handler returned immediately.
-
         let translation = gesture.translation(in: view)
         let velocity = gesture.velocity(in: view)
 
         switch gesture.state {
         case .began:
-            inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+            activePanIsScrub = panMaySeek
+            if activePanIsScrub {
+                inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
+            } else {
+                // Nothing's up and we're playing: this swipe only surfaces
+                // the bar (like the Apple TV app), it doesn't seek. A later,
+                // separate swipe — now that the bar is up — will.
+                viewModel?.showControlsTemporarily()
+            }
 
         case .changed:
+            guard activePanIsScrub else { return }
             // Proportional scrubbing: horizontal translation maps to seek time
             // Sensitivity: ~1 second per 2 points of horizontal movement
             // Positive translation.x = swipe right = forward
@@ -1120,6 +1142,7 @@ class PlayerContainerViewController: UIViewController {
             gesture.setTranslation(.zero, in: view)
 
         case .ended, .cancelled:
+            guard activePanIsScrub else { return }
             // If significant horizontal velocity, apply a final "flick" adjustment
             if abs(velocity.x) > 500 {
                 let flickSeekDelta = velocity.x * 0.02  // Small multiplier for flick
@@ -1799,6 +1822,7 @@ class PlayerContainerViewController: UIViewController {
             ],
             infoLine: videoInfoLine(vm: vm),
             rowScale: Self.quickAdjustRowScale,
+            rowsAreBoxed: true,
             onSelect: { _ in })
     }
 
@@ -1829,6 +1853,7 @@ class PlayerContainerViewController: UIViewController {
                     onUpAtStart: onUpAtStart),
             ],
             rowScale: Self.quickAdjustRowScale,
+            rowsAreBoxed: true,
             onSelect: { _ in })
     }
 
@@ -1859,6 +1884,7 @@ class PlayerContainerViewController: UIViewController {
                     usesArrowKeys: true),
             ],
             rowScale: Self.quickAdjustRowScale,
+            rowsAreBoxed: true,
             onSelect: { _ in })
     }
 
