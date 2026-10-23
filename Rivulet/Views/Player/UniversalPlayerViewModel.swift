@@ -623,6 +623,60 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// server ahead of the start it follows.
     private var providerReportTail: Task<Void, Never>?
 
+    // MARK: - Fresh-start report gate (Plex only)
+    //
+    // A few seconds of a quick tap-and-back-out used to be enough to put a
+    // never-watched title at the front of Continue Watching: reportFinalProgress
+    // sends "stopped" at whatever `currentTime` is the moment the player goes
+    // away, with no minimum-watched floor, and Plex itself creates/updates an
+    // On Deck entry from that alone. A session that RESUMED a real saved
+    // position is exempt — there is already a Continue Watching entry for it,
+    // and updating it immediately is correct. This does not touch
+    // WatchProgressPolicy, the resume prompt's own 10s floor, or Continue
+    // Watching's own display rule — only whether PLEX REPORTING fires for a
+    // from-the-start session.
+
+    /// 60s of ACTUAL playback (wall clock, not counting pauses) before a
+    /// from-the-start session may report progress to Plex at all.
+    private static let freshStartReportGateSeconds: TimeInterval = 60
+
+    /// Set at `init` from the original `startOffset`, and reset alongside it
+    /// at every episode transition (`playNextEpisode` always starts the next
+    /// episode from 0, regardless of that episode's own resume point —
+    /// existing behavior, untouched here), so a binge's second episode gets
+    /// its own fresh gate rather than inheriting the first episode's resumed
+    /// status.
+    private var startedFromSavedPosition = false
+    private var accumulatedPlayedSeconds: TimeInterval = 0
+    private var lastPlayingSampleDate: Date?
+
+    /// `accumulatedPlayedSeconds` plus whatever has elapsed since the last
+    /// transition INTO `.playing`, so a long unbroken stretch of playback
+    /// doesn't need a state change to cross the gate.
+    private var liveAccumulatedPlayedSeconds: TimeInterval {
+        guard let lastPlayingSampleDate else { return accumulatedPlayedSeconds }
+        return accumulatedPlayedSeconds + Date().timeIntervalSince(lastPlayingSampleDate)
+    }
+
+    private var passesFreshStartReportGate: Bool {
+        startedFromSavedPosition || liveAccumulatedPlayedSeconds >= Self.freshStartReportGateSeconds
+    }
+
+    /// Folds wall-clock played time into `accumulatedPlayedSeconds` on every
+    /// transition AWAY from `.playing` (pausing stops the clock), and starts
+    /// a fresh sample on every transition INTO it. Called first thing in
+    /// `reportPlaybackState`, ahead of the report gate itself, so the clock
+    /// keeps ticking even while reports are being suppressed.
+    private func samplePlayedAccumulator(for newState: UniversalPlaybackState) {
+        if newState == .playing {
+            guard lastPlayingSampleDate == nil else { return }
+            lastPlayingSampleDate = Date()
+        } else if let last = lastPlayingSampleDate {
+            accumulatedPlayedSeconds += Date().timeIntervalSince(last)
+            lastPlayingSampleDate = nil
+        }
+    }
+
     // MARK: - Loading Screen Images (passed from detail view for instant display)
 
     let loadingArtImage: UIImage?
@@ -748,6 +802,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         self.serverURL = serverURL
         self.authToken = authToken
         self.startOffset = startOffset
+        self.startedFromSavedPosition = (startOffset ?? 0) > 0
         self.shuffledQueue = shuffledQueue
         self.loadingArtImage = loadingArtImage
         self.loadingThumbImage = loadingThumbImage
@@ -6358,6 +6413,11 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Reset start offset so next episode starts from beginning (not resume position)
         startOffset = nil
+        // The new episode gets its own fresh-start report gate rather than
+        // inheriting the outgoing episode's resumed status or played time.
+        startedFromSavedPosition = false
+        accumulatedPlayedSeconds = 0
+        lastPlayingSampleDate = nil
 
         // Reset skip tracking for new episode — but keep hasTriggeredPostVideo = true
         // until after startPlayback() completes. The old time observer can emit stale
@@ -6488,6 +6548,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
+        guard passesFreshStartReportGate else { return }
+
         Task {
             await PlexProgressReporter.shared.reportProgress(
                 ratingKey: self.metadata.ratingKey ?? "",
@@ -6500,6 +6562,11 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Report a playback state change immediately.
     func reportPlaybackState(_ newState: UniversalPlaybackState) {
+        // Ahead of the report gate below so the played-time clock keeps
+        // ticking even while a from-the-start session's reports are
+        // suppressed — otherwise it would never earn its way past the floor.
+        samplePlayedAccumulator(for: newState)
+
         if case .provider = source {
             reportProviderState(newState)
             return
@@ -6519,6 +6586,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         guard let state = plexState else { return }
+        guard passesFreshStartReportGate else { return }
 
         Task {
             await PlexProgressReporter.shared.reportProgress(
@@ -6555,14 +6623,20 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // 1. Report stopped state to Plex
-        await PlexProgressReporter.shared.reportProgress(
-            ratingKey: metadata.ratingKey ?? "",
-            time: time,
-            duration: duration,
-            state: "stopped",
-            forceReport: true
-        )
+        // 1. Report stopped state to Plex — gated for a from-the-start
+        // session under the played-time floor, so quitting out of a title
+        // within the first ~60s of real play doesn't put it in Continue
+        // Watching. Marking watched below is a different, stronger signal
+        // (the title was actually finished) and stays unconditional.
+        if passesFreshStartReportGate {
+            await PlexProgressReporter.shared.reportProgress(
+                ratingKey: metadata.ratingKey ?? "",
+                time: time,
+                duration: duration,
+                state: "stopped",
+                forceReport: true
+            )
+        }
 
         // 2. Mark as watched if > 90% complete
         if duration > 0 && time / duration > 0.9 {
