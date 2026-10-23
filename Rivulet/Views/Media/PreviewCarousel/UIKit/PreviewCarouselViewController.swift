@@ -1201,7 +1201,7 @@ final class PreviewCarouselViewController: UIViewController {
             playMediaItemResolved(item, fromBeginning: true, sourceID: sourceID)
             return
         }
-        ResumePrompt.resolve(offsetSeconds: item.userState.viewOffset, isInProgress: item.isInProgress, from: self) { [weak self] startOver in
+        ResumePrompt.resolve(offsetSeconds: item.userState.viewOffset, from: self) { [weak self] startOver in
             self?.playMediaItemResolved(item, fromBeginning: startOver, sourceID: sourceID)
         }
     }

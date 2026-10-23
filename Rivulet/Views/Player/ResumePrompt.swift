@@ -39,11 +39,12 @@ nonisolated enum ResumeBehavior: String, CaseIterable, CustomStringConvertible {
 
 enum ResumePrompt {
     /// Below this, a resume point isn't worth interrupting Play for — a few
-    /// seconds of an accidental start. `WatchProgressPolicy.startedThreshold`
-    /// is a percentage (2%) tuned for progress bars and On Deck, not this: 2%
-    /// of a 20-minute episode is 24 seconds, 2% of a 3-hour movie is over 3
-    /// minutes. This is a flat floor instead, independent of runtime.
-    static let minimumOffsetSeconds: TimeInterval = 60
+    /// seconds of an accidental start. Deliberately NOT `WatchProgressPolicy`
+    /// (its 2% floor and 90% ceiling are tuned for progress bars, On Deck and
+    /// "has this been watched" display, not this decision): this is a flat,
+    /// low floor on the raw saved position, nothing else — see `resolve`'s
+    /// doc comment for why watched status plays no part here either.
+    static let minimumOffsetSeconds: TimeInterval = 10
 
     /// Decide what Play should do for an item that MIGHT have a resume
     /// point, consulting `ResumeBehavior`. When the decision needs asking,
@@ -53,17 +54,21 @@ enum ResumePrompt {
     /// `onDecision` runs synchronously-equivalent with `fromBeginning: false`
     /// (resume, or just play normally when there was nothing to resume).
     ///
-    /// `isInProgress` must already reflect `WatchProgressPolicy` (excludes
-    /// watched items — every caller here gets it from a MediaItem/PlexMetadata
-    /// `isInProgress` that already delegates there).
+    /// Gates on the raw saved position alone — more than `minimumOffsetSeconds`
+    /// is enough, regardless of `isWatched`/`viewCount`. Plex keeps a real
+    /// `viewOffset` on an already-watched title once a rewatch is stopped
+    /// partway through (the same fact `PlexMetadata.isWatched` and
+    /// `MediaUserState.isInProgress` work around elsewhere — see CLAUDE.md's
+    /// "resume point outranks the watched flag", issue #270), so excluding
+    /// watched items here would silently skip the prompt for exactly the
+    /// stopped-rewatch case it needs to cover.
     @MainActor
     static func resolve(
         offsetSeconds: TimeInterval,
-        isInProgress: Bool,
         from viewController: UIViewController,
         onDecision: @escaping (_ fromBeginning: Bool) -> Void
     ) {
-        guard isInProgress, offsetSeconds >= minimumOffsetSeconds else {
+        guard offsetSeconds > minimumOffsetSeconds else {
             onDecision(false)
             return
         }

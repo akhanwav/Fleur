@@ -5390,7 +5390,7 @@ final class PlexHomeViewController: UIViewController {
             resolveAndPlay(item, fromBeginning: true, sourceID: sourceID)
             return
         }
-        ResumePrompt.resolve(offsetSeconds: item.userState.viewOffset, isInProgress: item.isInProgress, from: self) { [weak self] startOver in
+        ResumePrompt.resolve(offsetSeconds: item.userState.viewOffset, from: self) { [weak self] startOver in
             self?.resolveAndPlay(item, fromBeginning: startOver, sourceID: sourceID)
         }
     }
@@ -5424,7 +5424,7 @@ final class PlexHomeViewController: UIViewController {
             return
         }
         let offsetSeconds = item.viewOffset.map { TimeInterval($0) / 1000 } ?? 0
-        ResumePrompt.resolve(offsetSeconds: offsetSeconds, isInProgress: item.isInProgress, from: self) { [weak self] startOver in
+        ResumePrompt.resolve(offsetSeconds: offsetSeconds, from: self) { [weak self] startOver in
             self?.presentPlayer(for: item, fromBeginning: startOver, mediaID: mediaID)
         }
     }
