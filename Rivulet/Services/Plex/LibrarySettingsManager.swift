@@ -442,7 +442,9 @@ class LibrarySettingsManager: ObservableObject {
 
     private let watchlistSortBaseKey = "watchlistSort"
     private let watchlistTypeFilterBaseKey = "watchlistTypeFilter"
-    private let watchlistGenreFilterBaseKey = "watchlistGenreFilter"
+    /// Plural: the Genre filter is multi-select (AND across the set), not the
+    /// single-genre picker this started as.
+    private let watchlistGenreFiltersBaseKey = "watchlistGenreFilters"
 
     func getWatchlistSort() -> WatchlistSortOption {
         guard let raw = userDefaults.string(forKey: currentKey(watchlistSortBaseKey)) else { return .dateAddedDesc }
@@ -462,18 +464,13 @@ class LibrarySettingsManager: ObservableObject {
         userDefaults.set(filter.rawValue, forKey: currentKey(watchlistTypeFilterBaseKey))
     }
 
-    /// nil = "All Genres".
-    func getWatchlistGenreFilter() -> String? {
-        userDefaults.string(forKey: currentKey(watchlistGenreFilterBaseKey))
+    /// Empty = "All Genres".
+    func getWatchlistGenreFilters() -> Set<String> {
+        Set(userDefaults.stringArray(forKey: currentKey(watchlistGenreFiltersBaseKey)) ?? [])
     }
 
-    func setWatchlistGenreFilter(_ genre: String?) {
-        let key = currentKey(watchlistGenreFilterBaseKey)
-        if let genre {
-            userDefaults.set(genre, forKey: key)
-        } else {
-            userDefaults.removeObject(forKey: key)
-        }
+    func setWatchlistGenreFilters(_ genres: Set<String>) {
+        userDefaults.set(Array(genres), forKey: currentKey(watchlistGenreFiltersBaseKey))
     }
 
     // MARK: - Private Methods

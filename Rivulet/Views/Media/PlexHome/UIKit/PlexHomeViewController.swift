@@ -479,11 +479,11 @@ final class PlexHomeViewController: UIViewController {
         if case .watchlist = mode {
             self.watchlistSort = LibrarySettingsManager.shared.getWatchlistSort()
             self.watchlistTypeFilter = LibrarySettingsManager.shared.getWatchlistTypeFilter()
-            self.watchlistGenreFilter = LibrarySettingsManager.shared.getWatchlistGenreFilter()
+            self.watchlistGenreFilters = LibrarySettingsManager.shared.getWatchlistGenreFilters()
         } else {
             self.watchlistSort = .dateAddedDesc
             self.watchlistTypeFilter = .all
-            self.watchlistGenreFilter = nil
+            self.watchlistGenreFilters = []
         }
         super.init(nibName: nil, bundle: nil)
         if case .collection = mode {
@@ -659,8 +659,9 @@ final class PlexHomeViewController: UIViewController {
     // elsewhere.
     private var watchlistSort: WatchlistSortOption
     private var watchlistTypeFilter: WatchlistTypeFilter
-    /// nil = "All Genres".
-    private var watchlistGenreFilter: String?
+    /// Multi-select, AND across the set (a title must carry every checked
+    /// genre). Empty = "All Genres".
+    private var watchlistGenreFilters: Set<String> = []
     /// Per-entry local-library ownership + genre, keyed by
     /// `PlexWatchlistItem.id`. Computed from the in-memory `LibraryGUIDIndex`
     /// (warm path only — no network), so it starts empty and fills in once
@@ -3320,7 +3321,7 @@ final class PlexHomeViewController: UIViewController {
                 count: section.totalSize ?? 0,
                 sortName: watchlistSort.displayName,
                 typeName: watchlistTypeFilter.displayName,
-                genreName: watchlistGenreFilter ?? "All Genres"
+                genreName: watchlistGenreButtonLabel
             )
             cell.onSortTapped = { [weak self] in self?.presentWatchlistSortPicker() }
             cell.onTypeTapped = { [weak self] in self?.presentWatchlistTypePicker() }
@@ -3583,15 +3584,7 @@ final class PlexHomeViewController: UIViewController {
     /// default, and the order new adds land at (`PlexWatchlistService.add`
     /// inserts at index 0) — reversed for ascending.
     private func filteredSortedWatchlistItems(_ items: [PlexWatchlistItem]) -> [PlexWatchlistItem] {
-        var result = items
-        switch watchlistTypeFilter {
-        case .all: break
-        case .movies: result = result.filter { $0.type == .movie }
-        case .shows: result = result.filter { $0.type == .show }
-        }
-        if let genre = watchlistGenreFilter {
-            result = result.filter { watchlistEnrichment[$0.id]?.genres.contains(genre) ?? false }
-        }
+        var result = watchlistItems(matchingType: watchlistTypeFilter, genres: watchlistGenreFilters, from: items)
         switch watchlistSort {
         case .dateAddedDesc: break
         case .dateAddedAsc: result.reverse()
@@ -3607,10 +3600,43 @@ final class PlexHomeViewController: UIViewController {
         return result
     }
 
+    /// Type + genre filter, unsorted. Factored out so the live "N titles"
+    /// count in `WatchlistGenreFilterPopupViewController` can preview a
+    /// candidate genre selection against the SAME rule the grid applies
+    /// (AND across the set — a title must carry every checked genre) without
+    /// duplicating it.
+    private func watchlistItems(matchingType type: WatchlistTypeFilter, genres: Set<String>,
+                                from items: [PlexWatchlistItem]) -> [PlexWatchlistItem] {
+        var result = items
+        switch type {
+        case .all: break
+        case .movies: result = result.filter { $0.type == .movie }
+        case .shows: result = result.filter { $0.type == .show }
+        }
+        guard !genres.isEmpty else { return result }
+        return result.filter { item in
+            genres.isSubset(of: Set(watchlistEnrichment[item.id]?.genres ?? []))
+        }
+    }
+
     /// Genres available to filter by: owned watchlist items only (see
     /// `watchlistEnrichment` doc comment).
     private var availableWatchlistGenres: [String] {
         Set(watchlistEnrichment.values.flatMap(\.genres)).sorted()
+    }
+
+    /// The Genre button's label: "All Genres" with none picked, the genre
+    /// name alone with one, "A + B" when two short names join under the
+    /// button's comfortable width, else a count ("3 Genres") so a long
+    /// combination never overflows the header.
+    private var watchlistGenreButtonLabel: String {
+        switch watchlistGenreFilters.count {
+        case 0: return "All Genres"
+        case 1: return watchlistGenreFilters.first!
+        default:
+            let joined = watchlistGenreFilters.sorted().joined(separator: " + ")
+            return joined.count <= 24 ? joined : "\(watchlistGenreFilters.count) Genres"
+        }
     }
 
     /// Recomputes `watchlistEnrichment` from the in-memory `LibraryGUIDIndex`
@@ -3713,33 +3739,45 @@ final class PlexHomeViewController: UIViewController {
         refreshWatchlistHeader()
     }
 
+    /// Multi-select, unlike Sort/Type: a custom glass popup (grown from the
+    /// Genre button, same chrome recipe as the tile long-press menu) rather
+    /// than a UIAlertController action sheet, since it needs rows that
+    /// toggle in place, a live "N titles" count, and a Done button — none of
+    /// which an action sheet can do. There is no Cancel: Menu applies the
+    /// in-progress selection exactly like Done (`onApply` below), matching
+    /// every other picker's "last choice wins" persistence.
     private func presentWatchlistGenrePicker() {
-        guard case .watchlist = mode else { return }
-        let sheet = UIAlertController(title: "Genre", message: nil, preferredStyle: .actionSheet)
-        let allTitle = watchlistGenreFilter == nil ? "\u{2713} All Genres" : "All Genres"
-        sheet.addAction(UIAlertAction(title: allTitle, style: .default) { [weak self] _ in
-            self?.applyWatchlistGenreFilter(nil)
-        })
-        for genre in availableWatchlistGenres {
-            let title = genre == watchlistGenreFilter ? "\u{2713} \(genre)" : genre
-            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
-                self?.applyWatchlistGenreFilter(genre)
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(sheet, animated: true)
+        guard case .watchlist = mode,
+              let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.kind == .watchlistHeader }),
+              let cell = collectionView.cellForItem(at: IndexPath(item: 0, section: sectionIndex)) as? WatchlistFilterHeaderControl
+        else { return }
+        let sourceFrame = cell.genreButtonView.convert(cell.genreButtonView.bounds, to: nil)
+        let popup = WatchlistGenreFilterPopupViewController(
+            genres: availableWatchlistGenres,
+            selected: watchlistGenreFilters,
+            sourceFrame: sourceFrame,
+            countProvider: { [weak self] candidate in
+                guard let self else { return 0 }
+                return self.watchlistItems(matchingType: self.watchlistTypeFilter, genres: candidate,
+                                           from: self.watchlistService.watchlistItems).count
+            },
+            onApply: { [weak self] genres in
+                self?.applyWatchlistGenreFilter(genres)
+            }
+        )
+        present(popup, animated: false)
     }
 
-    private func applyWatchlistGenreFilter(_ genre: String?) {
-        guard genre != watchlistGenreFilter else { return }
-        watchlistGenreFilter = genre
-        LibrarySettingsManager.shared.setWatchlistGenreFilter(genre)
+    private func applyWatchlistGenreFilter(_ genres: Set<String>) {
+        guard genres != watchlistGenreFilters else { return }
+        watchlistGenreFilters = genres
+        LibrarySettingsManager.shared.setWatchlistGenreFilters(genres)
         applySnapshot(animated: false)
         refreshWatchlistHeader()
     }
 
     /// Forces the header cell to re-read `watchlistSort`/`watchlistTypeFilter`/
-    /// `watchlistGenreFilter`. Needed because its diffable item id is constant
+    /// `watchlistGenreFilters`. Needed because its diffable item id is constant
     /// across every `applySnapshot` (same single row, mirrors `.sortHeader`'s
     /// own `refreshSortHeaderCount`), so a plain `apply` sees no identity
     /// change and never re-invokes the cell provider — the grid below

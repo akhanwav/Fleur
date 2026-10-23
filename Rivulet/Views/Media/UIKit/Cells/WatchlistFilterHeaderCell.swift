@@ -69,6 +69,10 @@ final class WatchlistFilterHeaderControl: UICollectionViewCell {
         set { genreButton.onSortTapped = newValue }
     }
 
+    /// For anchoring the multi-select Genre popup beside this button —
+    /// see `WatchlistGenreFilterPopupViewController`.
+    var genreButtonView: UIView { genreButton }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         setup()
