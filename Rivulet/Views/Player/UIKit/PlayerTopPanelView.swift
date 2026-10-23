@@ -217,6 +217,30 @@ final class PlayerTopPanelView: UIView {
             tabBarTrailing,
         ])
 
+        // Every tab's content pins to the SAME fixed height — the tallest
+        // tab's own natural height, measured up front — rather than each
+        // tying its height to this view's `bottomAnchor` independently.
+        // That shared-anchor form looked right with only one tab built, but
+        // with all three siblings present it was really asking this view to
+        // be three different heights simultaneously: UIKit resolves the
+        // conflict by fully laying out only whichever tab is visible when
+        // the panel is first built (Video, the default), and defers a
+        // HIDDEN tab's own Auto Layout pass until it's actually shown — so
+        // Subtitles, measured against a height that only ever belonged to
+        // Video, came out compressed and needing to scroll. Measuring each
+        // tab in isolation with `systemLayoutSizeFitting` (which runs a
+        // view's own constraints without needing it in a window at all)
+        // sidesteps that staleness entirely, and fixing every tab to the
+        // same height up front is also what keeps the panel from visibly
+        // resizing when the user switches tabs.
+        let tallestContentHeight = contentByTab.values.map {
+            $0.systemLayoutSizeFitting(
+                CGSize(width: Metrics.contentWidth, height: .greatestFiniteMagnitude),
+                withHorizontalFittingPriority: .required,
+                verticalFittingPriority: .fittingSizeLevel
+            ).height
+        }.max() ?? 0
+
         for tab in PlayerTopPanelTab.allCases {
             guard let content = contentByTab[tab] else { continue }
             addSubview(content)
@@ -226,9 +250,12 @@ final class PlayerTopPanelView: UIView {
                 content.topAnchor.constraint(equalTo: tabBar.bottomAnchor, constant: Metrics.tabBarToContent),
                 content.centerXAnchor.constraint(equalTo: centerXAnchor),
                 content.widthAnchor.constraint(equalToConstant: Metrics.contentWidth),
-                content.bottomAnchor.constraint(equalTo: bottomAnchor),
+                content.heightAnchor.constraint(equalToConstant: tallestContentHeight),
             ])
         }
+        bottomAnchor.constraint(
+            equalTo: tabBar.bottomAnchor, constant: Metrics.tabBarToContent + tallestContentHeight
+        ).isActive = true
 
         tabBar.onTabChanged = { [weak self] tab in
             guard let self else { return }

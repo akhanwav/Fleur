@@ -155,8 +155,16 @@ final class CardTrackListView: UIView {
         // The scroll view grows with content up to the popup's cap, so short
         // lists hug their rows and long ones scroll. Kept below the header's
         // compression resistance so an overflow scrolls instead of squashing it.
+        // `focusGrowth` on top of `bottomInset`: a focused row's pill grows
+        // `Metrics.focusGrowth` past its own bounds both ways (see
+        // `CardArrowStepperRowView.applyFocus`/`CardTrackRowButton.applyFocus`).
+        // The stack's bottom already clears it via `bottomInset`; without a
+        // matching top margin, the FIRST row's grown pill poked past the
+        // content area's top edge, which the focus engine reads as "not
+        // fully visible" and scrolled to fix — a scroll the content itself
+        // never needed.
         let scrollHeight = scrollView.heightAnchor.constraint(
-            equalTo: stack.heightAnchor, constant: Metrics.bottomInset)
+            equalTo: stack.heightAnchor, constant: Metrics.focusGrowth + Metrics.bottomInset)
         scrollHeight.priority = .defaultHigh - 1
 
         NSLayoutConstraint.activate([
@@ -170,7 +178,7 @@ final class CardTrackListView: UIView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
             scrollHeight,
 
-            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            stack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor, constant: Metrics.focusGrowth),
             stack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor, constant: Metrics.rowInset),
             stack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor, constant: -Metrics.rowInset),
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -Metrics.bottomInset),
