@@ -882,7 +882,7 @@ struct UniversalPlayerView: View {
             // and survives internal AVPlayer swaps without rebinding.
             AetherVideoSurfaceView(player: aether)
         } else if let player = viewModel.player, viewModel.streamURL != nil {
-            AVPlayerLayerView(player: player)
+            AVPlayerLayerView(player: player, videoGravity: viewModel.videoZoomMode.gravity)
         }
     }
 

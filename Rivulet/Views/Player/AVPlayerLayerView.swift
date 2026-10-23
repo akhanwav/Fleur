@@ -14,13 +14,15 @@ import AVFoundation
 /// SwiftUI wrapper for AVPlayerLayer.
 struct AVPlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
+    var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     func makeUIView(context: Context) -> AVPlayerUIView {
-        AVPlayerUIView(player: player)
+        AVPlayerUIView(player: player, videoGravity: videoGravity)
     }
 
     func updateUIView(_ uiView: AVPlayerUIView, context: Context) {
         uiView.playerLayer.player = player
+        uiView.playerLayer.videoGravity = videoGravity
     }
 }
 
@@ -31,10 +33,10 @@ class AVPlayerUIView: UIView {
 
     var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 
-    init(player: AVPlayer) {
+    init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect) {
         super.init(frame: .zero)
         playerLayer.player = player
-        playerLayer.videoGravity = .resizeAspect
+        playerLayer.videoGravity = videoGravity
         backgroundColor = .black
     }
 

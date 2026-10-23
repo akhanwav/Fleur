@@ -237,6 +237,7 @@ enum SubtitleStylePreset: String, CaseIterable {
     case largeText
     case transparentBackground
     case classic
+    case outline
 
     var title: String {
         switch self {
@@ -245,7 +246,17 @@ enum SubtitleStylePreset: String, CaseIterable {
         case .largeText: return "Large Text"
         case .transparentBackground: return "Transparent Background"
         case .classic: return "Classic"
+        case .outline: return "Outline"
         }
+    }
+
+    /// Cycles through every case (wrapping), in `CaseIterable` declaration
+    /// order, for the Quick Adjust panel's Left/Right Style row.
+    func advanced(bySteps steps: Int) -> SubtitleStylePreset {
+        let all = Self.allCases
+        let current = all.firstIndex(of: self) ?? 0
+        let next = ((current + steps) % all.count + all.count) % all.count
+        return all[next]
     }
 
     /// `nil` for `.useSystemSetting` — the caller reads `CaptionAppearance.current()` instead.
@@ -280,6 +291,14 @@ enum SubtitleStylePreset: String, CaseIterable {
                 backgroundColor: .black, backgroundOpacity: 1.0,
                 fontScale: 1.0, allowsContentFontSize: false,
                 fontDescriptor: nil, allowsContentFont: false, edge: .none)
+        case .outline:
+            // Normal size on purpose, unlike the real system's own Outline
+            // Text (which happens to enlarge too) — kept at the default here.
+            return CaptionStyle(
+                foreground: .white, allowsContentColor: false, foregroundOpacity: 1.0,
+                backgroundColor: .black, backgroundOpacity: 0.0,
+                fontScale: 1.0, allowsContentFontSize: false,
+                fontDescriptor: nil, allowsContentFont: false, edge: .uniform)
         }
     }
 

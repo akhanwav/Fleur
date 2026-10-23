@@ -401,6 +401,21 @@ final class UniversalPlayerViewModel: ObservableObject {
         scheduleDebouncedAudioSyncApply()
     }
 
+    /// Fit/fill, global and immediate. Published so `UniversalPlayerView`
+    /// re-renders `AVPlayerLayerView` with the new gravity on the hls route;
+    /// the aether route is applied directly to `AetherPlayer` below.
+    @Published private(set) var videoZoomMode: VideoZoomMode = VideoZoomAdjustment.mode
+
+    /// Cycles Fit/Fill. A plain display-layer property, not a pipeline
+    /// reload like Audio Sync, so every press applies immediately with no
+    /// debounce.
+    func adjustVideoZoom(bySteps steps: Int) {
+        let next = VideoZoomAdjustment.advanced(bySteps: steps)
+        VideoZoomAdjustment.mode = next
+        videoZoomMode = next
+        aetherPlayer?.videoGravity = next.gravity
+    }
+
     private func scheduleDebouncedAudioSyncApply() {
         audioSyncDebounceTimer?.invalidate()
         let timer = Timer(timeInterval: Self.audioSyncDebounceDelay, repeats: false) { [weak self] _ in

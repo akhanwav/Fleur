@@ -180,6 +180,7 @@ final class AetherPlayer: PlayerProtocol {
         // The engine otherwise uses system trust alone, so a server the API
         // session accepts would browse and never play (#337).
         EngineTLS.serverTrustEvaluator = { PlexCertificateDelegate.trustsUnverifiedCertificate(for: $0) }
+        engine.videoGravity = VideoZoomAdjustment.mode.gravity
         wireUpPublishers()
         observeAppLifecycle()
     }
@@ -1307,6 +1308,14 @@ final class AetherPlayer: PlayerProtocol {
     /// reload-at-position on the loopback route, a flush-seek on software.
     func setAudioDelay(_ seconds: Double) {
         engine.setAudioDelay(seconds)
+    }
+
+    /// Fit vs fill, applied directly to whichever surface the active backend
+    /// uses. `AVLayerVideoGravity` is a plain AVFoundation type, not an
+    /// AetherEngine one, so this doesn't widen the engine import.
+    var videoGravity: AVLayerVideoGravity {
+        get { engine.videoGravity }
+        set { engine.videoGravity = newValue }
     }
 
     func seek(to time: TimeInterval) async { await engine.seek(to: time) }

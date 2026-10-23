@@ -427,9 +427,15 @@ final class PlayerInfoPillButton: UIControl {
     var isSelectedTab = false {
         didSet { if !isFocused { applyAppearance(focused: false) } }
     }
+    /// Fires on Up (press or swipe) with nowhere to go — only meaningful for
+    /// a pill that is the topmost thing in its row (the top panel's tab
+    /// bar). Consumed before the focus engine ever sees the press, same
+    /// pattern as `CardStepperConfig.onUpAtStart`. Nil everywhere else.
+    var onUpAtStart: (() -> Void)?
     private let glass = UIVisualEffectView(effect: UIGlassEffect(style: .clear))
     private let highlight = UIView()
     private let label = UILabel()
+    private var upSwipeBinding: DirectionalInputBinding?
 
     /// `compact` is the smaller pill Insights' sub-tabs use, so they read as a second level.
     init(title: String, compact: Bool = false) {
@@ -471,6 +477,15 @@ final class PlayerInfoPillButton: UIControl {
             label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -padding),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+
+        // The touch-remote / iPhone-Remote twin of the press half below:
+        // those arrive as indirect-touch swipes, never as arrow presses.
+        upSwipeBinding = DirectionalInputBinding(
+            gatedSwipesOn: self,
+            directions: [.up],
+            shouldHandle: { [weak self] _ in self?.isFocused == true && self?.onUpAtStart != nil },
+            onSwipe: { [weak self] _ in self?.onUpAtStart?() }
+        )
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -496,9 +511,17 @@ final class PlayerInfoPillButton: UIControl {
 
     // Select does not fire .primaryActionTriggered on a plain UIControl on tvOS.
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
-        for press in presses where press.type == .select {
-            onPress?()
-            return
+        for press in presses {
+            switch press.type {
+            case .select:
+                onPress?()
+                return
+            case .upArrow where onUpAtStart != nil:
+                onUpAtStart?()
+                return
+            default:
+                break
+            }
         }
         super.pressesBegan(presses, with: event)
     }

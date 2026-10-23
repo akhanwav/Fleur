@@ -53,7 +53,9 @@ final class CardTrackListView: UIView {
     private let actions: [CardActionConfig]
     private let toggles: [CardToggleConfig]
     private let steppers: [CardStepperConfig]
-    private let styleOptions: [CardStyleOptionConfig]
+    /// Plain, non-focusable text under the header (the Video tab's read-only
+    /// resolution/HDR/frame-rate/route line). Nil everywhere else.
+    private let infoLine: String?
     private let onSelect: (Int?) -> Void
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
@@ -79,7 +81,6 @@ final class CardTrackListView: UIView {
     convenience init(header: String, tracks: [MediaTrack], selectedTrackId: Int?, showsOffRow: Bool,
                      actions: [CardActionConfig] = [],
                      toggles: [CardToggleConfig] = [], steppers: [CardStepperConfig] = [],
-                     styleOptions: [CardStyleOptionConfig] = [],
                      onSelect: @escaping (Int?) -> Void) {
         var rows: [Row] = []
         if showsOffRow {
@@ -93,19 +94,17 @@ final class CardTrackListView: UIView {
                 isSelected: track.id == selectedTrackId
             )
         })
-        self.init(header: header, rows: rows, actions: actions, toggles: toggles, steppers: steppers,
-                  styleOptions: styleOptions, onSelect: onSelect)
+        self.init(header: header, rows: rows, actions: actions, toggles: toggles, steppers: steppers, onSelect: onSelect)
     }
 
     /// A plain list of choices: each row's `trackId` is what `onSelect` receives.
     init(header: String, rows: [Row], actions: [CardActionConfig] = [], toggles: [CardToggleConfig] = [],
-         steppers: [CardStepperConfig] = [], styleOptions: [CardStyleOptionConfig] = [],
-         onSelect: @escaping (Int?) -> Void) {
+         steppers: [CardStepperConfig] = [], infoLine: String? = nil, onSelect: @escaping (Int?) -> Void) {
         self.rows = rows
         self.actions = actions
         self.toggles = toggles
         self.steppers = steppers
-        self.styleOptions = styleOptions
+        self.infoLine = infoLine
         self.onSelect = onSelect
         super.init(frame: .zero)
         setupViews(header: header)
@@ -155,6 +154,25 @@ final class CardTrackListView: UIView {
             stack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor, constant: -Metrics.bottomInset),
             stack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor, constant: -2 * Metrics.rowInset),
         ])
+
+        if let infoLine, !infoLine.isEmpty {
+            let label = UILabel()
+            label.text = infoLine
+            label.font = Metrics.secondaryFont
+            label.textColor = Metrics.secondaryColor
+            label.numberOfLines = 0
+            let row = UIView()
+            row.isUserInteractionEnabled = false
+            row.addSubview(label)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                label.topAnchor.constraint(equalTo: row.topAnchor, constant: 4),
+                label.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -18),
+                label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: Metrics.titleX),
+                label.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -Metrics.checkColumnX),
+            ])
+            stack.addArrangedSubview(row)
+        }
 
         for row in rows {
             let button = CardTrackRowButton(row: row)
@@ -226,29 +244,6 @@ final class CardTrackListView: UIView {
             }
             stack.addArrangedSubview(row)
             stepperRows.append(row)
-        }
-
-        // Caption style presets (Use System Setting / Default / Large Text /
-        // ...): live preview as focus moves between them, like the rail's
-        // info pills switching tabs on focus rather than on a separate
-        // select — not a toggle, so moving off a row never unchecks it on
-        // its own; only another row gaining focus moves the checkmark.
-        if !styleOptions.isEmpty, !rowButtons.isEmpty {
-            stack.addArrangedSubview(MenuSeparatorView())
-        }
-        var styleOptionButtons: [CardTrackRowButton] = []
-        for config in styleOptions {
-            let button = CardTrackRowButton(row: Row(
-                title: config.title, subtitle: nil, trackId: nil, isSelected: config.isSelected()))
-            button.onFocusChanged = { [weak button] focused in
-                guard focused, let button else { return }
-                config.onFocus()
-                styleOptionButtons.forEach { $0.isChecked = ($0 === button) }
-            }
-            button.onTap = { config.onFocus() }
-            stack.addArrangedSubview(button)
-            rowButtons.append(button)
-            styleOptionButtons.append(button)
         }
     }
 
@@ -337,19 +332,6 @@ struct CardToggleConfig {
     let title: String
     let isOn: () -> Bool
     let onToggle: (Bool) -> Void
-}
-
-// MARK: - CardStyleOptionConfig
-
-/// One row in a mutually-exclusive, focus-driven choice list (the player's
-/// caption style presets): unlike a toggle, selection follows FOCUS, not a
-/// tap — `onFocus` fires the moment this row is focused, and the row's own
-/// checkmark is the container's job (`CardTrackListView.setupViews`), since
-/// gaining it must move the mark off whichever row had it before.
-struct CardStyleOptionConfig {
-    let title: String
-    let isSelected: () -> Bool
-    let onFocus: () -> Void
 }
 
 // MARK: - CardStepperConfig
@@ -781,9 +763,6 @@ final class CardTrackRowButton: UIControl {
 
     let row: CardTrackListView.Row
     var onTap: (() -> Void)?
-    /// Fires on every focus change, gained or lost. Nil for every row except
-    /// the caption style presets, which preview live as focus moves.
-    var onFocusChanged: ((Bool) -> Void)?
     var isChecked: Bool {
         get { !checkmarkView.isHidden }
         set { checkmarkView.isHidden = !newValue }
@@ -888,7 +867,6 @@ final class CardTrackRowButton: UIControl {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let isFocused = context.nextFocusedView === self
-        onFocusChanged?(isFocused)
         coordinator.animateFocusChange(gained: isFocused) {
             self.applyFocus(isFocused)
         }

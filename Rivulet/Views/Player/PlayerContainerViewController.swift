@@ -1440,15 +1440,6 @@ class PlayerContainerViewController: UIViewController {
                             },
                             onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) }),
                     ],
-                    styleOptions: SubtitleStylePreset.allCases.map { preset in
-                        CardStyleOptionConfig(
-                            title: preset.title,
-                            isSelected: { SubtitleStylePreset.selected == preset },
-                            onFocus: { [weak self] in
-                                SubtitleStylePreset.selected = preset
-                                self?.captionOverlay?.style = SubtitleStylePreset.effectiveStyle
-                            })
-                    },
                     onSelect: { [weak vm, weak self] id in
                         vm?.selectSubtitleTrack(id: id)
                         self?.activeRailPanel?.dismissPanel()
@@ -1670,16 +1661,22 @@ class PlayerContainerViewController: UIViewController {
 
     // MARK: - Top panel (quick adjust)
 
-    /// Down from the content state: Audio Sync, Subtitle Delay, Subtitle
-    /// Position in one short list, docked to the top edge. Independent of
-    /// the bottom rail — playback keeps running and nothing else about the
-    /// chrome changes. Stays open until dismissed with Menu (handled by
-    /// `PlayerRailPanelView.pressesBegan` like any other panel) or Down past
-    /// the last row (`CardStepperConfig.onDownAtEnd`, below).
+    /// Down from the content state: a tabbed Video/Audio/Subtitles panel
+    /// docked to the top edge. Independent of the bottom rail — playback
+    /// keeps running and nothing else about the chrome changes. Stays open
+    /// until dismissed with Menu (handled by `PlayerRailPanelView.pressesBegan`
+    /// like any other panel) or Up past the tab bar (`PlayerTopPanelTabBar`).
     private func presentTopPanel() {
         guard let vm = viewModel, activeTopPanel == nil, activeRailPanel == nil else { return }
-        let content = CardTrackListView(
-            header: "Quick Adjust", rows: [], steppers: topPanelSteppers(vm: vm), onSelect: { _ in })
+        weak var panelRef: PlayerTopPanelView?
+        let returnToTabBar: () -> Void = { panelRef?.focusTabBar() }
+        let content = PlayerTopPanelView(contentByTab: [
+            .video: videoTabContent(vm: vm, onUpAtStart: returnToTabBar),
+            .audio: audioTabContent(vm: vm, onUpAtStart: returnToTabBar),
+            .subtitles: subtitlesTabContent(vm: vm, onUpAtStart: returnToTabBar),
+        ])
+        panelRef = content
+        content.onCloseRequested = { [weak self] in self?.dismissTopPanel() }
         let panel = PlayerRailPanelView.presentTop(content: content, width: CardTrackListView.menuWidth, in: view)
         activeTopPanel = panel
         // Disabling the anchor (now that `anchorEnabled` accounts for
@@ -1708,44 +1705,110 @@ class PlayerContainerViewController: UIViewController {
         activeTopPanel?.dismissPanel()
     }
 
-    /// Audio Sync only applies on the aether route (AVPlayer/hls has no
-    /// audio-delay hook) — same gating as the Audio panel's own Sync
-    /// stepper, and the SAME global value, shared live with both.
-    private func topPanelSteppers(vm: UniversalPlayerViewModel) -> [CardStepperConfig] {
-        var steppers: [CardStepperConfig] = []
-        if vm.aetherPlayer != nil {
-            steppers.append(CardStepperConfig(
-                title: "Audio Sync",
-                value: { [weak vm] in
-                    guard let vm else { return AudioSyncAdjustments.formatted(0) }
-                    return vm.isApplyingAudioSync
-                        ? "Applying…" : AudioSyncAdjustments.formatted(vm.audioSyncOffsetMs)
-                },
-                onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) },
-                usesArrowKeys: true,
-                changePublisher: Publishers.Merge(
-                    vm.$audioSyncOffsetMs.map { _ in () },
-                    vm.$isApplyingAudioSync.map { _ in () }
-                ).eraseToAnyPublisher()))
+    /// "4K • Dolby Vision • 23.976 fps • Direct Play" — whatever of these is
+    /// actually known for this title. Every field already exists elsewhere
+    /// (the Details pane reads the same ones); this just condenses them.
+    private func videoInfoLine(vm: UniversalPlayerViewModel) -> String {
+        let meta = vm.metadata
+        var parts: [String] = []
+        if let resolution = meta.Media?.first?.videoResolution {
+            parts.append(resolution.lowercased() == "4k" ? "4K" : resolution.uppercased())
         }
-        steppers.append(CardStepperConfig(
-            title: "Subtitle Delay",
-            value: { [weak vm] in SubtitleAdjustments.formattedDelay(vm?.subtitleDelaySeconds ?? 0) },
-            onStep: { [weak vm] step in vm?.adjustSubtitleDelay(bySteps: step) },
-            usesArrowKeys: true))
-        steppers.append(CardStepperConfig(
-            title: "Subtitle Position",
-            value: { [weak vm] in SubtitleAdjustments.formattedHeight(vm?.subtitleHeightUnits ?? 0) },
-            onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) },
-            usesArrowKeys: true))
-        // First row: Up here has nowhere else to go, so it closes the panel
-        // (it slides back up, mirroring how it opened). Down past the last
-        // row does nothing instead — no onDownAtEnd set anywhere above.
-        if var first = steppers.first {
-            first.onUpAtStart = { [weak self] in self?.dismissTopPanel() }
-            steppers[0] = first
+        if meta.hasDolbyVision {
+            parts.append("Dolby Vision")
+        } else if meta.hasHDR {
+            parts.append("HDR10")
         }
-        return steppers
+        if let frameRate = meta.Media?.first?.videoFrameRate { parts.append(frameRate) }
+        parts.append(vm.streamingModeInfo.video.rawValue)
+        return parts.joined(separator: " • ")
+    }
+
+    /// Zoom (Fit/Fill) and Quality, plus a read-only line of what's actually
+    /// playing. Filter doesn't fit here — it's a language/scene setting, not
+    /// a picture one — and stays rail-only.
+    private func videoTabContent(vm: UniversalPlayerViewModel, onUpAtStart: @escaping () -> Void) -> CardTrackListView {
+        CardTrackListView(
+            header: "Video", rows: [],
+            steppers: [
+                CardStepperConfig(
+                    title: "Zoom",
+                    value: { [weak vm] in vm?.videoZoomMode.title ?? VideoZoomMode.fit.title },
+                    onStep: { [weak vm] step in vm?.adjustVideoZoom(bySteps: step) },
+                    usesArrowKeys: true,
+                    onUpAtStart: onUpAtStart),
+                CardStepperConfig(
+                    title: "Quality",
+                    value: { [weak vm] in vm?.qualityChoice.label ?? StreamingQuality.original.label },
+                    onStep: { [weak vm] step in
+                        guard let vm else { return }
+                        let choices = StreamingQuality.allChoices
+                        guard let index = choices.firstIndex(of: vm.qualityChoice) else { return }
+                        let next = ((index + step) % choices.count + choices.count) % choices.count
+                        vm.selectQuality(choices[next])
+                    },
+                    usesArrowKeys: true),
+            ],
+            infoLine: videoInfoLine(vm: vm),
+            onSelect: { _ in })
+    }
+
+    /// Audio Sync, the same global value shared live with the Audio panel's
+    /// own Sync stepper. aether route only — AVPlayer (hls) has no
+    /// audio-delay hook, so the tab shows a plain notice instead.
+    private func audioTabContent(vm: UniversalPlayerViewModel, onUpAtStart: @escaping () -> Void) -> CardTrackListView {
+        guard vm.aetherPlayer != nil else {
+            return CardTrackListView(
+                header: "Audio", rows: [], infoLine: "Not available for this stream", onSelect: { _ in })
+        }
+        return CardTrackListView(
+            header: "Audio", rows: [],
+            steppers: [
+                CardStepperConfig(
+                    title: "Sync",
+                    value: { [weak vm] in
+                        guard let vm else { return AudioSyncAdjustments.formatted(0) }
+                        return vm.isApplyingAudioSync
+                            ? "Applying…" : AudioSyncAdjustments.formatted(vm.audioSyncOffsetMs)
+                    },
+                    onStep: { [weak vm] step in vm?.adjustAudioSync(bySteps: step) },
+                    usesArrowKeys: true,
+                    changePublisher: Publishers.Merge(
+                        vm.$audioSyncOffsetMs.map { _ in () },
+                        vm.$isApplyingAudioSync.map { _ in () }
+                    ).eraseToAnyPublisher(),
+                    onUpAtStart: onUpAtStart),
+            ],
+            onSelect: { _ in })
+    }
+
+    /// Style (cycling, with live preview), Delay, Position.
+    private func subtitlesTabContent(vm: UniversalPlayerViewModel, onUpAtStart: @escaping () -> Void) -> CardTrackListView {
+        CardTrackListView(
+            header: "Subtitles", rows: [],
+            steppers: [
+                CardStepperConfig(
+                    title: "Style",
+                    value: { SubtitleStylePreset.selected.title },
+                    onStep: { [weak self] step in
+                        let next = SubtitleStylePreset.selected.advanced(bySteps: step)
+                        SubtitleStylePreset.selected = next
+                        self?.captionOverlay?.style = SubtitleStylePreset.effectiveStyle
+                    },
+                    usesArrowKeys: true,
+                    onUpAtStart: onUpAtStart),
+                CardStepperConfig(
+                    title: "Delay",
+                    value: { [weak vm] in SubtitleAdjustments.formattedDelay(vm?.subtitleDelaySeconds ?? 0) },
+                    onStep: { [weak vm] step in vm?.adjustSubtitleDelay(bySteps: step) },
+                    usesArrowKeys: true),
+                CardStepperConfig(
+                    title: "Position",
+                    value: { [weak vm] in SubtitleAdjustments.formattedHeight(vm?.subtitleHeightUnits ?? 0) },
+                    onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) },
+                    usesArrowKeys: true),
+            ],
+            onSelect: { _ in })
     }
 
     // MARK: - Info pane
