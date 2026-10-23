@@ -45,6 +45,12 @@ final class PlayerRailPanelView: UIView {
     /// The gray laid over `.clear` glass that matches AVKit's panels.
     static let glassWash = UIColor(white: 0.35, alpha: 0.18)
 
+    /// The top quick-adjust panel's own wash: AVKit's panels sit in a
+    /// corner the content behind them rarely fills, but this one is docked
+    /// top-center over whatever's playing, so `glassWash`'s light 18% reads
+    /// as barely-there over a bright scene. Near-opaque black instead.
+    static let topPanelWash = UIColor(white: 0, alpha: 0.78)
+
     /// Height available to panel CONTENT at the panel's full size. Content that
     /// wants a constant panel (rather than one that grows and shrinks with what
     /// it happens to be showing) constrains itself to this.
@@ -56,9 +62,9 @@ final class PlayerRailPanelView: UIView {
         /// Inset for free-form content. Menus (`CardTrackListView`) fill the platter.
         static let padding: CGFloat = 20
         static let maxHeight: CGFloat = 560
+        /// The side-popup/pane margin, and the top panel's own leading/trailing
+        /// margin (its top gap is `topPanelInset` instead, closer than this).
         static let screenMargin: CGFloat = 80
-        /// The top quick-adjust panel's own gap from the safe area — closer
-        /// than `screenMargin`, which is the side-popup/pane margin.
         static let topPanelInset: CGFloat = 32
         /// AVKit grows the platter from 10% scale on this spring, both ways.
         static let collapsedScale: CGFloat = 0.1
@@ -116,26 +122,27 @@ final class PlayerRailPanelView: UIView {
         self.content = content
         // `.clear` glass plus a light gray wash lands on AVKit's private
         // `.avplayer` glass over black, mid gray and white (within 1-7 levels).
-        // `.regular` darkens where AVKit lifts.
-        backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: .clear))
+        // `.regular` darkens where AVKit lifts — which is what the top panel
+        // wants, on top of its own much darker wash below.
+        backgroundEffectView = UIVisualEffectView(effect: UIGlassEffect(style: style == .topPanel ? .regular : .clear))
         super.init(frame: .zero)
 
         backgroundEffectView.clipsToBounds = true
         backgroundEffectView.layer.cornerRadius = Metrics.cornerRadius
         backgroundEffectView.layer.cornerCurve = .continuous
 
-        wash.backgroundColor = Self.glassWash
+        wash.backgroundColor = style == .topPanel ? Self.topPanelWash : Self.glassWash
         wash.layer.cornerRadius = Metrics.cornerRadius
         wash.layer.cornerCurve = .continuous
         wash.isUserInteractionEnabled = false
 
         let padding: CGFloat
         switch style {
-        case .popup: padding = content is CardTrackListView ? 0 : Metrics.padding
+        case .popup, .topPanel: padding = content is CardTrackListView ? 0 : Metrics.padding
         case .paneCard: padding = Metrics.padding
         case .paneContent: padding = 0
         }
-        if style != .popup {
+        if style == .paneCard || style == .paneContent {
             [backgroundEffectView, wash].forEach { $0.layer.cornerRadius = Metrics.paneCardRadius }
             wash.backgroundColor = TransportControlButton.restingWash
         }
@@ -175,6 +182,10 @@ final class PlayerRailPanelView: UIView {
         case paneContent
         /// Free-form pane content on a glass card.
         case paneCard
+        /// The top quick-adjust panel: same platter radius as a popup, but
+        /// its own much darker wash and a `.regular` glass base — see
+        /// `topPanelWash`.
+        case topPanel
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -218,17 +229,20 @@ final class PlayerRailPanelView: UIView {
     /// dismisses it like any other panel (`pressesBegan` below), and so does
     /// Up past the first row — it slides back up, mirroring how it opened —
     /// while Down past the last row does nothing (the content's own job,
-    /// `CardStepperConfig.onUpAtStart` / `onDownAtEnd`).
+    /// `CardStepperConfig.onUpAtStart` / `onDownAtEnd`). Spans the screen
+    /// within the standard side margin (`Metrics.screenMargin`) rather than
+    /// a fixed, centered width — a corner-popup width doesn't have the
+    /// presence this panel needs sitting top-center over bright video.
     @discardableResult
-    static func presentTop(content: UIView, width: CGFloat, in container: UIView) -> PlayerRailPanelView {
-        let panel = PlayerRailPanelView(content: content)
+    static func presentTop(content: UIView, in container: UIView) -> PlayerRailPanelView {
+        let panel = PlayerRailPanelView(content: content, style: .topPanel)
         panel.isTopPanel = true
         container.addSubview(panel)
         panel.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            panel.widthAnchor.constraint(equalToConstant: content is CardTrackListView ? CardTrackListView.menuWidth : width),
+            panel.leadingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.leadingAnchor, constant: Metrics.screenMargin),
+            panel.trailingAnchor.constraint(equalTo: container.safeAreaLayoutGuide.trailingAnchor, constant: -Metrics.screenMargin),
             panel.topAnchor.constraint(equalTo: container.safeAreaLayoutGuide.topAnchor, constant: Metrics.topPanelInset),
-            panel.centerXAnchor.constraint(equalTo: container.centerXAnchor),
         ])
         container.layoutIfNeeded()
 

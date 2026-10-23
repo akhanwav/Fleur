@@ -164,15 +164,6 @@ final class PlayerTopPanelTabBar: UIView {
 /// switch, and it keeps whatever each tab's `CardTrackListView` already
 /// tracks about its own focus.
 final class PlayerTopPanelView: UIView {
-    /// Wide enough for three comfortably-sized pills ("Subtitles" being the
-    /// long one) plus real margin either side — the narrow 450pt popup/menu
-    /// width (sized for a single column of choices) left them crushed
-    /// against each other and, with the stack's own trailing constraint
-    /// required against a too-small bound, produced an unsatisfiable Auto
-    /// Layout pass whose resulting frames weren't just visually cramped but
-    /// geometrically broken enough to throw off focus navigation too.
-    static let width: CGFloat = 720
-
     private enum Metrics {
         static let tabBarTop: CGFloat = 24
         static let tabBarToContent: CGFloat = 24

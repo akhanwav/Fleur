@@ -1684,12 +1684,16 @@ class PlayerContainerViewController: UIViewController {
     // MARK: - Top panel (quick adjust)
 
     /// Down from the content state: a tabbed Video/Audio/Subtitles panel
-    /// docked to the top edge. Independent of the bottom rail — playback
-    /// keeps running and nothing else about the chrome changes. Stays open
-    /// until dismissed with Menu (handled by `PlayerRailPanelView.pressesBegan`
-    /// like any other panel) or Up past the tab bar (`PlayerTopPanelTabBar`).
+    /// docked to the top edge. Playback keeps running, but the panel and the
+    /// bottom rail are mutually exclusive — opening this one hides the rail
+    /// if it's up (so focus never has to travel between them;
+    /// `applyChromeVisibility` closes this panel back when the rail needs to
+    /// show instead). Stays open until dismissed with Menu (handled by
+    /// `PlayerRailPanelView.pressesBegan` like any other panel) or Up past
+    /// the tab bar (`PlayerTopPanelTabBar`).
     private func presentTopPanel() {
         guard let vm = viewModel, activeTopPanel == nil, activeRailPanel == nil else { return }
+        if vm.showControls { vm.showControls = false }
         weak var panelRef: PlayerTopPanelView?
         let returnToTabBar: () -> Void = { panelRef?.focusTabBar() }
         let content = PlayerTopPanelView(contentByTab: [
@@ -1699,7 +1703,7 @@ class PlayerContainerViewController: UIViewController {
         ])
         panelRef = content
         content.onCloseRequested = { [weak self] in self?.dismissTopPanel() }
-        let panel = PlayerRailPanelView.presentTop(content: content, width: PlayerTopPanelView.width, in: view)
+        let panel = PlayerRailPanelView.presentTop(content: content, in: view)
         activeTopPanel = panel
         // Disabling the anchor (now that `anchorEnabled` accounts for
         // `activeTopPanel`) and THEN asking for an update is what actually
@@ -2168,6 +2172,19 @@ class PlayerContainerViewController: UIViewController {
 
     private func applyChromeVisibility() {
         guard let vm = viewModel else { return }
+
+        // Quick Adjust and the bottom rail/progress bar are mutually
+        // exclusive. Something just asked to show the bottom chrome
+        // (`showControls`/`isScrubbing`, from any of their many call sites)
+        // while the top panel is still up — close it first; its `onDismiss`
+        // re-invokes this pass once it's actually gone, so the rest of this
+        // method runs with `activeTopPanel` already nil rather than drawing
+        // both at once.
+        if let panel = activeTopPanel, panel.window != nil, vm.showControls || vm.isScrubbing {
+            dismissTopPanel()
+            return
+        }
+
         let isLoading = vm.playbackState == .loading || vm.playbackState == .idle
         // Buffering shares the loading label but none of the other loading
         // treatment (no skeleton, no focus gate) — see the state sink.
