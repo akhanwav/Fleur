@@ -898,6 +898,22 @@ class PlayerContainerViewController: UIViewController {
             return
         }
 
+        // A panel's close animation (~0.25-0.35s: the rail's hide fade, the
+        // top panel's slide-away) runs with its tracking var (activeRailPanel
+        // / activeTopPanel) already cleared and `showControls` already false,
+        // set synchronously by the press that started it — only the VIEW is
+        // still on screen, fading out. A second Menu press landing in that
+        // window (a very normal reflex: the chrome visually hasn't gone yet)
+        // finds nothing open by every check below and falls through to
+        // "nothing else to close", exiting the whole player out from under a
+        // still-visible progress bar or Quick Adjust panel. `blockNextDismiss`
+        // already exists for exactly this grace window (it guards the
+        // system's own redundant `dismiss(animated:)`); absorb a genuine
+        // repeat Menu press here too, rather than only the system's echo.
+        if blockNextDismiss {
+            return
+        }
+
         if descriptionOverlay != nil {
             dismissDescription()
             blockDismissTemporarily()
@@ -938,8 +954,10 @@ class PlayerContainerViewController: UIViewController {
                 // the target-less fallback; the primary path routes .back
                 // through the coordinator to the same behavior.
                 vm.dismissPostVideo()
+                blockDismissTemporarily()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
+                blockDismissTemporarily()
             } else if let panel = activeRailPanel {
                 // Edge case only: while focus is inside the panel, Menu is
                 // consumed by PlayerRailPanelView.pressesBegan (presses go
@@ -950,16 +968,20 @@ class PlayerContainerViewController: UIViewController {
                 if !panel.contentHandlesMenuPress() {
                     panel.dismissPanel()
                 }
+                blockDismissTemporarily()
             } else if let panel = activeTopPanel {
                 if !panel.contentHandlesMenuPress() {
                     panel.dismissPanel()
                 }
+                blockDismissTemporarily()
             } else if vm.controlsFocusActive {
                 vm.exitControlsFocus()
+                blockDismissTemporarily()
             } else if vm.showControls {
                 withAnimation(.easeOut(duration: 0.25)) {
                     vm.showControls = false
                 }
+                blockDismissTemporarily()
             } else {
                 dismissPlayer()
             }
