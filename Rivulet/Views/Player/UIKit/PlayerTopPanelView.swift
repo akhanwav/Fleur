@@ -168,6 +168,12 @@ final class PlayerTopPanelView: UIView {
         static let tabBarTop: CGFloat = 24
         static let tabBarToContent: CGFloat = 24
         static let sideInset: CGFloat = 35
+        /// Each tab's settings sit at this width, centered in the panel —
+        /// the panel itself now spans close to the full screen
+        /// (`PlayerRailPanelView.presentTop`), and rows stretched edge to
+        /// edge at that width read as sparse, with the value column far
+        /// from its title.
+        static let contentWidth: CGFloat = 900
     }
 
     /// Which half of the panel `preferredFocusEnvironments` should hand
@@ -196,15 +202,18 @@ final class PlayerTopPanelView: UIView {
 
         addSubview(tabBar)
         tabBar.translatesAutoresizingMaskIntoConstraints = false
-        // Same reasoning as the tab bar's own stack trailing constraint:
+        // Centered now that the panel spans close to the full screen — a
+        // leading-aligned tab row read as stranded in the left margin at
+        // that width. The leading/trailing anchors stay as a safety bound
+        // (same reasoning as the tab bar's own stack trailing constraint:
         // required-vs-required against a too-small width is how the
-        // previous layout broke. At `width` above this never actually
-        // binds, but it stays a soft bound rather than a hard one.
+        // previous layout broke), never binding at the panel's actual size.
+        let tabBarLeading = tabBar.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: Metrics.sideInset)
         let tabBarTrailing = tabBar.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -Metrics.sideInset)
-        tabBarTrailing.priority = .defaultLow + 250
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.tabBarTop),
-            tabBar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.sideInset),
+            tabBar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            tabBarLeading,
             tabBarTrailing,
         ])
 
@@ -215,8 +224,8 @@ final class PlayerTopPanelView: UIView {
             content.isHidden = tab != initialTab
             NSLayoutConstraint.activate([
                 content.topAnchor.constraint(equalTo: tabBar.bottomAnchor, constant: Metrics.tabBarToContent),
-                content.leadingAnchor.constraint(equalTo: leadingAnchor),
-                content.trailingAnchor.constraint(equalTo: trailingAnchor),
+                content.centerXAnchor.constraint(equalTo: centerXAnchor),
+                content.widthAnchor.constraint(equalToConstant: Metrics.contentWidth),
                 content.bottomAnchor.constraint(equalTo: bottomAnchor),
             ])
         }

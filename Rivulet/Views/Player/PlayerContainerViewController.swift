@@ -411,6 +411,10 @@ class PlayerContainerViewController: UIViewController {
                 panel.dismissPanel()
                 return
             }
+            if let panel = activeTopPanel {
+                panel.dismissPanel()
+                return
+            }
             // Back from the transport buttons closes the whole chrome in one
             // press (not first de-focusing onto the scrubber). Hiding
             // showControls cascades to clear controlsFocusActive via its didSet.
@@ -1705,6 +1709,18 @@ class PlayerContainerViewController: UIViewController {
         content.onCloseRequested = { [weak self] in self?.dismissTopPanel() }
         let panel = PlayerRailPanelView.presentTop(content: content, in: view)
         activeTopPanel = panel
+        // The system's Menu gesture recognizer races the panel's own
+        // responder-chain consumption and calls dismiss(animated:) on this
+        // VC afterwards — arm the block so that echo is swallowed instead of
+        // force-dismissing the player out from under a panel that just
+        // handled Menu internally. `adoptRailPanel` wires this same hook for
+        // every bottom-rail panel; this panel doesn't go through that helper
+        // (it isn't a rail panel/pane), so it needs its own line — missing
+        // it was the Back-exits-the-player bug: `dismissPanel()` ran, but
+        // with the echo unblocked `dismiss(animated:)`'s own ladder (which
+        // checks `activeRailPanel`, not `activeTopPanel`) found nothing to
+        // close and exited the player right behind it.
+        panel.onMenuHandled = { [weak self] in self?.blockDismissTemporarily() }
         // Disabling the anchor (now that `anchorEnabled` accounts for
         // `activeTopPanel`) and THEN asking for an update is what actually
         // moves focus — a bare setNeedsFocusUpdate does nothing while the
@@ -1750,6 +1766,12 @@ class PlayerContainerViewController: UIViewController {
         return parts.joined(separator: " • ")
     }
 
+    /// Quick Adjust's own rows read noticeably smaller than their new ~900pt
+    /// row width suggested, now that the panel itself spans close to the
+    /// full screen — about 18% over `CardTrackListView`'s normal (450pt
+    /// popup) size, with the row height scaled to match so nothing clips.
+    private static let quickAdjustRowScale: CGFloat = 1.18
+
     /// Zoom (Fit/Fill) and Quality, plus a read-only line of what's actually
     /// playing. Filter doesn't fit here — it's a language/scene setting, not
     /// a picture one — and stays rail-only.
@@ -1776,6 +1798,7 @@ class PlayerContainerViewController: UIViewController {
                     usesArrowKeys: true),
             ],
             infoLine: videoInfoLine(vm: vm),
+            rowScale: Self.quickAdjustRowScale,
             onSelect: { _ in })
     }
 
@@ -1805,6 +1828,7 @@ class PlayerContainerViewController: UIViewController {
                     ).eraseToAnyPublisher(),
                     onUpAtStart: onUpAtStart),
             ],
+            rowScale: Self.quickAdjustRowScale,
             onSelect: { _ in })
     }
 
@@ -1834,6 +1858,7 @@ class PlayerContainerViewController: UIViewController {
                     onStep: { [weak vm] step in vm?.adjustSubtitleHeight(bySteps: step) },
                     usesArrowKeys: true),
             ],
+            rowScale: Self.quickAdjustRowScale,
             onSelect: { _ in })
     }
 

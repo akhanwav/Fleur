@@ -97,14 +97,23 @@ final class CardTrackListView: UIView {
         self.init(header: header, rows: rows, actions: actions, toggles: toggles, steppers: steppers, onSelect: onSelect)
     }
 
+    /// Scales an arrow-key stepper row's title/value text and height. Only
+    /// `CardArrowStepperRowView` reads it — the other row kinds (track rows,
+    /// actions, toggles, the two-button stepper) are never used by the
+    /// player's Quick Adjust panel, the one caller that wants larger text,
+    /// so there was nothing to plumb it into there.
+    private let rowScale: CGFloat
+
     /// A plain list of choices: each row's `trackId` is what `onSelect` receives.
     init(header: String, rows: [Row], actions: [CardActionConfig] = [], toggles: [CardToggleConfig] = [],
-         steppers: [CardStepperConfig] = [], infoLine: String? = nil, onSelect: @escaping (Int?) -> Void) {
+         steppers: [CardStepperConfig] = [], infoLine: String? = nil, rowScale: CGFloat = 1.0,
+         onSelect: @escaping (Int?) -> Void) {
         self.rows = rows
         self.actions = actions
         self.toggles = toggles
         self.steppers = steppers
         self.infoLine = infoLine
+        self.rowScale = rowScale
         self.onSelect = onSelect
         super.init(frame: .zero)
         setupViews(header: header)
@@ -232,7 +241,7 @@ final class CardTrackListView: UIView {
         }
         for config in steppers {
             let row: UIView & CardStepperRowControl = config.usesArrowKeys
-                ? CardArrowStepperRowView(config: config)
+                ? CardArrowStepperRowView(config: config, scale: rowScale)
                 : CardStepperRowView(config: config)
             row.onStep = { [weak self] in self?.scheduleStepperRefresh() }
             // A stepper whose value can change on its own after a press
@@ -607,12 +616,18 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
 
     var onStep: (() -> Void)?
 
-    init(config: CardStepperConfig) {
+    /// Scales title/value text and the row's own height uniformly, so a
+    /// larger row stays proportioned rather than just gaining dead space —
+    /// see `CardTrackListView.rowScale`.
+    private let scale: CGFloat
+
+    init(config: CardStepperConfig, scale: CGFloat = 1.0) {
         self.config = config
+        self.scale = scale
         super.init(frame: .zero)
         typealias M = CardTrackListView.Metrics
 
-        pill.layer.cornerRadius = M.rowRadius
+        pill.layer.cornerRadius = M.rowRadius * scale
         pill.layer.cornerCurve = .continuous
         pill.layer.shadowColor = UIColor.black.cgColor
         pill.layer.shadowOffset = CGSize(width: 0, height: 20)
@@ -621,11 +636,11 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
         content.isUserInteractionEnabled = false
 
         titleLabel.text = config.title
-        titleLabel.font = M.titleFont
+        titleLabel.font = M.titleFont.withSize(M.titleFont.pointSize * scale)
         titleLabel.textColor = .white
 
         valueLabel.text = config.value()
-        valueLabel.font = .monospacedDigitSystemFont(ofSize: 23, weight: .medium)
+        valueLabel.font = .monospacedDigitSystemFont(ofSize: 23 * scale, weight: .medium)
         valueLabel.textColor = M.secondaryColor
         valueLabel.textAlignment = .right
 
@@ -635,7 +650,7 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
         [content, titleLabel, valueLabel].forEach { $0.translatesAutoresizingMaskIntoConstraints = false }
 
         NSLayoutConstraint.activate([
-            heightAnchor.constraint(equalToConstant: M.rowHeight),
+            heightAnchor.constraint(equalToConstant: (M.rowHeight * scale).rounded()),
             content.topAnchor.constraint(equalTo: topAnchor),
             content.bottomAnchor.constraint(equalTo: bottomAnchor),
             content.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -737,7 +752,7 @@ final class CardArrowStepperRowView: UIView, CardStepperRowControl {
         typealias M = CardTrackListView.Metrics
         let growth = focused ? M.focusGrowth : 0
         pill.frame = bounds.insetBy(dx: -growth, dy: -growth)
-        pill.layer.cornerRadius = M.rowRadius + growth
+        pill.layer.cornerRadius = M.rowRadius * scale + growth
         pill.layer.shadowPath = UIBezierPath(roundedRect: pill.bounds, cornerRadius: pill.layer.cornerRadius).cgPath
         pill.backgroundColor = focused ? .white : .clear
         pill.layer.shadowOpacity = focused ? 0.3 : 0
