@@ -432,6 +432,50 @@ class LibrarySettingsManager: ObservableObject {
         userDefaults.set(sortOptionString(option), forKey: mediaSortKey(for: libraryKey))
     }
 
+    // MARK: - Watchlist sort/filter persistence
+    //
+    // One slot each (the Watchlist tab is a single surface, not per-library),
+    // but still namespaced per profile via `currentKey` — same as every
+    // other setting in this file — since it's a viewing preference, not
+    // account state (the watchlist content itself is Plex's, shared across
+    // every client; what you've chosen to sort/filter it by here is not).
+
+    private let watchlistSortBaseKey = "watchlistSort"
+    private let watchlistTypeFilterBaseKey = "watchlistTypeFilter"
+    private let watchlistGenreFilterBaseKey = "watchlistGenreFilter"
+
+    func getWatchlistSort() -> WatchlistSortOption {
+        guard let raw = userDefaults.string(forKey: currentKey(watchlistSortBaseKey)) else { return .dateAddedDesc }
+        return WatchlistSortOption(rawValue: raw) ?? .dateAddedDesc
+    }
+
+    func setWatchlistSort(_ option: WatchlistSortOption) {
+        userDefaults.set(option.rawValue, forKey: currentKey(watchlistSortBaseKey))
+    }
+
+    func getWatchlistTypeFilter() -> WatchlistTypeFilter {
+        guard let raw = userDefaults.string(forKey: currentKey(watchlistTypeFilterBaseKey)) else { return .all }
+        return WatchlistTypeFilter(rawValue: raw) ?? .all
+    }
+
+    func setWatchlistTypeFilter(_ filter: WatchlistTypeFilter) {
+        userDefaults.set(filter.rawValue, forKey: currentKey(watchlistTypeFilterBaseKey))
+    }
+
+    /// nil = "All Genres".
+    func getWatchlistGenreFilter() -> String? {
+        userDefaults.string(forKey: currentKey(watchlistGenreFilterBaseKey))
+    }
+
+    func setWatchlistGenreFilter(_ genre: String?) {
+        let key = currentKey(watchlistGenreFilterBaseKey)
+        if let genre {
+            userDefaults.set(genre, forKey: key)
+        } else {
+            userDefaults.removeObject(forKey: key)
+        }
+    }
+
     // MARK: - Private Methods
 
     private func saveHiddenLibraries() {

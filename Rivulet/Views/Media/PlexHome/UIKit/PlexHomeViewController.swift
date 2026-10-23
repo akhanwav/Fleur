@@ -50,6 +50,8 @@ nonisolated struct HomeSectionID: Hashable, Sendable {
     let raw: String
     static let hero = HomeSectionID(raw: "hero")
     static let watchlist = HomeSectionID(raw: "watchlist")
+    /// Watchlist-mode-only: the filter/sort header above the watchlist grid.
+    static let watchlistHeader = HomeSectionID(raw: "watchlistHeader")
     static let recommendations = HomeSectionID(raw: "recommendations")
     /// Library-mode-only sections: the sort header (title + count + sort
     /// button) and the paginated poster grid below the hub rows.
@@ -138,6 +140,9 @@ enum HomeSectionKind: Equatable {
     /// layout as the library grid, but backed by `watchlistItems` (Discover
     /// entries, not MediaItems) so it reuses the row's cell, tap and menu.
     case watchlistGrid
+    /// Watchlist mode only — full-width header (title + filtered item count
+    /// + focusable Sort / Type / Genre buttons, `WatchlistFilterHeaderControl`).
+    case watchlistHeader
     /// Search mode only — one grouped result grid (Movies & TV, Episodes &
     /// Seasons, Music) with a row-style header. Same 6-across poster grid
     /// as the library, no pagination (search caps at 80 results).
@@ -218,6 +223,24 @@ struct HomeSectionData {
             totalSize: nil,
             items: [],
             watchlistItems: items,
+            heroItems: [],
+            hubKey: nil,
+            hubIdentifier: nil
+        )
+    }
+
+    /// Watchlist mode: the filter/sort header above the grid. `count` is the
+    /// FILTERED item count (what's actually rendered below), carried on the
+    /// shared `totalSize` field since no other watchlist section used it.
+    static func watchlistHeader(count: Int) -> HomeSectionData {
+        HomeSectionData(
+            id: .watchlistHeader,
+            kind: .watchlistHeader,
+            title: "Watchlist",
+            headerStyle: .swiftUIInfiniteRow,
+            totalSize: count,
+            items: [],
+            watchlistItems: [],
             heroItems: [],
             hubKey: nil,
             hubIdentifier: nil
@@ -453,6 +476,15 @@ final class PlexHomeViewController: UIViewController {
         } else {
             self.gridSort = .addedAtDesc
         }
+        if case .watchlist = mode {
+            self.watchlistSort = LibrarySettingsManager.shared.getWatchlistSort()
+            self.watchlistTypeFilter = LibrarySettingsManager.shared.getWatchlistTypeFilter()
+            self.watchlistGenreFilter = LibrarySettingsManager.shared.getWatchlistGenreFilter()
+        } else {
+            self.watchlistSort = .dateAddedDesc
+            self.watchlistTypeFilter = .all
+            self.watchlistGenreFilter = nil
+        }
         super.init(nibName: nil, bundle: nil)
         if case .collection = mode {
             // A drill-in like the person page and the standalone detail: the
@@ -616,6 +648,31 @@ final class PlexHomeViewController: UIViewController {
     /// Active sort for the grid. Initialized from LibrarySettingsManager in
     /// `init` for library mode; never read in home mode.
     private var gridSort: LibrarySortOption
+
+    // MARK: Watchlist-mode filter/sort state
+    //
+    // The whole watchlist is already in memory (`PlexWatchlistService`
+    // fetches it all up front), so unlike the library grid this is a pure
+    // client-side filter + sort over `watchlistService.watchlistItems` —
+    // no pagination, no server-side sort param. Initialized from
+    // LibrarySettingsManager in `init` for watchlist mode; never read
+    // elsewhere.
+    private var watchlistSort: WatchlistSortOption
+    private var watchlistTypeFilter: WatchlistTypeFilter
+    /// nil = "All Genres".
+    private var watchlistGenreFilter: String?
+    /// Per-entry local-library ownership + genre, keyed by
+    /// `PlexWatchlistItem.id`. Computed from the in-memory `LibraryGUIDIndex`
+    /// (warm path only — no network), so it starts empty and fills in once
+    /// the index is built/loaded; see `refreshWatchlistEnrichment`. Genre
+    /// filtering only ever considers owned items: Plex's Discover watchlist
+    /// response carries no Genre field at all (confirmed against a live
+    /// response), so unowned items have no genre source.
+    private struct WatchlistEnrichment {
+        let owned: Bool
+        let genres: [String]
+    }
+    private var watchlistEnrichment: [String: WatchlistEnrichment] = [:]
     /// Pages (by `gridPageSize` index) fetched or in flight this generation.
     /// A page that fails is removed so scrolling back over it retries.
     private var gridPagesRequested: Set<Int> = []
@@ -673,6 +730,8 @@ final class PlexHomeViewController: UIViewController {
     private var fastScrollLastTick: CFTimeInterval = 0
     /// The single item id of the sort-header section.
     private static let sortHeaderItemID = HomeItemID(sectionID: .sortHeader, itemID: "sort-header")
+    /// The single item id of the watchlist filter/sort header section.
+    private static let watchlistHeaderItemID = HomeItemID(sectionID: .watchlistHeader, itemID: "watchlist-header")
 
     private static func gridSlotID(_ index: Int) -> HomeItemID {
         HomeItemID(sectionID: .grid, itemID: "grid-\(index)")
@@ -2791,6 +2850,7 @@ final class PlexHomeViewController: UIViewController {
         collectionView.register(HeroOverlayCell.self, forCellWithReuseIdentifier: HeroOverlayCell.reuseID)
         collectionView.register(HeroLoadingCell.self, forCellWithReuseIdentifier: HeroLoadingCell.reuseID)
         collectionView.register(WatchlistPosterCell.self, forCellWithReuseIdentifier: WatchlistPosterCell.reuseID)
+        collectionView.register(WatchlistFilterHeaderControl.self, forCellWithReuseIdentifier: WatchlistFilterHeaderControl.reuseID)
         collectionView.register(PosterSkeletonCell.self, forCellWithReuseIdentifier: PosterSkeletonCell.reuseID)
         collectionView.register(RecommendationsStateCell.self, forCellWithReuseIdentifier: RecommendationsStateCell.reuseID)
         // Library-mode sort header (inert registration in home mode — the
@@ -2870,7 +2930,7 @@ final class PlexHomeViewController: UIViewController {
             return makeHubSectionLayout(section: section, isContinueWatching: false)
         case .recommendationsLoading, .recommendationsError:
             return makeRecommendationsStateLayout()
-        case .sortHeader:
+        case .sortHeader, .watchlistHeader:
             return makeSortHeaderSectionLayout()
         case .grid, .watchlistGrid:
             return makeGridSectionLayout(section: section)
@@ -3089,7 +3149,7 @@ final class PlexHomeViewController: UIViewController {
         let section = sectionsSnapshot[index]
         let loadedCount: Int
         switch section.kind {
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
              .searchPrompt, .searchState:
             loadedCount = 0
         case .continueWatching, .recentlyAdded, .recommendations, .grid, .discoverList,
@@ -3228,8 +3288,9 @@ final class PlexHomeViewController: UIViewController {
         case .watchlistGrid:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: WatchlistPosterCell.reuseID, for: indexPath) as! WatchlistPosterCell
             if let item = section.watchlistItems[safe: indexPath.item] {
+                let owned = watchlistEnrichment[item.id]?.owned ?? false
                 Perf.interval(.cellPrepare, key: perfKey) {
-                    cell.configure(item: item)
+                    cell.configure(item: item, owned: owned)
                 }
             }
             return cell
@@ -3250,6 +3311,20 @@ final class PlexHomeViewController: UIViewController {
                 guard let self else { return }
                 self.setGridShowsCollections(!self.gridShowsCollections)
             }
+            return cell
+
+        case .watchlistHeader:
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: WatchlistFilterHeaderControl.reuseID, for: indexPath) as! WatchlistFilterHeaderControl
+            cell.configure(
+                title: section.title ?? "Watchlist",
+                count: section.totalSize ?? 0,
+                sortName: watchlistSort.displayName,
+                typeName: watchlistTypeFilter.displayName,
+                genreName: watchlistGenreFilter ?? "All Genres"
+            )
+            cell.onSortTapped = { [weak self] in self?.presentWatchlistSortPicker() }
+            cell.onTypeTapped = { [weak self] in self?.presentWatchlistTypePicker() }
+            cell.onGenreTapped = { [weak self] in self?.presentWatchlistGenrePicker() }
             return cell
 
         case .recommendationsLoading:
@@ -3395,7 +3470,18 @@ final class PlexHomeViewController: UIViewController {
                     self?.requestHeroUpgrade()
                 }
                 .store(in: &dataStoreObservers)
-        case .discover, .search, .watchlist, .collection:
+        case .watchlist:
+            // The index can still be loading (or empty-at-cold-launch) when
+            // the watchlist paints from its own disk cache; re-derive
+            // ownership/genre once it repopulates (mirrors the `.discover`
+            // hero's own re-derive in `setupModeSpecificLoading`).
+            NotificationCenter.default.publisher(for: .libraryGUIDIndexDidUpdate)
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    self?.refreshWatchlistEnrichment()
+                }
+                .store(in: &dataStoreObservers)
+        case .discover, .search, .collection:
             break
         }
 
@@ -3475,6 +3561,7 @@ final class PlexHomeViewController: UIViewController {
                 // Only the row's leading tiles are worth prewarming; the grid's
                 // cells fetch their own art as they scroll into view.
                 self.prewarmWatchlistArtwork(Array(items.prefix(20)))
+                self.refreshWatchlistEnrichment()
             }
             .store(in: &dataStoreObservers)
 
@@ -3486,6 +3573,183 @@ final class PlexHomeViewController: UIViewController {
                 self?.watchlistToast.show(message: message)
             }
             .store(in: &dataStoreObservers)
+    }
+
+    // MARK: - Watchlist filter/sort
+
+    /// Client-side filter + sort over the already-fully-fetched watchlist.
+    /// "Date Added" has no reliable per-item source (see
+    /// `WatchlistSortOption`), so it uses the list's own order — Discover's
+    /// default, and the order new adds land at (`PlexWatchlistService.add`
+    /// inserts at index 0) — reversed for ascending.
+    private func filteredSortedWatchlistItems(_ items: [PlexWatchlistItem]) -> [PlexWatchlistItem] {
+        var result = items
+        switch watchlistTypeFilter {
+        case .all: break
+        case .movies: result = result.filter { $0.type == .movie }
+        case .shows: result = result.filter { $0.type == .show }
+        }
+        if let genre = watchlistGenreFilter {
+            result = result.filter { watchlistEnrichment[$0.id]?.genres.contains(genre) ?? false }
+        }
+        switch watchlistSort {
+        case .dateAddedDesc: break
+        case .dateAddedAsc: result.reverse()
+        case .titleAsc:
+            result.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        case .titleDesc:
+            result.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedDescending }
+        case .yearDesc:
+            result.sort { ($0.year ?? 0) > ($1.year ?? 0) }
+        case .yearAsc:
+            result.sort { ($0.year ?? 0) < ($1.year ?? 0) }
+        }
+        return result
+    }
+
+    /// Genres available to filter by: owned watchlist items only (see
+    /// `watchlistEnrichment` doc comment).
+    private var availableWatchlistGenres: [String] {
+        Set(watchlistEnrichment.values.flatMap(\.genres)).sorted()
+    }
+
+    /// Recomputes `watchlistEnrichment` from the in-memory `LibraryGUIDIndex`
+    /// (warm path only, mirroring the lookup order in
+    /// `buildWatchlistMediaItems` minus its cold-path network fallback — this
+    /// is an advisory badge/filter, not a navigation decision, so it's fine
+    /// for it to lag until the index finishes loading). Re-run whenever the
+    /// watchlist itself changes (`observeWatchlist`) and whenever the index
+    /// repopulates (`setupModeSpecificLoading`'s `.watchlist` case).
+    private func refreshWatchlistEnrichment() {
+        guard case .watchlist = mode else { return }
+        let entries = watchlistService.watchlistItems
+        guard !entries.isEmpty else {
+            if !watchlistEnrichment.isEmpty {
+                watchlistEnrichment = [:]
+                setNeedsSnapshotApply()
+            }
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let lookups: [Int: PlexMetadata] = await withTaskGroup(of: (Int, PlexMetadata?).self) { group in
+                for (index, entry) in entries.enumerated() {
+                    let tmdbId = entry.tmdbId
+                    let tmdbType: TMDBMediaType = entry.type == .movie ? .movie : .tv
+                    let guids = entry.guids
+                    group.addTask {
+                        if let tmdbId,
+                           let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: tmdbType) {
+                            return (index, match)
+                        }
+                        for guid in guids where !guid.hasPrefix("tmdb://") {
+                            if let match = await LibraryGUIDIndex.shared.lookup(guid: guid) {
+                                return (index, match)
+                            }
+                        }
+                        return (index, nil)
+                    }
+                }
+                var out: [Int: PlexMetadata] = [:]
+                for await (index, match) in group {
+                    if let match { out[index] = match }
+                }
+                return out
+            }
+            guard case .watchlist = self.mode else { return }
+            var result: [String: WatchlistEnrichment] = [:]
+            for (index, entry) in entries.enumerated() {
+                let match = lookups[index]
+                result[entry.id] = WatchlistEnrichment(
+                    owned: match != nil,
+                    genres: match?.Genre?.compactMap(\.tag) ?? []
+                )
+            }
+            self.watchlistEnrichment = result
+            self.setNeedsSnapshotApply()
+        }
+    }
+
+    private func presentWatchlistSortPicker() {
+        guard case .watchlist = mode else { return }
+        let sheet = UIAlertController(title: "Sort By", message: nil, preferredStyle: .actionSheet)
+        let options: [WatchlistSortOption] = [.dateAddedDesc, .dateAddedAsc, .titleAsc, .titleDesc, .yearDesc, .yearAsc]
+        for option in options {
+            let title = option == watchlistSort ? "\u{2713} \(option.displayName)" : option.displayName
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                self?.applyWatchlistSort(option)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    private func applyWatchlistSort(_ option: WatchlistSortOption) {
+        guard option != watchlistSort else { return }
+        watchlistSort = option
+        LibrarySettingsManager.shared.setWatchlistSort(option)
+        applySnapshot(animated: false)
+        refreshWatchlistHeader()
+    }
+
+    private func presentWatchlistTypePicker() {
+        guard case .watchlist = mode else { return }
+        let sheet = UIAlertController(title: "Show", message: nil, preferredStyle: .actionSheet)
+        for option in WatchlistTypeFilter.allCases {
+            let title = option == watchlistTypeFilter ? "\u{2713} \(option.displayName)" : option.displayName
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                self?.applyWatchlistTypeFilter(option)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    private func applyWatchlistTypeFilter(_ filter: WatchlistTypeFilter) {
+        guard filter != watchlistTypeFilter else { return }
+        watchlistTypeFilter = filter
+        LibrarySettingsManager.shared.setWatchlistTypeFilter(filter)
+        applySnapshot(animated: false)
+        refreshWatchlistHeader()
+    }
+
+    private func presentWatchlistGenrePicker() {
+        guard case .watchlist = mode else { return }
+        let sheet = UIAlertController(title: "Genre", message: nil, preferredStyle: .actionSheet)
+        let allTitle = watchlistGenreFilter == nil ? "\u{2713} All Genres" : "All Genres"
+        sheet.addAction(UIAlertAction(title: allTitle, style: .default) { [weak self] _ in
+            self?.applyWatchlistGenreFilter(nil)
+        })
+        for genre in availableWatchlistGenres {
+            let title = genre == watchlistGenreFilter ? "\u{2713} \(genre)" : genre
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                self?.applyWatchlistGenreFilter(genre)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    private func applyWatchlistGenreFilter(_ genre: String?) {
+        guard genre != watchlistGenreFilter else { return }
+        watchlistGenreFilter = genre
+        LibrarySettingsManager.shared.setWatchlistGenreFilter(genre)
+        applySnapshot(animated: false)
+        refreshWatchlistHeader()
+    }
+
+    /// Forces the header cell to re-read `watchlistSort`/`watchlistTypeFilter`/
+    /// `watchlistGenreFilter`. Needed because its diffable item id is constant
+    /// across every `applySnapshot` (same single row, mirrors `.sortHeader`'s
+    /// own `refreshSortHeaderCount`), so a plain `apply` sees no identity
+    /// change and never re-invokes the cell provider — the grid below
+    /// reorders fine (its items' relative order IS the diff), but the header
+    /// button labels would otherwise go stale.
+    private func refreshWatchlistHeader() {
+        var snap = dataSource.snapshot()
+        guard snap.sectionIdentifiers.contains(.watchlistHeader) else { return }
+        snap.reconfigureItems([Self.watchlistHeaderItemID])
+        dataSource.apply(snap, animatingDifferences: false)
     }
 
     private func observeAuth() {
@@ -3660,6 +3924,8 @@ final class PlexHomeViewController: UIViewController {
                                   itemID: isPlaceholder ? Self.heroLoadingItemToken : "hero-overlay")]
             case .sortHeader:
                 ids = [Self.sortHeaderItemID]
+            case .watchlistHeader:
+                ids = [Self.watchlistHeaderItemID]
             case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid:
                 // Shelf rows are ONE diffable item — the ShelfRowCell hosts
                 // the tiles in its own horizontal collection view (and shows
@@ -3724,7 +3990,7 @@ final class PlexHomeViewController: UIViewController {
         switch kind {
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid: return true
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .searchPrompt, .searchState: return false
+             .sortHeader, .watchlistHeader, .searchPrompt, .searchState: return false
         }
     }
 
@@ -3869,7 +4135,7 @@ final class PlexHomeViewController: UIViewController {
             }
             return cell
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .searchPrompt, .searchState:
+             .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
             return nil
         }
     }
@@ -3914,7 +4180,7 @@ final class PlexHomeViewController: UIViewController {
         case .searchGrid:
             handleSearchTap(section: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .searchPrompt, .searchState:
+             .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
             return
         }
     }
@@ -3927,7 +4193,7 @@ final class PlexHomeViewController: UIViewController {
         case .continueWatching, .recentlyAdded:
             break
         case .hero, .watchlist, .watchlistGrid, .recommendations, .grid, .discoverList,
-             .recommendationsLoading, .recommendationsError, .sortHeader,
+             .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
              .searchPrompt, .searchState, .searchGrid:
             return  // No pagination for these (matches SwiftUI hubKey == nil)
         }
@@ -3963,7 +4229,7 @@ final class PlexHomeViewController: UIViewController {
         case .watchlist:
             presentWatchlistTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .searchPrompt, .searchState:
+             .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
             return  // hero / state cells don't get menus
         }
     }
@@ -4115,7 +4381,7 @@ final class PlexHomeViewController: UIViewController {
             }
             return playableItem(section.items[itemIndex])
         case .watchlist, .watchlistGrid, .hero, .grid, .recommendationsLoading,
-             .recommendationsError, .sortHeader, .searchPrompt, .searchState:
+             .recommendationsError, .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
             return nil
         }
     }
@@ -4265,8 +4531,10 @@ final class PlexHomeViewController: UIViewController {
             return computeDiscoverSections()
         }
         if case .watchlist = mode {
-            let items = watchlistService.watchlistItems
-            return items.isEmpty ? [] : [.watchlistGrid(items: items)]
+            let rawItems = watchlistService.watchlistItems
+            guard !rawItems.isEmpty else { return [] }
+            let filtered = filteredSortedWatchlistItems(rawItems)
+            return [.watchlistHeader(count: filtered.count), .watchlistGrid(items: filtered)]
         }
         // One titled grid; the header is supplementary, so the grid stays
         // section 0 (`topSectionIndex`) and Menu never stages a return-to-top.
@@ -5226,8 +5494,8 @@ final class PlexHomeViewController: UIViewController {
         switch section.kind {
         case .hero, .recommendationsLoading, .recommendationsError:
             return  // hero overlay + state cells handle their own input
-        case .sortHeader:
-            return  // the embedded SortButton handles its own Select press
+        case .sortHeader, .watchlistHeader:
+            return  // the embedded SortButton(s) handle their own Select press
         case .searchPrompt, .searchState:
             return  // recents pills / Try Again are FocusableActionButtons
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid:
@@ -5889,7 +6157,7 @@ final class PlexHomeViewController: UIViewController {
         guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id.raw == target.rowID }) else { return nil }
         let section = sectionsSnapshot[sectionIndex]
         switch section.kind {
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
              .searchPrompt, .searchState:
             return nil
         case .continueWatching, .recentlyAdded, .recommendations, .grid, .discoverList,
@@ -6329,7 +6597,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         switch section.kind {
         case .continueWatching, .recentlyAdded, .watchlist, .recommendations, .discoverList, .searchGrid:
             break
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .grid,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .grid,
              .watchlistGrid, .searchPrompt, .searchState:
             return true
         }
@@ -6366,7 +6634,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         (cell as? ShelfRowCell)?.tilesHiddenForPreview =
             previewHiddenRowID != nil && section.id.raw == previewHiddenRowID
         switch section.kind {
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
              .searchPrompt, .searchState, .searchGrid, .watchlistGrid:
             return  // No pagination for these (the watchlist is fetched whole)
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList:
@@ -7000,7 +7268,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // point at the previous cell when it's already on screen
             // (ported from MediaLibraryViewController.updateLeftEdgeGuide).
             break
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
              .searchPrompt, .searchState:
             leftEdgeFocusGuide.preferredFocusEnvironments = []
             return

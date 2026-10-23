@@ -32,6 +32,9 @@ final class WatchlistPosterCell: UICollectionViewCell {
     private let placeholderView = UIView()
     private let placeholderGradient = CAGradientLayer()
     private let placeholderIcon = UIImageView()
+    /// "On Server" badge for entries already owned locally — same visual
+    /// language as `PosterCell`'s server-name badge, top-leading.
+    private let ownedBadge = SourceBadgeView(style: .onArtwork)
 
     private var imageLoadTask: Task<Void, Never>?
     private var currentURL: URL?
@@ -83,6 +86,9 @@ final class WatchlistPosterCell: UICollectionViewCell {
         // Insert placeholder below the poster view so the image covers it.
         contentView.insertSubview(placeholderView, belowSubview: posterView)
 
+        ownedBadge.translatesAutoresizingMaskIntoConstraints = false
+        posterView.imageView.addSubview(ownedBadge)
+
         NSLayoutConstraint.activate([
             posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
@@ -97,7 +103,10 @@ final class WatchlistPosterCell: UICollectionViewCell {
             placeholderIcon.centerXAnchor.constraint(equalTo: placeholderView.centerXAnchor),
             placeholderIcon.centerYAnchor.constraint(equalTo: placeholderView.centerYAnchor),
             placeholderIcon.widthAnchor.constraint(equalToConstant: 32),
-            placeholderIcon.heightAnchor.constraint(equalToConstant: 32)
+            placeholderIcon.heightAnchor.constraint(equalToConstant: 32),
+
+            ownedBadge.topAnchor.constraint(equalTo: posterView.imageView.topAnchor, constant: 10),
+            ownedBadge.leadingAnchor.constraint(equalTo: posterView.imageView.leadingAnchor, constant: 10),
         ])
     }
 
@@ -112,13 +121,14 @@ final class WatchlistPosterCell: UICollectionViewCell {
         CATransaction.commit()
     }
 
-    func configure(item: PlexWatchlistItem) {
+    func configure(item: PlexWatchlistItem, owned: Bool = false) {
         // Pick the SF Symbol that matches the watchlist type — `film` for
         // movies, `tv` for shows. Mirrors SwiftUI `WatchlistTile.placeholder`.
         let iconName = item.type == .movie ? "film" : "tv"
         let icon = UIImage(systemName: iconName)?
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 32, weight: .light))
         loadImage(from: item.posterURL, failureIcon: icon)
+        ownedBadge.text = owned ? "On Server" : nil
     }
 
     /// MediaItem path. Artwork URLs are already resolved — no serverURL/token needed.
@@ -134,6 +144,7 @@ final class WatchlistPosterCell: UICollectionViewCell {
         clearArtwork()
         placeholderView.isHidden = false
         placeholderIcon.image = nil
+        ownedBadge.text = nil
     }
 
     private func loadImage(from url: URL?, failureIcon: UIImage?) {
