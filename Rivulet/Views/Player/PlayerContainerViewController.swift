@@ -1142,21 +1142,22 @@ class PlayerContainerViewController: UIViewController {
 
         case .changed:
             guard activePanIsScrub else { return }
-            // Proportional scrubbing: horizontal translation maps to seek time
-            // Sensitivity: ~1 second per 2 points of horizontal movement
-            // Positive translation.x = swipe right = forward
-            let seekDelta = translation.x * 0.5
+            // Proportional scrubbing: horizontal translation maps to seek time,
+            // at a rate that scales with how fast the swipe is currently
+            // moving (InputConfig.scrubSecondsPerPoint) — slow, small
+            // movements stay fine-grained, a fast flick covers a lot more
+            // ground, and the transition between them is a gentle ease
+            // rather than a step. Positive translation.x = swipe right = forward.
+            let rate = InputConfig.scrubSecondsPerPoint(forVelocity: Double(velocity.x))
+            let seekDelta = Double(translation.x) * rate
             inputCoordinator.handle(action: .scrubRelative(seconds: seekDelta), source: .irPress)
             gesture.setTranslation(.zero, in: view)
 
         case .ended, .cancelled:
-            guard activePanIsScrub else { return }
-            // If significant horizontal velocity, apply a final "flick" adjustment
-            if abs(velocity.x) > 500 {
-                let flickSeekDelta = velocity.x * 0.02  // Small multiplier for flick
-                inputCoordinator.handle(action: .scrubRelative(seconds: flickSeekDelta), source: .irPress)
-            }
-            // Don't auto-commit - wait for user to press play/select to confirm position
+            // No post-release bonus: the velocity-sensitive rate above already
+            // lets a fast flick cover more ground while the finger is still
+            // down, so lifting it never adds extra, uncontrolled motion.
+            break
 
         default:
             break

@@ -70,4 +70,41 @@ enum InputConfig {
 
     /// Jog turn batched before one scrub step (about 1.8°).
     static let wheelEmitRevolutions = 0.005
+
+    // MARK: - Swipe-to-Scrub (touchpad pan while the progress bar is up or paused)
+
+    /// Seconds of seek per point of pan translation at or below
+    /// `scrubVelocitySlow` — the fine-adjustment rate for a slow, deliberate
+    /// swipe. Calibrated against a ~1920pt-wide clickpad swipe (tvOS's point
+    /// width) so a full-width slow swipe moves about 1-2 minutes regardless
+    /// of the title's runtime (1920 * 0.05 ≈ 96s).
+    static let scrubSecondsPerPointSlow: Double = 0.05
+    /// Seconds of seek per point of pan translation at or above
+    /// `scrubVelocityFast` — the rate a fast, deliberate flick settles into,
+    /// letting it cover much larger distances than a slow drag.
+    static let scrubSecondsPerPointFast: Double = 0.6
+    /// Pan velocity (points/sec) at or below which scrubbing uses
+    /// `scrubSecondsPerPointSlow`.
+    static let scrubVelocitySlow: Double = 300
+    /// Pan velocity (points/sec) at or above which scrubbing uses
+    /// `scrubSecondsPerPointFast`. Between the two thresholds the rate eases
+    /// in (see `scrubSecondsPerPoint`) rather than switching abruptly, so
+    /// speeding up or slowing down mid-swipe accelerates gently.
+    static let scrubVelocityFast: Double = 2500
+
+    /// Seconds-per-point of pan translation for a swipe currently moving at
+    /// `velocity` points/sec (sign ignored). Eases from
+    /// `scrubSecondsPerPointSlow` to `scrubSecondsPerPointFast` with a
+    /// smoothstep between `scrubVelocitySlow` and `scrubVelocityFast`, so a
+    /// small, slow movement stays fine-grained (a few seconds) while only a
+    /// fast flick reaches the coarse rate — no separate post-release bonus
+    /// is needed, so lifting the finger never adds extra motion.
+    static func scrubSecondsPerPoint(forVelocity velocity: Double) -> Double {
+        let magnitude = abs(velocity)
+        let span = scrubVelocityFast - scrubVelocitySlow
+        guard span > 0 else { return scrubSecondsPerPointSlow }
+        let t = min(max((magnitude - scrubVelocitySlow) / span, 0), 1)
+        let eased = t * t * (3 - 2 * t)
+        return scrubSecondsPerPointSlow + eased * (scrubSecondsPerPointFast - scrubSecondsPerPointSlow)
+    }
 }
