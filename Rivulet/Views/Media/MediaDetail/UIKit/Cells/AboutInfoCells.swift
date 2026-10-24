@@ -312,6 +312,9 @@ final class InfoColumnsView: UIView {
         // Information
         var info: [(String, String)] = []
         if let y = detail.item.year { info.append(("Released", "\(y)")) }
+        if let seasons = detail.seasonCount, seasons > 0 {
+            info.append(("Seasons", seasons == 1 ? "1 Season" : "\(seasons) Seasons"))
+        }
         if let runtime = detail.item.runtime, runtime > 0 { info.append(("Run Time", Self.runtime(runtime))) }
         if let r = detail.contentRating, !r.isEmpty { info.append(("Rated", r)) }
         if !detail.genres.isEmpty { info.append(("Genres", detail.genres.prefix(4).joined(separator: ", "))) }
@@ -580,4 +583,215 @@ final class AboutCardControl: UIControl {
             self.transform = focused ? CGAffineTransform(scaleX: 1.02, y: 1.02) : .identity
         }
     }
+}
+
+// MARK: - Where to Watch (metadata-only items)
+
+/// TMDB watch/providers for a title with no playback-capable provider:
+/// Stream / Rent / Buy rows of provider logos, plus the text credit TMDB's
+/// terms require for JustWatch-sourced data. Not focusable — like
+/// AboutCollectionCell, it's a static info block the focus-driven below-fold
+/// scrolls PAST rather than into.
+final class WhereToWatchCollectionCell: UICollectionViewCell {
+    static let reuseID = "WhereToWatchCollectionCell"
+
+    private let header = sectionHeaderLabel("Where to Watch")
+    private let rowsStack = UIStackView()
+    private let attributionLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        header.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(header)
+
+        rowsStack.translatesAutoresizingMaskIntoConstraints = false
+        rowsStack.axis = .vertical
+        rowsStack.alignment = .leading
+        rowsStack.spacing = 20
+        contentView.addSubview(rowsStack)
+
+        // TMDB's terms require this credit whenever watch/providers data is
+        // shown — see Docs/RIVULET_PLAYER.md-adjacent TMDB usage notes.
+        attributionLabel.translatesAutoresizingMaskIntoConstraints = false
+        attributionLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        attributionLabel.textColor = UIColor.white.withAlphaComponent(0.4)
+        attributionLabel.text = "Streaming, rental, and purchase data provided by JustWatch"
+        attributionLabel.numberOfLines = 1
+        contentView.addSubview(attributionLabel)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: contentView.topAnchor),
+            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+
+            rowsStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
+            rowsStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            rowsStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
+
+            attributionLabel.topAnchor.constraint(equalTo: rowsStack.bottomAnchor, constant: 24),
+            attributionLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+        ])
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(availability: MediaWatchAvailability) {
+        rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let groups: [(title: String, kind: MediaWatchOption.Kind)] = [
+            ("Stream", .stream), ("Rent", .rent), ("Buy", .buy)
+        ]
+        for group in groups {
+            let options = availability.options.filter { $0.kind == group.kind }
+            guard !options.isEmpty else { continue }
+            rowsStack.addArrangedSubview(Self.makeRow(title: group.title, options: options))
+        }
+    }
+
+    private static func makeRow(title: String, options: [MediaWatchOption]) -> UIView {
+        let container = UIView()
+
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 21, weight: .semibold)
+        label.textColor = UIColor.white.withAlphaComponent(0.5)
+        label.text = title
+        container.addSubview(label)
+
+        let logos = UIStackView()
+        logos.translatesAutoresizingMaskIntoConstraints = false
+        logos.axis = .horizontal
+        logos.spacing = 16
+        // Enough to fill a row without the shelf becoming a second scroller —
+        // this is a static info block, not a focusable rail.
+        for option in options.prefix(8) {
+            logos.addArrangedSubview(WatchProviderChip(option: option))
+        }
+        container.addSubview(logos)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: container.topAnchor),
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+
+            logos.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 10),
+            logos.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            logos.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            logos.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        return container
+    }
+
+    // Static info block — not a focus stop (matches AboutCollectionCell).
+    override var canBecomeFocused: Bool { false }
+}
+
+/// One provider's logo chip (rounded square) + name, used by the Where to
+/// Watch rows. `MediaWatchOption.logoURL` is already fully-qualified by
+/// `TMDBMediaMapper`.
+private final class WatchProviderChip: UIView {
+    private static let chipSize: CGFloat = 64
+
+    private let imageContainer = UIView()
+    private let imageView = UIImageView()
+    private let nameLabel = UILabel()
+
+    init(option: MediaWatchOption) {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+
+        imageContainer.translatesAutoresizingMaskIntoConstraints = false
+        imageContainer.backgroundColor = UIColor(white: 0.15, alpha: 1)
+        imageContainer.layer.cornerRadius = 14
+        imageContainer.layer.cornerCurve = .continuous
+        imageContainer.clipsToBounds = true
+        addSubview(imageContainer)
+
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.contentMode = .scaleAspectFit
+        imageContainer.addSubview(imageView)
+
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        nameLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        nameLabel.textAlignment = .center
+        nameLabel.numberOfLines = 1
+        nameLabel.text = option.providerName
+        addSubview(nameLabel)
+
+        NSLayoutConstraint.activate([
+            imageContainer.topAnchor.constraint(equalTo: topAnchor),
+            imageContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageContainer.widthAnchor.constraint(equalToConstant: Self.chipSize),
+            imageContainer.heightAnchor.constraint(equalToConstant: Self.chipSize),
+
+            imageView.topAnchor.constraint(equalTo: imageContainer.topAnchor, constant: 6),
+            imageView.leadingAnchor.constraint(equalTo: imageContainer.leadingAnchor, constant: 6),
+            imageView.trailingAnchor.constraint(equalTo: imageContainer.trailingAnchor, constant: -6),
+            imageView.bottomAnchor.constraint(equalTo: imageContainer.bottomAnchor, constant: -6),
+
+            nameLabel.topAnchor.constraint(equalTo: imageContainer.bottomAnchor, constant: 6),
+            nameLabel.centerXAnchor.constraint(equalTo: imageContainer.centerXAnchor),
+            nameLabel.widthAnchor.constraint(equalToConstant: Self.chipSize + 24),
+            nameLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        guard let url = option.logoURL else { return }
+        imageView.image = ImageCacheManager.shared.cachedImage(for: url)
+        guard imageView.image == nil else { return }
+        Task { [weak imageView] in
+            let image = await ImageCacheManager.shared.image(for: url)
+            await MainActor.run { imageView?.image = image }
+        }
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+// MARK: - On Your Servers (metadata-only items)
+
+/// Cross-server check result for a title with no playback-capable provider:
+/// either it's available on another server this account can reach (owned or
+/// shared), or it isn't. Not focusable — a static status line, like the
+/// Where to Watch block above it.
+final class ServerAvailabilityCollectionCell: UICollectionViewCell {
+    static let reuseID = "ServerAvailabilityCollectionCell"
+
+    private let header = sectionHeaderLabel("On Your Servers")
+    private let statusLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+
+        header.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(header)
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.font = .systemFont(ofSize: 25, weight: .medium)
+        statusLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+        statusLabel.numberOfLines = 2
+        contentView.addSubview(statusLabel)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: contentView.topAnchor),
+            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+
+            statusLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 16),
+            statusLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
+        ])
+    }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(availability: OtherServersAvailabilityChecker.Availability) {
+        switch availability {
+        case .checking:
+            statusLabel.text = "Checking your servers…"
+        case .notFound:
+            statusLabel.text = "Not on your servers"
+        case .found(let names):
+            statusLabel.text = "Available on \(names.joined(separator: ", "))"
+        }
+    }
+
+    override var canBecomeFocused: Bool { false }
 }

@@ -91,7 +91,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
         let json = """
         {"id": 300, "name": "Test Show", "genres": [], "cast": []}
         """.data(using: .utf8)!
-        TMDBMockURLProtocol.responses["3/tv/300?"] = (200, json)
+        TMDBMockURLProtocol.responses[Self.detailKey("tv", 300)] = (200, json)
 
         let service = TMDBDiscoverService(session: makeMockSession())
         let detail = await service.fetchDetail(tmdbId: 300, type: .tv)
@@ -101,10 +101,48 @@ final class TMDBDiscoverServiceTests: XCTestCase {
     }
 
     func testFetchDetailReturnsNilOnFailure() async {
-        TMDBMockURLProtocol.responses["3/movie/1?"] = (404, Data())
+        TMDBMockURLProtocol.responses[Self.detailKey("movie", 1)] = (404, Data())
         let service = TMDBDiscoverService(session: makeMockSession())
         let detail = await service.fetchDetail(tmdbId: 1, type: .movie)
         XCTAssertNil(detail)
+    }
+
+    func testFetchDetailDecodesCreditsRecommendationsAndWatchProviders() async {
+        let json = """
+        {
+          "id": 400, "title": "Test Movie", "genres": [],
+          "credits": {
+            "cast": [{"id": 1, "name": "Cast One", "character": "Hero", "profile_path": "/p1.jpg"}],
+            "crew": [{"id": 2, "name": "Director One", "job": "Director"}]
+          },
+          "recommendations": {"results": [{"id": 500, "title": "Similar Movie"}]},
+          "watch/providers": {
+            "results": {
+              "US": {
+                "link": "https://www.themoviedb.org/movie/400/watch",
+                "flatrate": [{"provider_id": 8, "provider_name": "Netflix", "logo_path": "/n.jpg"}]
+              }
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        TMDBMockURLProtocol.responses[Self.detailKey("movie", 400)] = (200, json)
+
+        let service = TMDBDiscoverService(session: makeMockSession())
+        let detail = await service.fetchDetail(tmdbId: 400, type: .movie)
+
+        XCTAssertEqual(detail?.cast.first?.name, "Cast One")
+        XCTAssertEqual(detail?.crew.first?.job, "Director")
+        XCTAssertEqual(detail?.recommendations.first?.id, 500)
+        XCTAssertEqual(detail?.recommendations.first?.mediaType, .movie)
+        XCTAssertEqual(detail?.watchProviders?.flatrate?.first?.providerName, "Netflix")
+    }
+
+    /// `fetchDetail` requests `append_to_response=credits,recommendations,watch/providers`
+    /// on every call (one round trip feeds Cast & Crew, More Like This, and Where
+    /// to Watch) — the mock key must include it to match.
+    private static func detailKey(_ type: String, _ id: Int) -> String {
+        "3/\(type)/\(id)?append_to_response=credits,recommendations,watch/providers"
     }
 
     private func makeMockSession() -> URLSession {

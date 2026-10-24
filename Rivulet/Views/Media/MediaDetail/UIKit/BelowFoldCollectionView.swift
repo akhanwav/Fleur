@@ -30,6 +30,9 @@ nonisolated enum BelowFoldSectionKind: Hashable, Sendable {
     case collection
     case related
     case cast
+    case whereToWatch
+    case servers
+    case moreLikeThis
     case about
     case info
 }
@@ -48,6 +51,13 @@ nonisolated enum BelowFoldItem: Hashable, Sendable {
     /// The collection row, hosted exactly like `.relatedShelf`.
     case collectionShelf
     case cast(String)
+    /// TMDB watch/providers block (metadata-only items only).
+    case whereToWatch
+    /// Cross-server availability block (metadata-only items only).
+    case servers
+    /// TMDB recommendations, hosted exactly like `.relatedShelf` (metadata-only
+    /// items only — distinct from Plex's `.relatedShelf`).
+    case moreLikeThisShelf
     case about       // single full-width card block
     case info        // single full-width columns block
 }
@@ -165,6 +175,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         collectionView.register(CastCollectionCell.self, forCellWithReuseIdentifier: CastCollectionCell.reuseID)
         collectionView.register(AboutCollectionCell.self, forCellWithReuseIdentifier: AboutCollectionCell.reuseID)
         collectionView.register(InfoColumnsCollectionCell.self, forCellWithReuseIdentifier: InfoColumnsCollectionCell.reuseID)
+        collectionView.register(WhereToWatchCollectionCell.self, forCellWithReuseIdentifier: WhereToWatchCollectionCell.reuseID)
+        collectionView.register(ServerAvailabilityCollectionCell.self, forCellWithReuseIdentifier: ServerAvailabilityCollectionCell.reuseID)
         collectionView.register(
             BelowFoldSectionHeader.self,
             forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
@@ -286,6 +298,15 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     // less the header gap, so the strip is the cast row.
                     topInset: isPrimary ? max(0, peek - 16) : 0
                 )
+            case .moreLikeThis:
+                // Hosted exactly like `.related`/`.collection` — same lift math.
+                let lift = ShelfRowCell.headerHeight + 8
+                return self.homeShelfHostSection(
+                    topInset: isPrimary ? max(0, peek - lift) : 0,
+                    sectionBottomInset: isPrimary ? 36 : 56
+                )
+            case .whereToWatch: return self.fullWidthSection(height: 260, topInset: isPrimary ? peek : 0)
+            case .servers: return self.fullWidthSection(height: 110, topInset: isPrimary ? peek : 0)
             case .about: return self.fullWidthSection(height: 370, topInset: isPrimary ? peek : 0)
             case .info:
                 // Sized to its rows, so a short title leaves no empty band below them.
@@ -485,6 +506,19 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: CastCollectionCell.reuseID, for: indexPath) as! CastCollectionCell
                 if let e = self.castEntriesByID[id] { cell.configure(person: e.person, fallbackSubtitle: e.subtitle) }
                 return cell
+            case .whereToWatch:
+                let cell = cv.dequeueReusableCell(withReuseIdentifier: WhereToWatchCollectionCell.reuseID, for: indexPath) as! WhereToWatchCollectionCell
+                cell.configure(availability: self.watchAvailability ?? .empty)
+                return cell
+            case .servers:
+                let cell = cv.dequeueReusableCell(withReuseIdentifier: ServerAvailabilityCollectionCell.reuseID, for: indexPath) as! ServerAvailabilityCollectionCell
+                cell.configure(availability: self.serverAvailability ?? .checking)
+                return cell
+            case .moreLikeThisShelf:
+                let cell = cv.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
+                self.configurePosterShelf(cell, section: .moreLikeThis, title: "More Like This",
+                                          items: self.moreLikeThisItems, trailing: nil)
+                return cell
             case .about:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: AboutCollectionCell.reuseID, for: indexPath) as! AboutCollectionCell
                 cell.onSelectSynopsis = { [weak self] d in self?.onSelectSynopsis?(d) }
@@ -509,7 +543,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .extras:  header.configure(title: "Extras")
             case .related: header.configure(title: "Related")
             case .cast:    header.configure(title: "Cast & Crew")
-            case .episodes, .collection, .about, .info: header.configure(title: "")
+            case .episodes, .collection, .about, .info,
+                 .whereToWatch, .servers, .moreLikeThis: header.configure(title: "")
             }
             return header
         }
@@ -582,6 +617,30 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             guard self.loadToken == token, let advisory else { return }
             self.applyContentAdvisory(advisory)
         }
+        // Cross-server check: slow on its first call this session (pages
+        // every other server's library once), so it runs as its own chained
+        // fetch and patches the Servers cell in place — never blocking the
+        // initial render above. Gated on `isMetadataOnly` directly (not on
+        // `self.serverAvailability`, which this races against `ingest` to set).
+        if item.isMetadataOnly {
+            Task { [weak self] in
+                guard let self else { return }
+                let availability = await self.loader.loadServerAvailability(for: item)
+                guard self.loadToken == token, let availability else { return }
+                self.applyServerAvailability(availability)
+            }
+        }
+    }
+
+    /// Patch the Servers cell with the real cross-server answer once it
+    /// resolves, without a full snapshot rebuild (focus-preserving) — mirrors
+    /// `applyContentAdvisory` above.
+    private func applyServerAvailability(_ availability: OtherServersAvailabilityChecker.Availability) {
+        serverAvailability = availability
+        var snapshot = dataSource.snapshot()
+        guard snapshot.sectionIdentifiers.contains(.servers) else { return }
+        snapshot.reconfigureItems([.servers])
+        dataSource.apply(snapshot, animatingDifferences: false)
     }
 
     /// Patch the About cell with the rich advisory after it arrives, without a
@@ -756,6 +815,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         trailersByID = [:]; extrasByID = [:]; castEntriesByID = [:]
         cachedTrailers = []; cachedExtras = []; cachedRelated = []; cachedCastOrder = []
         collectionRow = nil; shelfOffsets = [:]
+        cachedMoreLikeThis = []; moreLikeThisItems = []
+        watchAvailability = nil; serverAvailability = nil
         detail = nil
     }
 
@@ -794,6 +855,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         relatedItems = content.related
         cachedRelated = content.related.isEmpty ? [] : [BelowFoldItem.relatedShelf]
         collectionRow = content.collection
+        moreLikeThisItems = content.moreLikeThis
+        cachedMoreLikeThis = content.moreLikeThis.isEmpty ? [] : [BelowFoldItem.moreLikeThisShelf]
+        watchAvailability = content.watchAvailability
+        serverAvailability = content.serverAvailability
         shelfOffsets = [:]
 
         // Publish the seasons once everything else is ingested, so a handler that
@@ -849,6 +914,13 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     private var cachedRelated: [BelowFoldItem] = []
     /// Ordered Related items backing the shelf (index == shelf tile index).
     private var relatedItems: [MediaItem] = []
+    private var cachedMoreLikeThis: [BelowFoldItem] = []
+    /// Ordered More Like This items backing the shelf (metadata-only items).
+    private var moreLikeThisItems: [MediaItem] = []
+    /// TMDB watch/providers (metadata-only items). nil = no section.
+    private var watchAvailability: MediaWatchAvailability?
+    /// Cross-server check (metadata-only items). nil = no section (owned item).
+    private var serverAvailability: OtherServersAvailabilityChecker.Availability?
     /// The collection row (Plex's hub title, members, optional trailing
     /// collection tile). nil or no members: no row.
     private var collectionRow: CollectionRow?
@@ -872,6 +944,12 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         if let row = collectionRow, !row.members.isEmpty { add(.collection, [.collectionShelf]) }
         if !cachedRelated.isEmpty { add(.related, cachedRelated) }
         if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
+        // Metadata-only sections (Where to Watch / On Your Servers / More
+        // Like This) — nil/empty for an owned item, so these never appear
+        // there.
+        if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
+        if serverAvailability != nil { add(.servers, [.servers]) }
+        if !cachedMoreLikeThis.isEmpty { add(.moreLikeThis, cachedMoreLikeThis) }
         // About + Information/Languages/Accessibility — only when the full detail
         // is present (the episodes-only peek load has no detail).
         if detail != nil {

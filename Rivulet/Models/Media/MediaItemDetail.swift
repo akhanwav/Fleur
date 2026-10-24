@@ -45,6 +45,11 @@ struct MediaItemDetail: Sendable {
     /// External ids keyed lowercase: "tmdb", "imdb", "tvdb".
     var externalIDs: [String: String] = [:]
 
+    /// Show-level season count (TMDB `number_of_seasons`; Plex shows surface
+    /// this through their own season rail instead, so it's nil there). Feeds
+    /// the Information column's "Seasons" row for titles with no season rail.
+    var seasonCount: Int? = nil
+
     struct Extra: Sendable, Identifiable, Hashable {
         let id: String
         let title: String

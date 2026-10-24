@@ -44,9 +44,26 @@ final class TMDBMetadataSource: MetadataSource {
     }
 
     func recommendations(for ref: MediaItemRef) async throws -> [MediaItem] {
-        // The detail surface's "Recommended for You" row reimplements this via
-        // TMDBDiscoverService.discover (genre-seeded) once detail is in hand.
-        // Stub: empty.
-        return []
+        guard ref.providerID == TMDBMediaMapper.providerID,
+              let (tmdbId, type) = TMDBMediaMapper.decodeItemID(ref.itemID) else {
+            throw MediaProviderError.notFound
+        }
+        // Rides the same cached `fetchDetail` call the detail page already
+        // makes (append_to_response=recommendations) — no extra round-trip.
+        guard let detail = await service.fetchDetail(tmdbId: tmdbId, type: type) else {
+            return []
+        }
+        return detail.recommendations.map { TMDBMediaMapper.item($0) }
+    }
+
+    func watchAvailability(for ref: MediaItemRef) async throws -> MediaWatchAvailability {
+        guard ref.providerID == TMDBMediaMapper.providerID,
+              let (tmdbId, type) = TMDBMediaMapper.decodeItemID(ref.itemID) else {
+            throw MediaProviderError.notFound
+        }
+        guard let detail = await service.fetchDetail(tmdbId: tmdbId, type: type) else {
+            return .empty
+        }
+        return TMDBMediaMapper.watchAvailability(detail.watchProviders)
     }
 }

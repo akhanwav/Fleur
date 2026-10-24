@@ -18,6 +18,18 @@ enum TMDBMediaMapper {
     // w780 (not w500): posters appear on large carousel/detail cards where w500
     // visibly upscales. Still small enough that row cards downsample cheaply.
     private static let posterBase = "https://image.tmdb.org/t/p/w780"
+    // w185: cast circles and watch-provider logos are small (CastCell.circleSize,
+    // a ~60pt chip) — no reason to pull a larger profile/logo image.
+    private static let profileBase = "https://image.tmdb.org/t/p/w185"
+    private static let logoBase = "https://image.tmdb.org/t/p/w92"
+
+    private static func profileURL(_ path: String?) -> URL? {
+        path.flatMap { URL(string: "\(profileBase)\($0)") }
+    }
+
+    private static func logoURL(_ path: String?) -> URL? {
+        path.flatMap { URL(string: "\(logoBase)\($0)") }
+    }
 
     /// TMDB ids are not globally unique — id 100 can exist as a movie AND a TV
     /// show. `MediaItemRef.itemID` encodes both so callers that only have a ref
@@ -79,8 +91,38 @@ enum TMDBMediaMapper {
                 id: "\(credit.id ?? 0)",
                 name: credit.name ?? "",
                 role: credit.character,
-                imageURL: nil
+                imageURL: profileURL(credit.profilePath),
+                titleTmdbId: tmdb.id,
+                titleIsMovie: tmdb.mediaType == .movie
             )
+        }
+        // TMDB has no per-show "director" credit — movies get one from the
+        // crew (job == "Director"); shows use `created_by` instead.
+        let directors: [MediaPerson]
+        if tmdb.mediaType == .movie {
+            directors = tmdb.crew
+                .filter { ($0.job ?? "").caseInsensitiveCompare("Director") == .orderedSame }
+                .map { credit in
+                    MediaPerson(
+                        id: "\(credit.id ?? 0)",
+                        name: credit.name ?? "",
+                        role: "Director",
+                        imageURL: profileURL(credit.profilePath),
+                        titleTmdbId: tmdb.id,
+                        titleIsMovie: true
+                    )
+                }
+        } else {
+            directors = tmdb.createdBy.map { creator in
+                MediaPerson(
+                    id: "\(creator.id ?? 0)",
+                    name: creator.name ?? "",
+                    role: "Creator",
+                    imageURL: profileURL(creator.profilePath),
+                    titleTmdbId: tmdb.id,
+                    titleIsMovie: false
+                )
+            }
         }
         // Re-stub a TMDBListItem so we can reuse `item(_:)` for the embedded MediaItem.
         let stub = TMDBListItem(
@@ -121,7 +163,7 @@ enum TMDBMediaMapper {
             genres: tmdb.genres.compactMap(\.name),
             studios: [],
             cast: cast,
-            directors: [],
+            directors: directors,
             writers: [],
             chapters: [],
             mediaSources: [],
@@ -129,8 +171,25 @@ enum TMDBMediaMapper {
             contentRating: nil,
             rating: MediaRating(tmdb.voteAverage, source: .tmdb),
             nextEpisode: nil,
-            collections: []
+            collections: [],
+            seasonCount: tmdb.mediaType == .tv ? tmdb.numberOfSeasons : nil
         )
+    }
+
+    /// Maps a title's `watch/providers` region into the agnostic
+    /// `MediaWatchAvailability` the below-fold's "Where to Watch" section reads.
+    static func watchAvailability(_ region: TMDBWatchProviderRegion?) -> MediaWatchAvailability {
+        guard let region else { return .empty }
+        func options(_ providers: [TMDBWatchProvider]?, kind: MediaWatchOption.Kind) -> [MediaWatchOption] {
+            (providers ?? []).compactMap { provider in
+                guard let name = provider.providerName else { return nil }
+                return MediaWatchOption(kind: kind, providerName: name, logoURL: logoURL(provider.logoPath))
+            }
+        }
+        let combined = options(region.flatrate, kind: .stream)
+            + options(region.rent, kind: .rent)
+            + options(region.buy, kind: .buy)
+        return MediaWatchAvailability(link: region.link.flatMap(URL.init(string:)), options: combined)
     }
 }
 

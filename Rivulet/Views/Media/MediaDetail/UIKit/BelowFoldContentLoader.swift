@@ -45,6 +45,17 @@ struct BelowFoldContent: Sendable {
     /// nil for movies and show-level details (use `detail`).
     var showDetail: MediaItemDetail?
 
+    /// TMDB recommendations ("More Like This") — metadata-only items only.
+    /// Distinct from `related` (Plex's `/related` hub), which stays Plex-only.
+    var moreLikeThis: [MediaItem] = []
+    /// TMDB watch/providers — metadata-only items only.
+    var watchAvailability: MediaWatchAvailability?
+    /// Cross-server check ("On Your Servers") — metadata-only items only.
+    /// `.checking` on first render; the host patches in the real answer once
+    /// `OtherServersAvailabilityChecker` (slow on its first call this session)
+    /// resolves. nil means "not applicable" (an owned item never shows this).
+    var serverAvailability: OtherServersAvailabilityChecker.Availability?
+
     var hasEpisodes: Bool { !episodes.isEmpty }
     var hasCast: Bool { !cast.isEmpty || !directors.isEmpty }
 }
@@ -71,10 +82,20 @@ final class BelowFoldContentLoader {
     /// it's fetched here. Any sub-fetch failure degrades to empty for that
     /// section rather than failing the whole load.
     func load(for item: MediaItem, detail: MediaItemDetail?) async -> BelowFoldContent {
-        var content = BelowFoldContent()
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else {
-            return content
+            // No playback-capable provider for this ref (a Watchlist/Discover
+            // title not on any of this account's servers): fall back to the
+            // read-only metadata source (TMDB), mirroring the two-registry
+            // pattern MediaDetailChromeView.fetchDetail already uses for the
+            // hero above. Without this, the below-fold stayed permanently
+            // empty for every metadata-only item.
+            guard let source = MetadataSourceRegistry.shared.source(for: item.ref.providerID) else {
+                return BelowFoldContent()
+            }
+            return await loadFromMetadataSource(source, item: item, detail: detail)
         }
+
+        var content = BelowFoldContent()
 
         // Cast / directors come from the full detail (reuse the chrome's if
         // present, otherwise fetch). Not via `??` — its RHS is a non-async
@@ -144,6 +165,42 @@ final class BelowFoldContentLoader {
         }
 
         return content
+    }
+
+    /// The below-fold for a metadata-only item (TMDB, no Plex/Jellyfin
+    /// provider for its ref). No episodes/trailers/extras/related/collection
+    /// — those are provider-specific hub calls this item has no server for.
+    /// Cast, directors, recommendations and watch availability all ride the
+    /// same cached `TMDBDiscoverService.fetchDetail` call (append_to_response),
+    /// so this costs one network round trip, not four.
+    private func loadFromMetadataSource(_ source: MetadataSource, item: MediaItem, detail: MediaItemDetail?) async -> BelowFoldContent {
+        var content = BelowFoldContent()
+        let resolvedDetail: MediaItemDetail?
+        if let detail {
+            resolvedDetail = detail
+        } else {
+            resolvedDetail = try? await source.itemDetail(item.ref)
+        }
+        content.cast = resolvedDetail?.cast ?? []
+        content.directors = resolvedDetail?.directors ?? []
+        content.detail = resolvedDetail
+        content.moreLikeThis = (try? await source.recommendations(for: item.ref)) ?? []
+        content.watchAvailability = try? await source.watchAvailability(for: item.ref)
+        // The cross-server check is slow on its first call this session
+        // (pages every other server's library), so it starts in "checking"
+        // and the host patches in the real answer once it resolves —
+        // mirroring how `loadAdvisory` below patches the About card.
+        content.serverAvailability = .checking
+        return content
+    }
+
+    /// Cross-server availability for a metadata-only item — deferred exactly
+    /// like `loadAdvisory`, because `OtherServersAvailabilityChecker` can be
+    /// slow on its first call this session (pages every other server's
+    /// library once, then caches for the rest of the session).
+    func loadServerAvailability(for item: MediaItem) async -> OtherServersAvailabilityChecker.Availability? {
+        guard let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) else { return nil }
+        return await OtherServersAvailabilityChecker.shared.availability(forTmdbId: tmdbId, type: type)
     }
 
     /// Deferred Common Sense Media fetch — runs AFTER the below-fold renders so

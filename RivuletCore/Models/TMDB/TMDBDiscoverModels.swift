@@ -149,6 +149,41 @@ struct TMDBListItem: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// One `watch/providers` entry (a streaming/rental/purchase service), scoped
+/// to a single region by the container that holds it.
+struct TMDBWatchProvider: Codable, Sendable, Hashable {
+    let providerId: Int?
+    let providerName: String?
+    let logoPath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case providerId = "provider_id"
+        case providerName = "provider_name"
+        case logoPath = "logo_path"
+    }
+}
+
+/// One region's `watch/providers` offer (TMDB's `watch/providers.results.{country}`).
+struct TMDBWatchProviderRegion: Codable, Sendable {
+    let link: String?
+    let flatrate: [TMDBWatchProvider]?
+    let rent: [TMDBWatchProvider]?
+    let buy: [TMDBWatchProvider]?
+}
+
+/// A TV show's `created_by` entry (TMDB has no per-episode "director" for
+/// shows; this is the closest equivalent to a movie's director).
+struct TMDBCreatedBy: Codable, Sendable {
+    let id: Int?
+    let name: String?
+    let profilePath: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case profilePath = "profile_path"
+    }
+}
+
 struct TMDBItemDetail: Codable, Identifiable, Sendable {
     let id: Int
     let title: String
@@ -160,6 +195,17 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
     let genres: [TMDBGenre]
     let voteAverage: Double?
     let cast: [TMDBCredit]
+    /// From the `credits` append (movies: directors live here via `job == "Director"`).
+    let crew: [TMDBCredit]
+    /// TV shows only (`created_by`); TMDB has no per-show "director" field.
+    let createdBy: [TMDBCreatedBy]
+    /// TV shows only.
+    let numberOfSeasons: Int?
+    /// From the `recommendations` append.
+    let recommendations: [TMDBListItem]
+    /// From the `watch/providers` append, already narrowed to one region by
+    /// the service layer (US today).
+    let watchProviders: TMDBWatchProviderRegion?
     let mediaType: TMDBMediaType
 
     enum CodingKeys: String, CodingKey {
@@ -175,8 +221,22 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         case genres
         case voteAverage = "vote_average"
         case cast
+        case credits
+        case createdBy = "created_by"
+        case numberOfSeasons = "number_of_seasons"
+        case recommendations
+        case watchProviders = "watch/providers"
         case mediaType = "media_type"
     }
+
+    // Codable (not just Decodable): `encode(to:)` re-wraps crew/recommendations/
+    // watchProviders back into these same nested shapes so the 30-day disk
+    // cache round-trips them — without this, a cache HIT after the app
+    // relaunches would silently decode back to empty crew/recommendations/
+    // watchProviders even though the original network fetch had real data.
+    private struct CreditsContainer: Codable { let cast: [TMDBCredit]?; let crew: [TMDBCredit]? }
+    private struct RecommendationsContainer: Codable { let results: [TMDBListItem]? }
+    private struct WatchProvidersContainer: Codable { let results: [String: TMDBWatchProviderRegion]? }
 
     init(
         id: Int,
@@ -189,6 +249,11 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         genres: [TMDBGenre],
         voteAverage: Double?,
         cast: [TMDBCredit],
+        crew: [TMDBCredit] = [],
+        createdBy: [TMDBCreatedBy] = [],
+        numberOfSeasons: Int? = nil,
+        recommendations: [TMDBListItem] = [],
+        watchProviders: TMDBWatchProviderRegion? = nil,
         mediaType: TMDBMediaType
     ) {
         self.id = id
@@ -201,6 +266,11 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         self.genres = genres
         self.voteAverage = voteAverage
         self.cast = cast
+        self.crew = crew
+        self.createdBy = createdBy
+        self.numberOfSeasons = numberOfSeasons
+        self.recommendations = recommendations
+        self.watchProviders = watchProviders
         self.mediaType = mediaType
     }
 
@@ -223,7 +293,17 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         runtime = try? c.decode(Int.self, forKey: .runtime)
         genres = (try? c.decode([TMDBGenre].self, forKey: .genres)) ?? []
         voteAverage = try? c.decode(Double.self, forKey: .voteAverage)
-        cast = (try? c.decode([TMDBCredit].self, forKey: .cast)) ?? []
+        // The bare detail endpoint has no top-level "cast" key — it only
+        // appears nested under "credits" via `append_to_response=credits`.
+        let creditsContainer = try? c.decode(CreditsContainer.self, forKey: .credits)
+        cast = creditsContainer?.cast ?? (try? c.decode([TMDBCredit].self, forKey: .cast)) ?? []
+        crew = creditsContainer?.crew ?? []
+        createdBy = (try? c.decode([TMDBCreatedBy].self, forKey: .createdBy)) ?? []
+        numberOfSeasons = try? c.decode(Int.self, forKey: .numberOfSeasons)
+        let recommendationsContainer = try? c.decode(RecommendationsContainer.self, forKey: .recommendations)
+        recommendations = recommendationsContainer?.results ?? []
+        let watchProvidersContainer = try? c.decode(WatchProvidersContainer.self, forKey: .watchProviders)
+        watchProviders = watchProvidersContainer?.results?["US"]
         if c.contains(.mediaType) {
             let raw = try c.decode(String.self, forKey: .mediaType)
             guard let parsed = TMDBMediaType(rawValue: raw) else {
@@ -252,6 +332,16 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         try c.encode(genres, forKey: .genres)
         try c.encodeIfPresent(voteAverage, forKey: .voteAverage)
         try c.encode(cast, forKey: .cast)
+        // Re-wrapped into the SAME nested shapes `init(from:)` reads, so a
+        // disk-cache round trip restores them exactly (see the container
+        // types' doc comment above).
+        try c.encode(CreditsContainer(cast: cast, crew: crew), forKey: .credits)
+        try c.encode(createdBy, forKey: .createdBy)
+        try c.encodeIfPresent(numberOfSeasons, forKey: .numberOfSeasons)
+        try c.encode(RecommendationsContainer(results: recommendations), forKey: .recommendations)
+        if let watchProviders {
+            try c.encode(WatchProvidersContainer(results: ["US": watchProviders]), forKey: .watchProviders)
+        }
         try c.encode(mediaType.rawValue, forKey: .mediaType)
     }
 }

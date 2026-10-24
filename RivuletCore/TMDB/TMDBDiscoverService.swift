@@ -108,9 +108,31 @@ actor TMDBDiscoverService {
             return cached
         }
 
-        guard let data = try? await fetchData(path: "\(type.rawValue)/\(tmdbId)"),
+        // One request for the whole below-fold: credits (cast/crew, with
+        // photos), recommendations (More Like This), and watch/providers
+        // (Where to Watch) all ride along on the same cached call instead of
+        // three separate round-trips. TMDB accepts a comma list, slash paths
+        // included.
+        let appendItems = [URLQueryItem(name: "append_to_response", value: "credits,recommendations,watch/providers")]
+        guard let data = try? await fetchData(path: "\(type.rawValue)/\(tmdbId)", queryItems: appendItems),
               let decoded = try? JSONDecoder().decode(TMDBItemDetail.self, from: data) else {
             return nil
+        }
+        // Recommendations are same-type as the title queried (a movie's
+        // recommendations are movies, a show's are shows) but TMDB's results
+        // omit media_type for this endpoint, so TMDBListItem's decoder
+        // defaults to .movie — stamp the real type, mirroring fetchSection.
+        let stampedRecommendations = decoded.recommendations.map { item -> TMDBListItem in
+            TMDBListItem(
+                id: item.id,
+                title: item.title,
+                overview: item.overview,
+                posterPath: item.posterPath,
+                backdropPath: item.backdropPath,
+                releaseDate: item.releaseDate,
+                voteAverage: item.voteAverage,
+                mediaType: type
+            )
         }
         let detail = TMDBItemDetail(
             id: decoded.id,
@@ -123,6 +145,11 @@ actor TMDBDiscoverService {
             genres: decoded.genres,
             voteAverage: decoded.voteAverage,
             cast: decoded.cast,
+            crew: decoded.crew,
+            createdBy: decoded.createdBy,
+            numberOfSeasons: decoded.numberOfSeasons,
+            recommendations: stampedRecommendations,
+            watchProviders: decoded.watchProviders,
             mediaType: type
         )
         saveDetailToDisk(detail, tmdbId: tmdbId, type: type)
