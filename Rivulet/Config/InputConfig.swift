@@ -76,21 +76,24 @@ enum InputConfig {
     /// Seconds of seek per point of pan translation at or below
     /// `scrubVelocitySlow` — the fine-adjustment rate for a slow, deliberate
     /// swipe. Calibrated against a ~1920pt-wide clickpad swipe (tvOS's point
-    /// width) so a full-width slow swipe moves about 1-2 minutes regardless
-    /// of the title's runtime (1920 * 0.05 ≈ 96s).
-    static let scrubSecondsPerPointSlow: Double = 0.05
+    /// width) so a full-width slow swipe moves about a minute regardless of
+    /// the title's runtime (1920 * 0.03 ≈ 58s).
+    static let scrubSecondsPerPointSlow: Double = 0.03
     /// Seconds of seek per point of pan translation at or above
     /// `scrubVelocityFast` — the rate a fast, deliberate flick settles into,
     /// letting it cover much larger distances than a slow drag.
-    static let scrubSecondsPerPointFast: Double = 0.6
+    static let scrubSecondsPerPointFast: Double = 0.3
     /// Pan velocity (points/sec) at or below which scrubbing uses
-    /// `scrubSecondsPerPointSlow`.
-    static let scrubVelocitySlow: Double = 300
+    /// `scrubSecondsPerPointSlow`. Raised well above typical slow-drag
+    /// velocity so an ordinary deliberate swipe stays in the fine-adjustment
+    /// rate for its whole length.
+    static let scrubVelocitySlow: Double = 600
     /// Pan velocity (points/sec) at or above which scrubbing uses
     /// `scrubSecondsPerPointFast`. Between the two thresholds the rate eases
     /// in (see `scrubSecondsPerPoint`) rather than switching abruptly, so
-    /// speeding up or slowing down mid-swipe accelerates gently.
-    static let scrubVelocityFast: Double = 2500
+    /// speeding up or slowing down mid-swipe accelerates gently. Set high
+    /// enough that only a really deliberate flick reaches it.
+    static let scrubVelocityFast: Double = 4000
 
     /// Seconds-per-point of pan translation for a swipe currently moving at
     /// `velocity` points/sec (sign ignored). Eases from
@@ -107,4 +110,13 @@ enum InputConfig {
         let eased = t * t * (3 - 2 * t)
         return scrubSecondsPerPointSlow + eased * (scrubSecondsPerPointFast - scrubSecondsPerPointSlow)
     }
+
+    /// Low-pass factor for smoothing `UIPanGestureRecognizer.velocity(in:)`
+    /// before it picks a scrub rate: `smoothed += (raw - smoothed) * factor`.
+    /// Per-callback touch velocity is noisy frame to frame (see
+    /// `ClickpadRingJog`'s own sample averaging for the ring-jog's version of
+    /// the same problem); fed straight into `scrubSecondsPerPoint` that noise
+    /// made the swipe's effective speed visibly jump even during one steady
+    /// drag. Lower = more smoothing (slower to react to a real speed change).
+    static let scrubVelocitySmoothingFactor: Double = 0.25
 }

@@ -1105,6 +1105,13 @@ class PlayerContainerViewController: UIViewController {
     /// `panMaySeek`.
     private var activePanIsScrub = false
 
+    /// Low-pass-filtered `gesture.velocity(in:).x`, updated every `.changed`
+    /// via `InputConfig.scrubVelocitySmoothingFactor` and reset at `.began`.
+    /// Smoothed because the raw per-callback velocity is noisy enough to
+    /// make `InputConfig.scrubSecondsPerPoint`'s rate visibly jump during
+    /// what is otherwise one steady drag.
+    private var smoothedPanVelocityX: Double = 0
+
     /// `panCanDriveScrub` only decides whether this recognizer claims the
     /// touch at all (same as before — vertical swipes still go to the focus
     /// engine). This is the narrower, separate question of whether THIS
@@ -1131,6 +1138,9 @@ class PlayerContainerViewController: UIViewController {
         switch gesture.state {
         case .began:
             activePanIsScrub = panMaySeek
+            // Start the filter at this swipe's own first reading rather than
+            // 0, so it doesn't have to ramp up from a stale or cold value.
+            smoothedPanVelocityX = Double(velocity.x)
             if activePanIsScrub {
                 inputCoordinator.handle(action: .scrubRelative(seconds: 0), source: .irPress)
             } else {
@@ -1142,13 +1152,17 @@ class PlayerContainerViewController: UIViewController {
 
         case .changed:
             guard activePanIsScrub else { return }
+            // Raw per-callback velocity is noisy; smooth it before it picks
+            // a rate, or the rate (and so the swipe's effective speed) jumps
+            // around even during one steady drag.
+            smoothedPanVelocityX += (Double(velocity.x) - smoothedPanVelocityX) * InputConfig.scrubVelocitySmoothingFactor
             // Proportional scrubbing: horizontal translation maps to seek time,
             // at a rate that scales with how fast the swipe is currently
             // moving (InputConfig.scrubSecondsPerPoint) — slow, small
             // movements stay fine-grained, a fast flick covers a lot more
             // ground, and the transition between them is a gentle ease
             // rather than a step. Positive translation.x = swipe right = forward.
-            let rate = InputConfig.scrubSecondsPerPoint(forVelocity: Double(velocity.x))
+            let rate = InputConfig.scrubSecondsPerPoint(forVelocity: smoothedPanVelocityX)
             let seekDelta = Double(translation.x) * rate
             inputCoordinator.handle(action: .scrubRelative(seconds: seekDelta), source: .irPress)
             gesture.setTranslation(.zero, in: view)
