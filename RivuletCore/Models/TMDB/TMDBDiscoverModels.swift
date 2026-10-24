@@ -57,16 +57,19 @@ enum TMDBDiscoverSection: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Path segment forwarded to the proxy after `/tmdb/list/`.
-    var proxyPath: String {
+    /// TMDB's own path for this section (relative to `TMDBConfig.apiBaseURL`).
+    var tmdbPath: String {
         switch self {
-        case .movieTrending, .tvTrending: return "trending"
-        case .moviePopular, .tvPopular: return "popular"
-        case .movieNowPlaying: return "now_playing"
-        case .movieUpcoming: return "upcoming"
-        case .movieTopRated, .tvTopRated: return "top_rated"
-        case .tvAiringToday: return "airing_today"
-        case .tvOnTheAir: return "on_the_air"
+        case .movieTrending: return "trending/movie/day"
+        case .tvTrending: return "trending/tv/day"
+        case .moviePopular: return "movie/popular"
+        case .tvPopular: return "tv/popular"
+        case .movieNowPlaying: return "movie/now_playing"
+        case .movieUpcoming: return "movie/upcoming"
+        case .movieTopRated: return "movie/top_rated"
+        case .tvTopRated: return "tv/top_rated"
+        case .tvAiringToday: return "tv/airing_today"
+        case .tvOnTheAir: return "tv/on_the_air"
         }
     }
 }

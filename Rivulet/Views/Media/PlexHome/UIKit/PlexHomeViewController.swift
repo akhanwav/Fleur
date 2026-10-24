@@ -663,17 +663,25 @@ final class PlexHomeViewController: UIViewController {
     /// genre). Empty = "All Genres".
     private var watchlistGenreFilters: Set<String> = []
     /// Per-entry local-library ownership + genre, keyed by
-    /// `PlexWatchlistItem.id`. Computed from the in-memory `LibraryGUIDIndex`
-    /// (warm path only — no network), so it starts empty and fills in once
-    /// the index is built/loaded; see `refreshWatchlistEnrichment`. Genre
-    /// filtering only ever considers owned items: Plex's Discover watchlist
-    /// response carries no Genre field at all (confirmed against a live
-    /// response), so unowned items have no genre source.
+    /// `PlexWatchlistItem.id`. Owned items' genres come from the in-memory
+    /// `LibraryGUIDIndex` (warm path only — no network), so it starts empty
+    /// and fills in once the index is built/loaded; see
+    /// `refreshWatchlistEnrichment`. Plex's Discover watchlist response
+    /// carries no Genre field at all (confirmed against a live response),
+    /// so an UNOWNED item has no genre until `backfillUnownedWatchlistGenres`
+    /// fills it in from TMDB in the background — until then it has none.
     private struct WatchlistEnrichment {
         let owned: Bool
         let genres: [String]
     }
     private var watchlistEnrichment: [String: WatchlistEnrichment] = [:]
+    /// Entry ids whose unowned-item TMDB genre lookup has already been
+    /// kicked off this session, so repeated `refreshWatchlistEnrichment`
+    /// runs (the watchlist changing, the library index repopulating) don't
+    /// respawn the same background fetch — `TMDBDiscoverService`'s own
+    /// 30-day disk cache already makes a repeat fetch cheap; this just
+    /// avoids piling up redundant Tasks for the same item.
+    private var watchlistTMDBGenreLookupStarted: Set<String> = []
     /// Pages (by `gridPageSize` index) fetched or in flight this generation.
     /// A page that fails is removed so scrolling back over it retries.
     private var gridPagesRequested: Set<Int> = []
@@ -3614,8 +3622,9 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    /// Genres available to filter by: owned watchlist items only (see
-    /// `watchlistEnrichment` doc comment).
+    /// Genres available to filter by: owned items immediately, unowned ones
+    /// as their TMDB lookup resolves in the background (see
+    /// `backfillUnownedWatchlistGenres`).
     private var availableWatchlistGenres: [String] {
         Set(watchlistEnrichment.values.flatMap(\.genres)).sorted()
     }
@@ -3688,7 +3697,62 @@ final class PlexHomeViewController: UIViewController {
             }
             self.watchlistEnrichment = result
             self.setNeedsSnapshotApply()
+            self.backfillUnownedWatchlistGenres(entries)
         }
+    }
+
+    /// Backfills genres for watchlist items the user does NOT own, via
+    /// TMDB, so the Genre filter can include them too — `watchlistEnrichment`
+    /// otherwise leaves an unowned item's `genres` empty forever (see its
+    /// doc comment). Runs in the background with capped concurrency so it
+    /// never delays the watchlist's own load, folding each result into
+    /// `watchlistEnrichment` and re-applying the snapshot as results arrive
+    /// (mirroring `UniversalPlayerViewModel.fetchChapterThumbnails`'s
+    /// "seed N, refill one-for-one" pattern). Reuses
+    /// `TMDBDiscoverService.fetchDetail`'s existing 30-day disk cache —
+    /// no new network path.
+    private func backfillUnownedWatchlistGenres(_ entries: [PlexWatchlistItem]) {
+        let candidates = entries.filter { entry in
+            watchlistEnrichment[entry.id]?.owned == false
+                && entry.tmdbId != nil
+                && !watchlistTMDBGenreLookupStarted.contains(entry.id)
+        }
+        guard !candidates.isEmpty else { return }
+        for entry in candidates { watchlistTMDBGenreLookupStarted.insert(entry.id) }
+
+        Task.detached(priority: .utility) { [weak self] in
+            let maxConcurrency = 4
+            await withTaskGroup(of: (String, [String]).self) { group in
+                var iterator = candidates.makeIterator()
+                var inFlight = 0
+                while inFlight < maxConcurrency, let entry = iterator.next() {
+                    group.addTask { await Self.fetchWatchlistGenres(for: entry) }
+                    inFlight += 1
+                }
+                for await (id, genres) in group {
+                    inFlight -= 1
+                    if !genres.isEmpty {
+                        await MainActor.run { [weak self] in
+                            guard let self else { return }
+                            let owned = self.watchlistEnrichment[id]?.owned ?? false
+                            self.watchlistEnrichment[id] = WatchlistEnrichment(owned: owned, genres: genres)
+                            self.setNeedsSnapshotApply()
+                        }
+                    }
+                    if let next = iterator.next() {
+                        group.addTask { await Self.fetchWatchlistGenres(for: next) }
+                        inFlight += 1
+                    }
+                }
+            }
+        }
+    }
+
+    private static func fetchWatchlistGenres(for entry: PlexWatchlistItem) async -> (String, [String]) {
+        guard let tmdbId = entry.tmdbId else { return (entry.id, []) }
+        let type: TMDBMediaType = entry.type == .movie ? .movie : .tv
+        let detail = await TMDBDiscoverService.shared.fetchDetail(tmdbId: tmdbId, type: type)
+        return (entry.id, (detail?.genres ?? []).compactMap(\.name))
     }
 
     private func presentWatchlistSortPicker() {

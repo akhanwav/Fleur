@@ -9,8 +9,8 @@
 //  tmdb:// guid. Modern Plex agents store a plex:// or tvdb:// grandparent
 //  guid on episodes, with the real external ids (tvdb://, imdb://) in the
 //  `Guid` array — so an episode's show TMDB id often can't be read straight
-//  off `grandparentGuid`. This bridges tvdb/imdb -> tmdb via the tmdb-proxy
-//  `/tmdb/find` route, caching per show so it's one lookup, not one per episode.
+//  off `grandparentGuid`. This bridges tvdb/imdb -> tmdb via TMDB's own
+//  `/find` endpoint, caching per show so it's one lookup, not one per episode.
 //
 
 import Foundation
@@ -26,7 +26,7 @@ actor InsightsShowIDResolver {
     // show every episode.
     private var cache: [String: Int?] = [:]
 
-    init(baseURL: URL = TMDBConfig.proxyBaseURL, session: URLSession? = nil) {
+    init(baseURL: URL = TMDBConfig.apiBaseURL, session: URLSession? = nil) {
         self.baseURL = baseURL
         if let session {
             self.session = session
@@ -52,8 +52,9 @@ actor InsightsShowIDResolver {
         return nil
     }
 
-    /// Hit `/tmdb/find/{externalId}?source={source}` and return the first TV
-    /// result's TMDB id. Result (including nil) cached per external id.
+    /// Hit TMDB's `/find/{externalId}?external_source={source}` and return
+    /// the first TV result's TMDB id. Result (including nil) cached per
+    /// external id.
     private func find(external: String, source: String, cacheKey: String) async -> Int? {
         if let cached = cache[cacheKey] { return cached }
         let id = await performFind(external: external, source: source)
@@ -63,14 +64,15 @@ actor InsightsShowIDResolver {
 
     private func performFind(external: String, source: String) async -> Int? {
         guard let encoded = external.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "tmdb/find/\(encoded)", relativeTo: baseURL) else { return nil }
+              let url = URL(string: "find/\(encoded)", relativeTo: baseURL) else { return nil }
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: true)
-        comps?.queryItems = [URLQueryItem(name: "source", value: source)]
+        comps?.queryItems = [URLQueryItem(name: "external_source", value: source)]
         guard let finalURL = comps?.url else { return nil }
 
         var req = URLRequest(url: finalURL)
         req.addValue("application/json", forHTTPHeaderField: "Accept")
-        guard let (data, response) = try? await session.attestedData(for: req),
+        req.addValue("Bearer \(Secrets.tmdbAccessToken)", forHTTPHeaderField: "Authorization")
+        guard let (data, response) = try? await session.data(for: req),
               let http = response as? HTTPURLResponse, http.statusCode == 200,
               let decoded = try? JSONDecoder().decode(FindResponse.self, from: data) else {
             return nil

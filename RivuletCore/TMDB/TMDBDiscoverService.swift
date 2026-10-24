@@ -5,7 +5,7 @@
 //  TMDBDiscoverService.swift
 //  Rivulet
 //
-//  Fetches list/discover/details endpoints from the TMDB proxy with caching.
+//  Fetches list/discover/details endpoints directly from TMDB, with caching.
 //
 
 import Foundation
@@ -24,6 +24,11 @@ actor TMDBDiscoverService {
     }
 
     private var listCache: [TMDBDiscoverSection: ListCacheEntry] = [:]
+    /// In-memory only (unlike `listCache`): "For You" results depend on the
+    /// user's evolving watch profile, so a short-lived cache is enough to
+    /// absorb repeat loads without persisting a stale recommendation set
+    /// across app launches.
+    private var discoverCache: [String: ListCacheEntry] = [:]
     private let listCacheDirectory: URL
     private let detailCacheDirectory: URL
 
@@ -57,16 +62,13 @@ actor TMDBDiscoverService {
             return cached.items
         }
 
-        let endpoint = "tmdb/list/\(section.proxyPath)"
-        let queryItems = [URLQueryItem(name: "type", value: section.mediaType.rawValue)]
-
         struct ListResponse: Decodable {
             let results: [TMDBListItem]
         }
 
         let data: Data
         do {
-            data = try await fetchData(endpoint: endpoint, queryItems: queryItems)
+            data = try await fetchData(path: section.tmdbPath)
         } catch {
             // 3) Cold disk fallback (up to 1 week stale): better than nothing
             if let cached = loadListFromDisk(section: section, maxAge: listDiskFallbackTTL) {
@@ -106,10 +108,7 @@ actor TMDBDiscoverService {
             return cached
         }
 
-        let endpoint = "tmdb/details/\(tmdbId)"
-        let queryItems = [URLQueryItem(name: "type", value: type.rawValue)]
-
-        guard let data = try? await fetchData(endpoint: endpoint, queryItems: queryItems),
+        guard let data = try? await fetchData(path: "\(type.rawValue)/\(tmdbId)"),
               let decoded = try? JSONDecoder().decode(TMDBItemDetail.self, from: data) else {
             return nil
         }
@@ -133,7 +132,13 @@ actor TMDBDiscoverService {
     // MARK: - Discover (For You)
 
     func discover(type: TMDBMediaType, withGenres: [Int], withKeywords: [Int]) async -> [TMDBListItem] {
-        var items = [URLQueryItem(name: "type", value: type.rawValue)]
+        let cacheKey = Self.discoverCacheKey(type: type, withGenres: withGenres, withKeywords: withKeywords)
+        if let cached = discoverCache[cacheKey],
+           Date().timeIntervalSince(cached.fetchedAt) < listCacheTTL {
+            return cached.items
+        }
+
+        var items = [URLQueryItem]()
         if !withGenres.isEmpty {
             items.append(URLQueryItem(name: "with_genres", value: withGenres.map(String.init).joined(separator: "|")))
         }
@@ -144,11 +149,11 @@ actor TMDBDiscoverService {
 
         struct ListResponse: Decodable { let results: [TMDBListItem] }
 
-        guard let data = try? await fetchData(endpoint: "tmdb/discover/\(type.rawValue)", queryItems: items),
+        guard let data = try? await fetchData(path: "discover/\(type.rawValue)", queryItems: items),
               let response = try? JSONDecoder().decode(ListResponse.self, from: data) else {
             return []
         }
-        return response.results.map { item in
+        let stamped = response.results.map { item in
             TMDBListItem(
                 id: item.id,
                 title: item.title,
@@ -160,23 +165,23 @@ actor TMDBDiscoverService {
                 mediaType: type
             )
         }
+        discoverCache[cacheKey] = ListCacheEntry(fetchedAt: Date(), items: stamped)
+        return stamped
+    }
+
+    private static func discoverCacheKey(type: TMDBMediaType, withGenres: [Int], withKeywords: [Int]) -> String {
+        "\(type.rawValue)|\(withGenres.sorted().map(String.init).joined(separator: ","))"
+            + "|\(withKeywords.sorted().map(String.init).joined(separator: ","))"
     }
 
     // MARK: - Networking
 
-    private func fetchData(endpoint: String, queryItems: [URLQueryItem]) async throws -> Data {
-        guard let url = URL(string: endpoint, relativeTo: TMDBConfig.proxyBaseURL) else {
+    private func fetchData(path: String, queryItems: [URLQueryItem] = []) async throws -> Data {
+        guard let request = TMDBConfig.request(path: path, queryItems: queryItems) else {
             throw URLError(.badURL)
         }
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: true)
-        components?.queryItems = queryItems
-        guard let finalURL = components?.url else { throw URLError(.badURL) }
 
-        var request = URLRequest(url: finalURL)
-        request.httpMethod = "GET"
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (data, response) = try await session.attestedData(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }

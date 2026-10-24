@@ -12,6 +12,11 @@ struct IOSLicensesView: View {
                 Text(OpenSourceLicenses.appLicense)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                Image("TMDBLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } header: {
                 Text("Rivulet")
             }
