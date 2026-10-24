@@ -17,6 +17,13 @@ actor TMDBDiscoverService {
     private let listCacheTTL: TimeInterval = 60 * 60                // 1 hour: prefer fresh
     private let listDiskFallbackTTL: TimeInterval = 60 * 60 * 24 * 7 // 1 week: usable cold-launch fallback
     private let detailCacheTTL: TimeInterval = 60 * 60 * 24 * 30    // 30 days
+    /// Bump whenever `TMDBItemDetail`'s decoded shape grows a field that a
+    /// cache HIT must not silently omit (append_to_response additions). An
+    /// old cache file lacks the new `version` key entirely, so decoding it
+    /// as this now-required field throws, `loadDetailFromDisk`'s `try?`
+    /// turns that into a miss, and the title refetches with the new fields
+    /// instead of serving a stale, append-less entry for up to 30 days.
+    private static let detailCacheVersion = 2
 
     private struct ListCacheEntry {
         let fetchedAt: Date
@@ -109,11 +116,11 @@ actor TMDBDiscoverService {
         }
 
         // One request for the whole below-fold: credits (cast/crew, with
-        // photos), recommendations (More Like This), and watch/providers
-        // (Where to Watch) all ride along on the same cached call instead of
-        // three separate round-trips. TMDB accepts a comma list, slash paths
-        // included.
-        let appendItems = [URLQueryItem(name: "append_to_response", value: "credits,recommendations,watch/providers")]
+        // photos), recommendations (More Like This), watch/providers (Where
+        // to Watch), and videos (the Trailer button) all ride along on the
+        // same cached call instead of four separate round-trips. TMDB
+        // accepts a comma list, slash paths included.
+        let appendItems = [URLQueryItem(name: "append_to_response", value: "credits,recommendations,watch/providers,videos")]
         guard let data = try? await fetchData(path: "\(type.rawValue)/\(tmdbId)", queryItems: appendItems),
               let decoded = try? JSONDecoder().decode(TMDBItemDetail.self, from: data) else {
             return nil
@@ -150,6 +157,7 @@ actor TMDBDiscoverService {
             numberOfSeasons: decoded.numberOfSeasons,
             recommendations: stampedRecommendations,
             watchProviders: decoded.watchProviders,
+            videos: decoded.videos,
             mediaType: type
         )
         saveDetailToDisk(detail, tmdbId: tmdbId, type: type)
@@ -248,6 +256,7 @@ actor TMDBDiscoverService {
 
     private struct CachedDetail: Codable {
         let savedAt: Date
+        let version: Int
         let detail: TMDBItemDetail
     }
 
@@ -255,12 +264,13 @@ actor TMDBDiscoverService {
         let url = detailCacheURL(tmdbId: tmdbId, type: type)
         guard let data = try? Data(contentsOf: url),
               let cached = try? JSONDecoder().decode(CachedDetail.self, from: data),
+              cached.version == Self.detailCacheVersion,
               Date().timeIntervalSince(cached.savedAt) < detailCacheTTL else { return nil }
         return cached.detail
     }
 
     private func saveDetailToDisk(_ detail: TMDBItemDetail, tmdbId: Int, type: TMDBMediaType) {
-        let cached = CachedDetail(savedAt: Date(), detail: detail)
+        let cached = CachedDetail(savedAt: Date(), version: Self.detailCacheVersion, detail: detail)
         guard let data = try? JSONEncoder().encode(cached) else { return }
         try? data.write(to: detailCacheURL(tmdbId: tmdbId, type: type), options: [.atomic])
     }

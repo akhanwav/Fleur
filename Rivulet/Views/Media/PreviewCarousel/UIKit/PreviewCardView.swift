@@ -342,6 +342,9 @@ final class PreviewCardView: UICollectionViewCell {
     var onPlay: ((MediaItem) -> Void)?
     /// Versions → play `item` from the picked file. Set by the VC in cellForItemAt.
     var onPlayVersion: ((MediaItem, String) -> Void)?
+    /// Ways to Watch → play `item` from a copy on a DIFFERENT server. Set by
+    /// the VC in cellForItemAt; nil hosts get local-only Ways to Watch rows.
+    var onPlayRemoteVersion: ((MediaItem, WaysToWatchTarget) -> Void)?
     /// Info button → show the structured info popup (carries the loaded detail).
     var onShowInfo: ((MediaItemDetail) -> Void)?
 
@@ -373,6 +376,10 @@ final class PreviewCardView: UICollectionViewCell {
         chromeView.onPlayVersion = { [weak self] sourceID in
             guard let self, let item = self.chromeView.item else { return }
             self.onPlayVersion?(item, sourceID)
+        }
+        chromeView.onPlayRemoteVersion = { [weak self] target in
+            guard let self, let item = self.chromeView.item else { return }
+            self.onPlayRemoteVersion?(item, target)
         }
         chromeView.onShowFullDescription = { [weak self] detail in
             self?.onShowInfo?(detail)

@@ -24,6 +24,10 @@ struct MediaItemDetail: Sendable {
     let chapters: [MediaChapter]
     let mediaSources: [MediaSource]
     let trailerURL: URL?
+    /// A trailer that plays OUTSIDE this app (TMDB's YouTube video, opened in
+    /// the YouTube app) — distinct from `trailerURL`, which is an in-app
+    /// playable stream. Metadata-only items only; nil for Plex/Jellyfin.
+    var externalTrailerURL: URL? = nil
     let contentRating: String?
     var regionOfOrigin: String? = nil   // e.g. "United Kingdom" (Plex Country), if present
     let rating: MediaRating?

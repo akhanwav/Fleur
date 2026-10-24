@@ -34,9 +34,27 @@ actor OtherServersAvailabilityChecker {
         case found([String])
     }
 
+    /// One other-server match for `copies(forGuids:)`: enough to fetch that
+    /// server's own full metadata for the item directly.
+    struct ServerCopy: Sendable {
+        let serverName: String
+        let serverURL: String
+        let token: String
+        let ratingKey: String
+        let machineId: String
+    }
+
     private struct ServerIndex {
         let displayName: String
+        let serverURL: String
+        let token: String
         var tmdbGuids: Set<String> = []
+        /// Every guid string seen (any namespace: tmdb/imdb/tvdb, Plex's own
+        /// "scheme://value" shape) mapped to that item's ratingKey on this
+        /// server — `copies(forGuids:)`'s index. `tmdbGuids` above is kept
+        /// as its own set rather than derived from this dict's keys because
+        /// `availability(forTmdbId:)` only ever needs presence, not a key scan.
+        var guidToRatingKey: [String: String] = [:]
     }
 
     private var serverIndexes: [String: ServerIndex] = [:]
@@ -53,6 +71,25 @@ actor OtherServersAvailabilityChecker {
             .map(\.displayName)
             .sorted()
         return names.isEmpty ? .notFound : .found(names)
+    }
+
+    /// Resolves an owned item (not just a metadata-only one) to every OTHER
+    /// server that holds a matching copy, keyed by any of its own guids
+    /// (tmdb/imdb/tvdb — Plex's "scheme://value" shape, e.g. "tmdb://603").
+    /// One copy per matching server, first guid match wins.
+    func copies(forGuids guids: [String]) async -> [ServerCopy] {
+        guard !guids.isEmpty else { return [] }
+        await ensureBuilt()
+        var results: [ServerCopy] = []
+        for (machineId, index) in serverIndexes {
+            for guid in guids {
+                guard let ratingKey = index.guidToRatingKey[guid] else { continue }
+                results.append(ServerCopy(serverName: index.displayName, serverURL: index.serverURL,
+                                          token: index.token, ratingKey: ratingKey, machineId: machineId))
+                break
+            }
+        }
+        return results.sorted { $0.serverName < $1.serverName }
     }
 
     private func ensureBuilt() async {
@@ -101,7 +138,7 @@ actor OtherServersAvailabilityChecker {
             return nil
         }
 
-        var index = ServerIndex(displayName: server.sourceTitle ?? server.name)
+        var index = ServerIndex(displayName: server.sourceTitle ?? server.name, serverURL: serverURL, token: token)
         let pageSize = 2000
         let maxPagesPerSection = 20   // safety cap: 40,000 items/section
 
@@ -118,8 +155,11 @@ actor OtherServersAvailabilityChecker {
                 ) else { break }
 
                 for item in result.items {
+                    guard let ratingKey = item.ratingKey else { continue }
                     for guid in item.Guid ?? [] {
-                        if let id = guid.id, id.hasPrefix("tmdb://") { index.tmdbGuids.insert(id) }
+                        guard let id = guid.id else { continue }
+                        if id.hasPrefix("tmdb://") { index.tmdbGuids.insert(id) }
+                        index.guidToRatingKey[id] = ratingKey
                     }
                 }
                 start += result.items.count

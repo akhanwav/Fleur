@@ -113,6 +113,10 @@ final class MediaDetailChromeView: UIView {
     /// during Iter B/D.
     var onPlay: (() -> Void)?
     var onPlayVersion: ((String) -> Void)?
+    /// Ways to Watch: a copy on a server OTHER than the selected one was
+    /// picked. nil (the default) means this host doesn't support cross-server
+    /// playback, so the picker only offers this server's own versions.
+    var onPlayRemoteVersion: ((WaysToWatchTarget) -> Void)?
     var onToggleWatchlist: (() -> Void)?
     var onShowFullDescription: ((MediaItemDetail) -> Void)?
 
@@ -667,23 +671,50 @@ final class MediaDetailChromeView: UIView {
         } else {
             castLabel.attributedText = nil
         }
-        addVersionsButton(detail)
+        addVersionsButton(item: item, detail: detail)
+        addTrailerButton(detail)
     }
 
-    /// Versions button after Info, once the detail shows two or more files.
-    private func addVersionsButton(_ detail: MediaItemDetail) {
-        let versions = VersionPicker.versions(in: detail)
-        guard !versions.isEmpty, versionsButton == nil, let info = infoButton,
-              let index = actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
-        let button = makeCircleButton(systemImage: "square.stack")
-        button.onPrimaryAction = { [weak self, weak button] in
-            guard let self, let button, let host = self.hostViewController else { return }
-            VersionPicker.present(versions, from: host, sourceFrame: button.convert(button.bounds, to: nil)) {
-                [weak self] id in self?.onPlayVersion?(id)
+    /// Ways to Watch button after Info — inserted only once the lookup
+    /// resolves to two or more playable copies (this server's own versions,
+    /// plus one per OTHER accessible server that has a match), so a
+    /// single-version item on a server with no copy elsewhere never grows a
+    /// button that opens to nothing. The lookup pages every other server's
+    /// library on first use this session only; cached after.
+    private func addVersionsButton(item: MediaItem, detail: MediaItemDetail) {
+        guard versionsButton == nil, let info = infoButton else { return }
+        let includeOtherServers = onPlayRemoteVersion != nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let rows = await WaysToWatchPicker.rows(for: item, detail: detail, includeOtherServers: includeOtherServers)
+            guard rows.count >= 2, self.versionsButton == nil,
+                  let index = self.actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
+            let button = self.makeCircleButton(systemImage: "square.stack")
+            button.onPrimaryAction = { [weak self, weak button] in
+                guard let self, let button, let host = self.hostViewController else { return }
+                WaysToWatchPicker.present(rows, from: host, sourceFrame: button.convert(button.bounds, to: nil)) {
+                    [weak self] target in
+                    switch target {
+                    case .local(let id): self?.onPlayVersion?(id)
+                    case .remote: self?.onPlayRemoteVersion?(target)
+                    }
+                }
             }
+            self.actionButtonsStack.insertArrangedSubview(button, at: index + 1)
+            self.versionsButton = button
         }
-        actionButtonsStack.insertArrangedSubview(button, at: index + 1)
-        versionsButton = button
+    }
+
+    /// Trailer button for metadata-only items (TMDB's YouTube trailer, opened
+    /// in the YouTube app) — hidden entirely when there's no trailer, or when
+    /// this device has nothing registered to open it.
+    private func addTrailerButton(_ detail: MediaItemDetail) {
+        guard let url = detail.externalTrailerURL, UIApplication.shared.canOpenURL(url) else { return }
+        let trailer = makeCircleButton(systemImage: "play.rectangle")
+        trailer.onPrimaryAction = {
+            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+        }
+        actionButtonsStack.addArrangedSubview(trailer)
     }
 
     // MARK: - Row builders

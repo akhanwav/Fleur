@@ -171,6 +171,18 @@ struct TMDBWatchProviderRegion: Codable, Sendable {
     let buy: [TMDBWatchProvider]?
 }
 
+/// One `videos` entry (TMDB's `append_to_response=videos`) — trailers,
+/// teasers, clips. Only YouTube entries are playable by this app (the
+/// Trailer button opens the YouTube app), so other sites are kept but never
+/// chosen.
+struct TMDBVideo: Codable, Sendable, Hashable {
+    let key: String?
+    let site: String?
+    let type: String?
+    let official: Bool?
+    let name: String?
+}
+
 /// A TV show's `created_by` entry (TMDB has no per-episode "director" for
 /// shows; this is the closest equivalent to a movie's director).
 struct TMDBCreatedBy: Codable, Sendable {
@@ -206,7 +218,16 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
     /// From the `watch/providers` append, already narrowed to one region by
     /// the service layer (US today).
     let watchProviders: TMDBWatchProviderRegion?
+    /// From the `videos` append.
+    let videos: [TMDBVideo]
     let mediaType: TMDBMediaType
+
+    /// The Trailer button's target: the official YouTube trailer, falling
+    /// back to any YouTube trailer, else nil (button is hidden).
+    var youtubeTrailerKey: String? {
+        let youtubeTrailers = videos.filter { $0.site == "YouTube" && $0.type == "Trailer" && $0.key != nil }
+        return (youtubeTrailers.first { $0.official == true } ?? youtubeTrailers.first)?.key
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -226,17 +247,19 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         case numberOfSeasons = "number_of_seasons"
         case recommendations
         case watchProviders = "watch/providers"
+        case videos
         case mediaType = "media_type"
     }
 
     // Codable (not just Decodable): `encode(to:)` re-wraps crew/recommendations/
-    // watchProviders back into these same nested shapes so the 30-day disk
-    // cache round-trips them — without this, a cache HIT after the app
+    // watchProviders/videos back into these same nested shapes so the 30-day
+    // disk cache round-trips them — without this, a cache HIT after the app
     // relaunches would silently decode back to empty crew/recommendations/
-    // watchProviders even though the original network fetch had real data.
+    // watchProviders/videos even though the original network fetch had real data.
     private struct CreditsContainer: Codable { let cast: [TMDBCredit]?; let crew: [TMDBCredit]? }
     private struct RecommendationsContainer: Codable { let results: [TMDBListItem]? }
     private struct WatchProvidersContainer: Codable { let results: [String: TMDBWatchProviderRegion]? }
+    private struct VideosContainer: Codable { let results: [TMDBVideo]? }
 
     init(
         id: Int,
@@ -254,6 +277,7 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         numberOfSeasons: Int? = nil,
         recommendations: [TMDBListItem] = [],
         watchProviders: TMDBWatchProviderRegion? = nil,
+        videos: [TMDBVideo] = [],
         mediaType: TMDBMediaType
     ) {
         self.id = id
@@ -271,6 +295,7 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         self.numberOfSeasons = numberOfSeasons
         self.recommendations = recommendations
         self.watchProviders = watchProviders
+        self.videos = videos
         self.mediaType = mediaType
     }
 
@@ -304,6 +329,8 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         recommendations = recommendationsContainer?.results ?? []
         let watchProvidersContainer = try? c.decode(WatchProvidersContainer.self, forKey: .watchProviders)
         watchProviders = watchProvidersContainer?.results?["US"]
+        let videosContainer = try? c.decode(VideosContainer.self, forKey: .videos)
+        videos = videosContainer?.results ?? []
         if c.contains(.mediaType) {
             let raw = try c.decode(String.self, forKey: .mediaType)
             guard let parsed = TMDBMediaType(rawValue: raw) else {
@@ -342,6 +369,7 @@ struct TMDBItemDetail: Codable, Identifiable, Sendable {
         if let watchProviders {
             try c.encode(WatchProvidersContainer(results: ["US": watchProviders]), forKey: .watchProviders)
         }
+        try c.encode(VideosContainer(results: videos), forKey: .videos)
         try c.encode(mediaType.rawValue, forKey: .mediaType)
     }
 }

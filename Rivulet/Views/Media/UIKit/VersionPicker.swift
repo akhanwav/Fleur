@@ -61,9 +61,10 @@ enum VersionPicker {
         }
     }
 
-    private static func rowLabel(_ source: MediaSource) -> String {
+    static func rowLabel(_ source: MediaSource) -> String {
         let name = source.versionName.flatMap { isResolutionName($0) ? nil : $0 }
         return [name, source.resolutionBadge, source.rangeBadge,
+                source.bitrate.map(PlayerInfoSheetStyle.bitrate),
                 source.videoTracks.first.flatMap { codecName($0.codec) },
                 source.audioBadge, source.fileSize.map(PlayerInfoSheetStyle.fileSize)]
             .compactMap { $0 }

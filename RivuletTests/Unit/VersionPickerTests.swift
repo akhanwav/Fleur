@@ -9,13 +9,13 @@ final class VersionPickerTests: XCTestCase {
 
     private func source(_ id: String, res: String = "1080", height: Int = 1080, codec: String = "hevc",
                         range: VideoTrack.VideoRange = .sdr, size: Int64? = 5_730_000_000,
-                        file: String? = nil, name: String? = nil) -> MediaSource {
+                        file: String? = nil, name: String? = nil, bitrate: Int? = nil) -> MediaSource {
         let video = VideoTrack(id: "v\(id)", codec: codec, profile: nil, level: nil, width: nil, height: height,
                                frameRate: nil, bitrate: nil, videoRange: range, isDefault: true, scanType: nil)
         let audio = AudioTrack(id: "a\(id)", index: 0, codec: "aac", profile: nil, channels: 6,
                                channelLayout: "5.1", language: "en", title: nil, extendedTitle: nil,
                                bitrate: nil, samplingRate: nil, isDefault: true, isForced: false, isSelected: true)
-        return MediaSource(id: id, container: "mkv", duration: 100, bitrate: nil, fileSize: size,
+        return MediaSource(id: id, container: "mkv", duration: 100, bitrate: bitrate, fileSize: size,
                            fileName: file, versionName: name, videoResolution: res,
                            videoTracks: [video], audioTracks: [audio], subtitleTracks: [],
                            streamKind: .directPlay, streamURL: nil)
@@ -32,6 +32,11 @@ final class VersionPickerTests: XCTestCase {
                                                       range: .dolbyVision(profile: 8))])[0]
         XCTAssertTrue(label.hasPrefix("4K · DV · HEVC · AAC 5.1 · "), label)
         XCTAssertTrue(label.hasSuffix("GB"), label)
+    }
+
+    func test_label_includesBitrateBetweenRangeAndCodec() {
+        let label = VersionPicker.labels(for: [source("a", range: .dolbyVision(profile: 8), bitrate: 18_500_000)])[0]
+        XCTAssertTrue(label.hasPrefix("1080p · DV · 18.5 Mbps · HEVC"), label)
     }
 
     func test_label_leadsWithAVersionName() {

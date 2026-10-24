@@ -168,6 +168,7 @@ enum TMDBMediaMapper {
             chapters: [],
             mediaSources: [],
             trailerURL: nil,
+            externalTrailerURL: tmdb.youtubeTrailerKey.flatMap { URL(string: "https://www.youtube.com/watch?v=\($0)") },
             contentRating: nil,
             rating: MediaRating(tmdb.voteAverage, source: .tmdb),
             nextEpisode: nil,

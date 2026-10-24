@@ -138,11 +138,58 @@ final class TMDBDiscoverServiceTests: XCTestCase {
         XCTAssertEqual(detail?.watchProviders?.flatrate?.first?.providerName, "Netflix")
     }
 
-    /// `fetchDetail` requests `append_to_response=credits,recommendations,watch/providers`
-    /// on every call (one round trip feeds Cast & Crew, More Like This, and Where
-    /// to Watch) — the mock key must include it to match.
+    func testFetchDetailPicksOfficialYouTubeTrailer() async {
+        let json = """
+        {
+          "id": 410, "title": "Test Movie", "genres": [],
+          "videos": {
+            "results": [
+              {"key": "teaser1", "site": "YouTube", "type": "Teaser", "official": true, "name": "Teaser"},
+              {"key": "trailer1", "site": "YouTube", "type": "Trailer", "official": false, "name": "Trailer (fan-sub)"},
+              {"key": "trailer2", "site": "YouTube", "type": "Trailer", "official": true, "name": "Official Trailer"}
+            ]
+          }
+        }
+        """.data(using: .utf8)!
+        TMDBMockURLProtocol.responses[Self.detailKey("movie", 410)] = (200, json)
+
+        let service = TMDBDiscoverService(session: makeMockSession())
+        let detail = await service.fetchDetail(tmdbId: 410, type: .movie)
+
+        XCTAssertEqual(detail?.youtubeTrailerKey, "trailer2")
+    }
+
+    /// A disk cache entry written before `append_to_response` grew a field
+    /// (here: no `version` key at all, as any pre-this-change cache file on
+    /// disk would be) must be treated as stale and refetched, never served
+    /// as a silent hit missing that field.
+    func testFetchDetailRefetchesWhenDiskCacheHasNoVersion() async {
+        let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        let cacheDir = cachesDir.appendingPathComponent("TMDBDiscoverDetailCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let staleJSON = """
+        {"savedAt": \(Date().timeIntervalSinceReferenceDate), "detail": {"id": 420, "title": "Stale", "genres": [], "media_type": "movie"}}
+        """
+        // Pre-dates the `version` field: write a raw dict missing that key.
+        let staleData = staleJSON.data(using: .utf8)!
+        try? staleData.write(to: cacheDir.appendingPathComponent("movie_420.json"))
+
+        let json = """
+        {"id": 420, "title": "Fresh", "genres": []}
+        """.data(using: .utf8)!
+        TMDBMockURLProtocol.responses[Self.detailKey("movie", 420)] = (200, json)
+
+        let service = TMDBDiscoverService(session: makeMockSession())
+        let detail = await service.fetchDetail(tmdbId: 420, type: .movie)
+
+        XCTAssertEqual(detail?.title, "Fresh")
+    }
+
+    /// `fetchDetail` requests `append_to_response=credits,recommendations,watch/providers,videos`
+    /// on every call (one round trip feeds Cast & Crew, More Like This, Where
+    /// to Watch, and the Trailer button) — the mock key must include it to match.
     private static func detailKey(_ type: String, _ id: Int) -> String {
-        "3/\(type)/\(id)?append_to_response=credits,recommendations,watch/providers"
+        "3/\(type)/\(id)?append_to_response=credits,recommendations,watch/providers,videos"
     }
 
     private func makeMockSession() -> URLSession {
