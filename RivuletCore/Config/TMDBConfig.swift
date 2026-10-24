@@ -14,7 +14,14 @@ enum TMDBConfig {
     /// TMDB's own REST API. Calls carry this account's own API Read Access
     /// Token (`Secrets.tmdbAccessToken`) and go straight to TMDB — there is
     /// no proxy in front of them.
-    static let apiBaseURL = URL(string: "https://api.themoviedb.org/3")!
+    ///
+    /// The trailing slash is load-bearing: `URL(string:relativeTo:)`
+    /// resolves a relative reference per RFC 3986, which REPLACES a base
+    /// URL's last path segment when it doesn't end in `/` rather than
+    /// appending after it — so a bare `.../3` silently dropped the "3" and
+    /// sent every request to `api.themoviedb.org/movie/...` instead of
+    /// `api.themoviedb.org/3/movie/...` (a 404 on every call). Don't remove it.
+    static let apiBaseURL = URL(string: "https://api.themoviedb.org/3/")!
 
     /// Cache TTL for TMDB responses when stored locally (in seconds).
     static let localCacheTTL: TimeInterval = 60 * 60 * 24 * 30  // 30 days

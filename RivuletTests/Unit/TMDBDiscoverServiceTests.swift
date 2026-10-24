@@ -35,7 +35,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        TMDBMockURLProtocol.responses["tmdb/list/popular?type=movie"] = (200, json)
+        TMDBMockURLProtocol.responses["3/movie/popular?"] = (200, json)
 
         let service = TMDBDiscoverService(session: makeMockSession())
         let items = await service.fetchSection(.moviePopular)
@@ -55,7 +55,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        TMDBMockURLProtocol.responses["tmdb/list/popular?type=tv"] = (200, json)
+        TMDBMockURLProtocol.responses["3/tv/popular?"] = (200, json)
 
         let service = TMDBDiscoverService(session: makeMockSession())
         let items = await service.fetchSection(.tvPopular)
@@ -66,7 +66,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
     }
 
     func testFetchSectionReturnsEmptyOnFailure() async {
-        TMDBMockURLProtocol.responses["tmdb/list/popular?type=movie"] = (500, Data())
+        TMDBMockURLProtocol.responses["3/movie/popular?"] = (500, Data())
         let service = TMDBDiscoverService(session: makeMockSession())
         let items = await service.fetchSection(.moviePopular)
         XCTAssertTrue(items.isEmpty)
@@ -76,13 +76,13 @@ final class TMDBDiscoverServiceTests: XCTestCase {
         let json = """
         {"results": [{"id": 1, "title": "A"}]}
         """.data(using: .utf8)!
-        TMDBMockURLProtocol.responses["tmdb/list/popular?type=movie"] = (200, json)
+        TMDBMockURLProtocol.responses["3/movie/popular?"] = (200, json)
 
         let service = TMDBDiscoverService(session: makeMockSession())
         _ = await service.fetchSection(.moviePopular)
 
         // Second call: blank out the response. Cache should serve.
-        TMDBMockURLProtocol.responses["tmdb/list/popular?type=movie"] = (500, Data())
+        TMDBMockURLProtocol.responses["3/movie/popular?"] = (500, Data())
         let second = await service.fetchSection(.moviePopular)
         XCTAssertEqual(second.first?.id, 1)
     }
@@ -91,7 +91,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
         let json = """
         {"id": 300, "name": "Test Show", "genres": [], "cast": []}
         """.data(using: .utf8)!
-        TMDBMockURLProtocol.responses["tmdb/details/300?type=tv"] = (200, json)
+        TMDBMockURLProtocol.responses["3/tv/300?"] = (200, json)
 
         let service = TMDBDiscoverService(session: makeMockSession())
         let detail = await service.fetchDetail(tmdbId: 300, type: .tv)
@@ -101,7 +101,7 @@ final class TMDBDiscoverServiceTests: XCTestCase {
     }
 
     func testFetchDetailReturnsNilOnFailure() async {
-        TMDBMockURLProtocol.responses["tmdb/details/1?type=movie"] = (404, Data())
+        TMDBMockURLProtocol.responses["3/movie/1?"] = (404, Data())
         let service = TMDBDiscoverService(session: makeMockSession())
         let detail = await service.fetchDetail(tmdbId: 1, type: .movie)
         XCTAssertNil(detail)
