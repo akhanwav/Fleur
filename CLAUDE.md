@@ -581,7 +581,8 @@ functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
 `placement`), tested without Vision in `ContinueWatchingCardCompositorTests`.
 
 - **Continue Watching card**: `ContinueWatchingCardCompositor` builds the card
-  as one image (the still, a mirrored blurred band under it, a gradient), once
+  as one image (the still filling Apple's 16:9-plus-48 pt frame under a light
+  gradient; no mirrored band, which read as a smear without a title on it), once
   per still, cached by `ContinueWatchingCardCache`. The card carries no title:
   the caption under it does (the title, then `ResumeText`'s "S2 · E5 · 23 min
   left"), with a `QualityTagView` for the version that would play on the card's

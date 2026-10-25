@@ -5,17 +5,20 @@
 //  ContinueWatchingCardCompositor.swift
 //  Rivulet
 //
-//  The Apple TV app's Up Next card shows ONE server-made image: the 16:9 still
-//  on top, a mirrored, blurred continuation of it in the 48 pt below, under a
-//  black gradient. This builds the same image locally, once per still.
+//  The Continue Watching card's image: the still filling the card (the Apple
+//  TV app's Up Next frame, a 16:9 still plus 48 pt) under a light black
+//  gradient that keeps the status row legible. Built locally, once per still.
+//
+//  The Apple TV app fills that 48 pt with a mirrored, blurred copy of the still
+//  to seat a title over it. Rivulet's cards carry no title, and with none the
+//  blurred strip read as a smear, so the still covers the card instead.
 //
 
 import CoreGraphics
-import CoreImage
 
 nonisolated enum ContinueWatchingCardCompositor {
 
-    /// Height of the mirrored band under the still.
+    /// Height the card adds under a 16:9 still (Apple's Up Next frame).
     static let bandHeight: CGFloat = 48
     /// Inset of the title and the status row from the card's edges.
     static let padding: CGFloat = 14
@@ -32,17 +35,12 @@ nonisolated enum ContinueWatchingCardCompositor {
         let card: CGSize
         /// The still: 16:9 at the top.
         let still: CGRect
-        /// The band under it.
-        let band: CGRect
-        /// The blur fades in from this y to full strength at the seam.
-        let blurStart: CGFloat
-        let blurRadius: CGFloat
         /// Black gradient over the whole card, top to bottom.
         let gradientLocations: [CGFloat]
         let gradientAlphas: [CGFloat]
         /// Largest box the title logo may fill on the leading edge, centred on the still.
         let titleBox: CGRect
-        /// The title's lowest bottom edge: the blur ramp's start, clear of the status row.
+        /// The title's lowest bottom edge, clear of the status row.
         let titleFloor: CGFloat
 
         init(cardWidth width: CGFloat) {
@@ -52,9 +50,6 @@ nonisolated enum ContinueWatchingCardCompositor {
             titleFloor = stillHeight - 16
             card = CGSize(width: width, height: height)
             still = CGRect(x: 0, y: 0, width: width, height: stillHeight)
-            band = CGRect(x: 0, y: stillHeight, width: width, height: bandHeight)
-            blurStart = stillHeight - 16
-            blurRadius = 8
             // Measured off Apple's served image: clear to the middle, 7% at the seam.
             gradientLocations = [0, 0.5, (stillHeight - 35) / height, stillHeight / height, 1]
             gradientAlphas = [0, 0, 0.03, 0.07, 0.19]
@@ -99,7 +94,7 @@ nonisolated enum ContinueWatchingCardCompositor {
         }
     }
 
-    /// Apple's rule: a 16:9 still plus the band.
+    /// Apple's rule: a 16:9 still plus 48 pt.
     static func height(forWidth width: CGFloat) -> CGFloat {
         (width / 1.7778 + bandHeight).rounded()
     }
@@ -124,7 +119,6 @@ nonisolated enum ContinueWatchingCardCompositor {
     // MARK: - Render
 
     static let colorSpace = CGColorSpaceCreateDeviceRGB()
-    private static let ciContext = CIContext(options: [.workingColorSpace: NSNull(), .cacheIntermediates: false])
 
     static func bitmap(width: Int, height: Int, alpha: CGImageAlphaInfo = .noneSkipLast) -> CGContext? {
         CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -142,51 +136,21 @@ nonisolated enum ContinueWatchingCardCompositor {
         base.scaleBy(x: scale, y: -scale)
         base.interpolationQuality = .high
 
-        let rect = aspectFill(CGSize(width: still.width, height: still.height), in: geometry.still)
-        let drawStill = {
-            base.saveGState()
-            base.clip(to: geometry.still)
-            base.translateBy(x: rect.minX, y: rect.maxY)
-            base.scaleBy(x: 1, y: -1)
-            base.draw(still, in: CGRect(origin: .zero, size: rect.size))
-            base.restoreGState()
-        }
-        drawStill()
-        // The band is the still reflected about the seam.
+        // The still covers the whole card, cropped at the sides.
+        let cardRect = CGRect(origin: .zero, size: geometry.card)
+        let rect = aspectFill(CGSize(width: still.width, height: still.height), in: cardRect)
         base.saveGState()
-        base.clip(to: geometry.band)
-        base.translateBy(x: 0, y: 2 * geometry.still.maxY)
+        base.clip(to: cardRect)
+        base.translateBy(x: rect.minX, y: rect.maxY)
         base.scaleBy(x: 1, y: -1)
-        drawStill()
+        base.draw(still, in: CGRect(origin: .zero, size: rect.size))
         base.restoreGState()
 
         let colors = geometry.gradientAlphas.map { CGColor(red: 0, green: 0, blue: 0, alpha: $0) } as CFArray
         if let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: geometry.gradientLocations) {
             base.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: geometry.card.height), options: [])
         }
-        guard let sharp = base.makeImage() else { return nil }
-
-        // The blurred copy fades in from nothing above the seam to all of it
-        // below, so the reflection never shows an edge. Core Image's origin is
-        // bottom-left.
-        let extent = CGRect(x: 0, y: 0, width: width, height: height)
-        let mask = CIFilter(name: "CILinearGradient", parameters: [
-            "inputPoint0": CIVector(x: 0, y: (geometry.card.height - geometry.blurStart) * scale),
-            "inputColor0": CIColor.black,
-            "inputPoint1": CIVector(x: 0, y: geometry.band.height * scale),
-            "inputColor1": CIColor.white
-        ])?.outputImage
-        guard let mask, let out = bitmap(width: width, height: height), let data = out.data else { return sharp }
-        let source = CIImage(cgImage: sharp)
-        let blurred = source.clampedToExtent()
-            .applyingGaussianBlur(sigma: geometry.blurRadius * scale)
-            .applyingFilter("CIBlendWithMask", parameters: [
-                kCIInputBackgroundImageKey: source,
-                kCIInputMaskImageKey: mask
-            ])
-        ciContext.render(blurred, toBitmap: data, rowBytes: out.bytesPerRow, bounds: extent,
-                         format: .RGBA8, colorSpace: colorSpace)
-        return out.makeImage()
+        return base.makeImage()
     }
 
     /// Room around the title box for the logo's shadow.

@@ -179,7 +179,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
     }
 
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
-    func configure(item: MediaItem) {
+    /// `knownQuality` is the tag when the caller has the versions already (another
+    /// server's copy, which no provider here can look up); nil looks it up.
+    func configure(item: MediaItem, knownQuality: String?? = nil) {
         // Backdrop > thumbnail in landscape orientation.
         let url = item.grandparentArtwork?.backdrop
             ?? item.artwork.backdrop
@@ -193,7 +195,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
             season: isEpisode ? item.seasonNumber : nil, episode: isEpisode ? item.episodeNumber : nil,
             offsetSeconds: item.userState.viewOffset, runtimeSeconds: item.runtime)
         caption.configure(title: text.title, detail: text.detail)
-        loadQuality(for: item.ref)
+        if let knownQuality {
+            showQuality(knownQuality)
+        } else {
+            loadQuality(for: item.ref)
+        }
 
         let isEpisodeStill = isEpisode && item.grandparentArtwork?.backdrop == nil && item.artwork.backdrop == nil
         // An episode's fallback is its show's; the shared query covers movies and shows only.
@@ -221,15 +227,20 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
     // MARK: - Quality
 
+    private func showQuality(_ label: String?) {
+        qualityTask?.cancel()
+        qualityTask = nil
+        qualityTag.text = label
+        qualityTag.isHidden = label == nil
+    }
+
     /// The tag for the version this card would play, fetched once per title.
     private func loadQuality(for ref: MediaItemRef) {
-        qualityTask?.cancel()
-        qualityTag.isHidden = true
         if let known = ContinueWatchingQuality.known(for: ref) {
-            qualityTag.text = known
-            qualityTag.isHidden = known == nil
+            showQuality(known)
             return
         }
+        showQuality(nil)
         qualityTask = Task { [weak self] in
             let label = await ContinueWatchingQuality.label(for: ref)
             guard !Task.isCancelled, let self else { return }
@@ -400,7 +411,8 @@ enum ContinueWatchingQuality {
 }
 
 /// A small outlined tag, the way the Apple TV app marks a format on artwork:
-/// half-white text in a thin rounded rule, brightening with the card's focus.
+/// half-white text in a thin rounded rule over a soft dark backing, so it reads
+/// on a white sky as well as a dark scene, brightening with the card's focus.
 @MainActor
 final class QualityTagView: UIView {
     private let label = UILabel()
@@ -415,6 +427,7 @@ final class QualityTagView: UIView {
         isUserInteractionEnabled = false
         layer.borderWidth = 1
         layer.cornerRadius = 6
+        backgroundColor = UIColor.black.withAlphaComponent(0.4)
         layer.cornerCurve = .continuous
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 16, weight: .semibold)
@@ -432,7 +445,7 @@ final class QualityTagView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func setFocused(_ focused: Bool) {
-        label.textColor = UIColor.white.withAlphaComponent(focused ? 0.9 : 0.5)
+        label.textColor = UIColor.white.withAlphaComponent(focused ? 0.95 : 0.7)
         layer.borderColor = UIColor.white.withAlphaComponent(focused ? 0.6 : 0.3).cgColor
     }
 }

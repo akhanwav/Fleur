@@ -4105,6 +4105,11 @@ final class PlexHomeViewController: UIViewController {
     /// Resting scroll offset per shelf section, restored across cell reuse.
     private var shelfOffsets: [HomeSectionID: CGFloat] = [:]
 
+    /// Continue Watching cards switched to another server's copy from Ways
+    /// to Watch, by the card's own item: the card draws that copy, and
+    /// opening it names the copy for the page (`DetailCopySelection.pendingServer`).
+    private var chosenCopies: [MediaItemRef: (guid: String, copy: DetailCopy)] = [:]
+
     private func isShelfKind(_ kind: HomeSectionKind) -> Bool {
         switch kind {
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid: return true
@@ -4129,6 +4134,8 @@ final class PlexHomeViewController: UIViewController {
         } else {
             for item in section.items {
                 hasher.combine(item.ref.itemID)
+                // A card switched to another server's copy redraws as that copy.
+                hasher.combine(chosenCopies[item.ref]?.copy.id)
                 // Include playback progress so the shelf row re-vends its tiles
                 // when a viewOffset changes (e.g. after watching something) even
                 // though the item set is identical. Without this the token is
@@ -4232,8 +4239,15 @@ final class PlexHomeViewController: UIViewController {
         switch section.kind {
         case .continueWatching:
             let cell = innerCV.dequeueReusableCell(withReuseIdentifier: ContinueWatchingCell.reuseID, for: indexPath) as! ContinueWatchingCell
+            let item = section.items[indexPath.item]
             Perf.interval(.cellPrepare, key: perfKey) {
-                cell.configure(item: section.items[indexPath.item])
+                if let chosen = chosenCopies[item.ref] {
+                    // That server's artwork, resume point and versions.
+                    cell.configure(item: chosen.copy.item,
+                                   knownQuality: .some(DetailCopySelection.qualityText(chosen.copy.sources.first)))
+                } else {
+                    cell.configure(item: item)
+                }
             }
             return cell
         case .recentlyAdded, .recommendations, .discoverList, .searchGrid:
@@ -4265,9 +4279,15 @@ final class PlexHomeViewController: UIViewController {
         guard itemIndex < shelfRealCount(section) else { return }
         switch section.kind {
         case .continueWatching:
+            // The page reads a chosen copy once, so name every card's choice
+            // again on each open; the carousel can page to any of them.
+            for chosen in chosenCopies.values { DetailCopySelection.pendingServer[chosen.guid] = chosen.copy.id }
             // Instant Resume on: a CW tile resumes straight away. Off: it
             // behaves like every other shelf row and opens the preview carousel.
-            if SettingsStore.bool("continueWatchingInstantResume", default: false) {
+            // A card switched to another server opens on that copy instead:
+            // resuming would play this server's.
+            if SettingsStore.bool("continueWatchingInstantResume", default: false),
+               chosenCopies[section.items[itemIndex].ref] == nil {
                 playItem(section.items[itemIndex])
             } else {
                 presentPreview(forSection: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
@@ -6975,9 +6995,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     }
 
     /// Continue Watching's "Ways to Watch…": every server's copy with its
-    /// own resume time, the one this tile is from checked. Picking one opens
-    /// the title's page on that copy (`DetailCopySelection.pendingServer`);
-    /// nothing plays from here.
+    /// own resume time, the one the card shows checked. Picking one stays on
+    /// Home and switches the card to that copy (`chosenCopies`): its artwork,
+    /// resume time and quality. Opening the card then lands on that copy
+    /// (`DetailCopySelection.pendingServer`), where it can still be switched.
+    /// Nothing plays from here.
     private func presentServerChoices(for item: MediaItem, from tileFrame: CGRect?) {
         guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
         Task { @MainActor [weak self] in
@@ -6985,27 +7007,43 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let (guid, _, others) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
             let main = DetailCopySelection.mainMachineId ?? "main"
             let ownID = "\(main):\(item.ref.itemID)"
+            let shownID = self.chosenCopies[item.ref]?.copy.id ?? ownID
             let own = DetailCopy(machineId: main, serverName: self.authManager.mainServerName ?? "This Server",
                                  isMainServer: true, item: item, detail: detail, remote: nil)
             // The lookup searches the main server too: this tile's own item
             // comes back from it, and is listed once, as the current copy.
             let copies = DetailCopySelection.ordered([own] + others.filter { $0.id != ownID })
             let rows = copies.map { copy in
-                (id: copy.id, isCurrent: copy.id == ownID,
+                (id: copy.id, isCurrent: copy.id == shownID,
                  label: [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
                     .joined(separator: " · "))
             }
-            let actions = rows.map { row in
+            let actions = zip(rows, copies).map { row, copy in
                 TileMenuAction(title: row.label,
                                systemImage: row.isCurrent ? "checkmark.circle.fill" : "circle") { [weak self] in
-                    if let guid { DetailCopySelection.pendingServer[guid] = row.id }
-                    self?.selectMediaItem(item)
+                    guard let self, !row.isCurrent else { return }
+                    if row.id == ownID || guid == nil {
+                        self.chosenCopies[item.ref] = nil
+                        if let guid { DetailCopySelection.pendingServer[guid] = nil }
+                    } else if let guid {
+                        self.chosenCopies[item.ref] = (guid: guid, copy: copy)
+                    }
+                    self.refreshContinueWatchingRow()
                 }
             }
             let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: tileFrame,
                                                     header: TileMenuHeader(title: "Ways to Watch"))
             self.topmostPresented.present(popup, animated: false)
         }
+    }
+
+    /// Re-bind the visible Continue Watching row after a card changed copy;
+    /// the content token carries the choice, so only that change reloads it.
+    private func refreshContinueWatchingRow() {
+        guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.kind == .continueWatching }),
+              let row = collectionView.cellForItem(at: IndexPath(item: 0, section: sectionIndex)) as? ShelfRowCell
+        else { return }
+        configureShelfRow(row, sectionID: sectionsSnapshot[sectionIndex].id)
     }
 
     /// Tile menu "Play Version…": fetch the versions, then play the pick.
