@@ -28,6 +28,9 @@ final class DisplayCriteriaManager {
     private var hasSetCriteria = false
     private var lastCriteriaWasHDR = false
     private var assetForCriteria: AVURLAsset?
+    /// What `configureWithFormatDescription` wrote last, to skip an identical rewrite.
+    private var lastSignature: String?
+    private var lastWrittenCriteria: AVDisplayCriteria?
 
     private init() {}
 
@@ -151,67 +154,89 @@ final class DisplayCriteriaManager {
             return
         }
 
+        // Already active (a quality change, the next episode): rewriting it starts no
+        // switch, and waitForDisplaySwitchIfNeeded would wait its full second for one.
+        // AVDisplayCriteria exposes neither its rate nor its range, so this compares
+        // what this manager wrote last, and only while the system still holds that
+        // write: the engine's own criteria on the aether route always differ by object.
+        let signature = "\(frameRate)|\(codecType)|\(isDolbyVision)|\(isHDR10)|\(isHLG)"
+        if signature == lastSignature, let written = lastWrittenCriteria,
+           getDisplayManager()?.preferredDisplayCriteria === written {
+            hasSetCriteria = false
+            return
+        }
+
         // Create display criteria from format description
         let criteria = AVDisplayCriteria(refreshRate: frameRate, formatDescription: formatDesc)
         lastCriteriaWasHDR = isDolbyVision || isHDR10 || isHLG
         setDisplayCriteria(criteria)
+        lastSignature = signature
+        lastWrittenCriteria = criteria
     }
 
-    /// Wait briefly for tvOS to settle the HDMI/display-mode switch after
-    /// preferredDisplayCriteria is written. AVPlayerViewController gets this
-    /// internally; Rivulet's own player must avoid presenting first samples during the
-    /// dynamic-range handshake.
+    /// Wait for tvOS to finish the HDMI mode switch a criteria write started, so
+    /// the first frames do not land on a panel mid-handshake. AVPlayerViewController
+    /// gets this internally; a bare AVPlayer does not.
+    ///
+    /// Driven by the mode-switch notifications, armed before the write
+    /// (`setDisplayCriteria`), because a switch can start before this runs. It
+    /// used to return as soon as the screen showed HDR headroom after an HDR
+    /// write, which is right for a range switch and wrong for a rate one: with
+    /// the home screen already in HDR, a 24 fps transcode started its first
+    /// frames 25 ms after the write, while the panel was still leaving 60 Hz.
     func waitForDisplaySwitchIfNeeded() async {
-        guard hasSetCriteria, let window = getKeyWindow() else { return }
+        guard hasSetCriteria, let displayManager = getDisplayManager(),
+              displayManager.isDisplayCriteriaMatchingEnabled else { return }
 
-        let displayManager = window.avDisplayManager
-        guard displayManager.isDisplayCriteriaMatchingEnabled else { return }
-
-        let screen = window.screen
-        if lastCriteriaWasHDR && screen.currentEDRHeadroom > 1.001 {
+        // A write the panel is already in starts nothing; give a real one 1 s to begin.
+        var waitedMs = 0
+        while !switchStarted && !displayManager.isDisplayModeSwitchInProgress && waitedMs < 1000 {
+            try? await Task.sleep(for: .milliseconds(20))
+            waitedMs += 20
+        }
+        guard switchStarted || displayManager.isDisplayModeSwitchInProgress else {
+            playerDebugLog("🖥️ DisplayCriteria: no mode switch started within 1000ms")
             return
         }
 
-        var sawSwitchStart = false
-        for _ in 0..<100 {
-            if displayManager.isDisplayModeSwitchInProgress {
-                sawSwitchStart = true
-                break
-            }
-            if lastCriteriaWasHDR && screen.currentEDRHeadroom > 1.001 {
+        // Until the end notification, or until a switch seen in progress stops being one.
+        var sawInProgress = displayManager.isDisplayModeSwitchInProgress
+        while !switchEnded {
+            let inProgress = displayManager.isDisplayModeSwitchInProgress
+            if sawInProgress && !inProgress { break }
+            sawInProgress = sawInProgress || inProgress
+            if waitedMs >= 6000 {
+                playerDebugLog("🖥️ DisplayCriteria: display-mode switch did not settle within 5s")
                 return
             }
-            try? await Task.sleep(nanoseconds: 10_000_000)
+            try? await Task.sleep(for: .milliseconds(50))
+            waitedMs += 50
         }
+        playerDebugLog("🖥️ DisplayCriteria: mode switch settled after ~\(waitedMs)ms")
+    }
 
-        guard sawSwitchStart else {
-            if lastCriteriaWasHDR {
-                playerDebugLog(
-                    "🖥️ DisplayCriteria: HDR switch did not start within 1000ms " +
-                    "(EDR headroom \(String(format: "%.2f", screen.currentEDRHeadroom)))"
-                )
-            }
-            return
-        }
+    private var switchStarted = false
+    private var switchEnded = false
+    private var switchObservers: [NSObjectProtocol] = []
 
-        for tick in 0..<50 {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            if !displayManager.isDisplayModeSwitchInProgress {
-                if lastCriteriaWasHDR && screen.currentEDRHeadroom <= 1.001 {
-                    let totalMs = (tick + 1) * 100 + 1000
-                    playerDebugLog(
-                        "🖥️ DisplayCriteria: HDR switch settled after ~\(totalMs)ms " +
-                        "but EDR headroom is still \(String(format: "%.2f", screen.currentEDRHeadroom))"
-                    )
-                }
-                return
-            }
-        }
-
-        playerDebugLog(
-            "🖥️ DisplayCriteria: display-mode switch did not settle within 5s " +
-            "(EDR headroom \(String(format: "%.2f", screen.currentEDRHeadroom)))"
-        )
+    /// Listen for the switch this write is about to start.
+    private func armSwitchObservation() {
+        switchObservers.forEach(NotificationCenter.default.removeObserver)
+        switchStarted = false
+        switchEnded = false
+        let center = NotificationCenter.default
+        switchObservers = [
+            // object nil: tvOS posts these from a shared display manager, not the
+            // window's (measured by AetherEngine on an Apple TV 4K, tvOS 26.5).
+            center.addObserver(forName: .AVDisplayManagerModeSwitchStart,
+                               object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.switchStarted = true }
+            },
+            center.addObserver(forName: .AVDisplayManagerModeSwitchEnd,
+                               object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.switchEnded = true }
+            },
+        ]
     }
 
     /// Reset display criteria to default (SDR, system frame rate)
@@ -219,8 +244,8 @@ final class DisplayCriteriaManager {
     ///
     /// Unconditional on purpose, and it has to stay that way. This used to be
     /// gated on `hasSetCriteria`, which is only ever true when *this* manager did
-    /// the writing, and nothing has called a configure entry point since
-    /// AetherEngine took over the handshake. So the early reset the player exit
+    /// the writing, and on the aether route it never does: AetherEngine owns that
+    /// handshake (only the `hls` transcode route configures here). So the early reset the player exit
     /// fires at fade start was a silent no-op, and the only real nil write was the
     /// engine's own inside `engine.stop()`, reached from `stopPlayback()` off
     /// SwiftUI `.onDisappear` — i.e. after the modal is already gone. The ~1s HDMI
@@ -244,6 +269,8 @@ final class DisplayCriteriaManager {
         hasSetCriteria = false
         lastCriteriaWasHDR = false
         assetForCriteria = nil  // Release the asset
+        lastSignature = nil
+        lastWrittenCriteria = nil
 
         guard let displayManager = getDisplayManager() else {
             playerDebugLog("🖥️ DisplayCriteria: No display manager available for reset")
@@ -337,6 +364,7 @@ final class DisplayCriteriaManager {
             return
         }
 
+        armSwitchObservation()
         displayManager.preferredDisplayCriteria = criteria
         hasSetCriteria = true
 

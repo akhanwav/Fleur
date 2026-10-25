@@ -704,6 +704,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Optional prebuilt HLS fallback URL/headers to reduce fallback startup latency.
     private var rivuletFallbackURL: URL?
     private var rivuletFallbackHeaders: [String: String] = [:]
+    /// The transcode's master playlist from the readiness check, read for the
+    /// display mode before the item loads (`programTranscodeDisplayCriteria`).
+    private var hlsMasterPlaylist: String?
     /// One-shot direct-play -> HLS fallback guards (prevents loops).
     private var hasAttemptedRivuletHLSFallback = false
     /// One-shot: the enriched HLS asset failed and we rebuilt on the plain URL.
@@ -2083,6 +2086,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // Log the HLS master manifest for debugging track labels and I-frame playlists
             await logHLSManifest(url: hlsURL, headers: streamHeaders)
 
+            await programTranscodeDisplayCriteria()
             try loadAVPlayer(url: hlsURL, headers: streamHeaders)
 
             if let startTime, startTime > 0 {
@@ -3662,6 +3666,43 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - HLS Transcode Preflight
 
+    /// Program the panel for the transcode before its item loads, and wait out
+    /// the switch so the first frames do not land mid-handshake.
+    ///
+    /// The engine does this on the aether route; here nothing else does. A bare
+    /// AVPlayer in an AVPlayerLayer never writes `preferredDisplayCriteria`
+    /// (only AVPlayerViewController applies an item's criteria), so before this
+    /// a transcode played at whatever rate and range the home screen was in.
+    ///
+    /// Rate and range come from the master playlist, which states what the
+    /// server is sending. It names no codec, so Dolby Vision is inferred: the
+    /// source is DV, the variant is PQ, and no quality step asked for a
+    /// re-encode, which is when Plex passes the video through on the DV profile
+    /// the URL requests. A wrong guess leaves the panel in DV with an HDR10
+    /// picture, which tvOS presents.
+    private func programTranscodeDisplayCriteria() async {
+        let manager = DisplayCriteriaManager.shared
+        guard manager.isDisplayCriteriaMatchingEnabled else { return }
+        let info = hlsMasterPlaylist.flatMap(HLSVariantDisplayInfo.parse(master:))
+        let media = metadata.Media?.first(where: { "\($0.id)" == playingMediaID }) ?? metadata.Media?.first
+        let sourceVideo = media?.Part?.first?.Stream?.first(where: { $0.isVideo })
+        guard let frameRate = info?.frameRate ?? sourceVideo?.frameRate else { return }
+        let range = info?.range ?? .sdr
+        let isDolbyVision = range == .pq && metadata.hasDolbyVision && activeStreamPlan.step == nil
+        manager.configureWithFormatDescription(
+            frameRate: Float(frameRate),
+            width: Int32(info?.width ?? sourceVideo?.width ?? 1920),
+            height: Int32(info?.height ?? sourceVideo?.height ?? 1080),
+            isDolbyVision: isDolbyVision,
+            isHDR10: range == .pq && !isDolbyVision,
+            isHLG: range == .hlg
+        )
+        playerDebugLog("🖥️ DisplayCriteria: transcode \(range) @ \(frameRate)fps dv=\(isDolbyVision)")
+        diagnostics.step("transcode_display_criteria",
+                         detail: "rate=\(frameRate) range=\(range) dv=\(isDolbyVision)")
+        await manager.waitForDisplaySwitchIfNeeded()
+    }
+
     /// Wait for the HLS transcode session to be ready before loading playback.
     /// Plex needs time to start the transcoder and generate the initial manifest and segments.
     /// This method verifies both the manifest and at least one segment are accessible
@@ -3670,6 +3711,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     ///   - headers: HTTP headers including auth token
     /// - Returns: true if the transcode is ready, false if it failed to start
     private func waitForHLSTranscodeReady(url: URL, headers: [String: String]) async -> Bool {
+        hlsMasterPlaylist = nil
         await prepareHLSRelay(for: url)
         let url = avPlayerURL(url)
         await PlexNetworkManager.shared.startTranscodeDecision(hlsURL: url, headers: headers)
@@ -3698,6 +3740,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                             let hasSegments = content.contains("#EXTINF")
 
                             if hasHeader && hasVariants {
+                                hlsMasterPlaylist = content
                                 // This is a master playlist - follow a variant to check for segments
                                 if let variantReady = await checkVariantPlaylist(masterContent: content, baseURL: url, headers: headers), variantReady {
                                     diagnostics.recordPreflightAttempt(attempt, outcome: "ready (variant has segments)")
