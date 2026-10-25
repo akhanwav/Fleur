@@ -73,14 +73,24 @@ enum EpisodePicker {
             resumes: target.isInProgress,
             watched: target.isWatched,
             season: onParent ? target.seasonNumber : nil,
-            episode: onParent ? target.episodeNumber : nil)
+            episode: onParent ? target.episodeNumber : nil,
+            timeLeft: ResumeText.timeLeft(offsetSeconds: target.userState.viewOffset,
+                                          runtimeSeconds: target.runtime))
     }
 
     /// Apple's wording, our rule: a resume point (`WatchProgressPolicy`) says
     /// Resume and outranks the watched flag; a watched target says Play Again;
     /// else Play. A show or season page names the episode, the first one
     /// included ("Play S1, E1"), so it reads the same on every server.
-    static func playTitle(resumes: Bool, watched: Bool, season: Int? = nil, episode: Int? = nil) -> String {
+    ///
+    /// Resume carries the Continue Watching card's line when the time left is
+    /// known: "Resume · 42 min left", "Resume · S2 · E5 · 23 min left".
+    static func playTitle(resumes: Bool, watched: Bool, season: Int? = nil, episode: Int? = nil,
+                          timeLeft: String? = nil) -> String {
+        if resumes, let timeLeft {
+            let code = season.flatMap { s in episode.map { "S\(s) · E\($0) · " } } ?? ""
+            return "Resume · " + code + timeLeft
+        }
         let code = season.flatMap { s in episode.map { " S\(s), E\($0)" } } ?? ""
         if resumes { return "Resume" + code }
         if watched { return "Play Again" }

@@ -974,14 +974,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // shows, Cast & Crew for most movies) is the primary peek row (gets the
         // big peek inset in makeLayout).
         // Episodes, then Cast & Crew and On Your Servers, then Trailers &
-        // Extras and the rest. On Your Servers shows on every Plex title.
+        // Extras and the rest, Related last. On Your Servers shows on every
+        // Plex title.
         if !cachedEpisodes.isEmpty { add(.episodes, cachedEpisodes) }
         if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
         if serverAvailability != nil { add(.servers, [.servers]) }
         if !cachedTrailers.isEmpty { add(.trailers, cachedTrailers) }
         if !cachedExtras.isEmpty { add(.extras, cachedExtras) }
         if let row = collectionRow, !row.members.isEmpty { add(.collection, [.collectionShelf]) }
-        if !cachedRelated.isEmpty { add(.related, cachedRelated) }
         // Where to Watch and More Like This are TMDB's, for unowned titles only.
         if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
         if !cachedMoreLikeThis.isEmpty { add(.moreLikeThis, cachedMoreLikeThis) }
@@ -991,6 +991,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             add(.about, [.about])
             add(.info, [.info])
         }
+        // Related closes the page, below the information footer.
+        if !cachedRelated.isEmpty { add(.related, cachedRelated) }
         dataSource.apply(snapshot, animatingDifferences: false)
         // The primary peek row is section 0 (when any content exists). Drives the
         // focus-scroll "top section" logic for episodes OR a movie's related row.

@@ -41,10 +41,12 @@ final class ShelfRowCell: UICollectionViewCell {
 
         /// The cell: the lockup's frame, not its resting artwork.
         var tileWidth: CGFloat { tile?.frame.width ?? MediaRowMetrics.liveWidth }
-        /// A poster cell also holds its title and year when they're shown.
+        /// A poster cell also holds its title and year when they're shown;
+        /// a Continue Watching cell always holds its caption.
         var tileHeight: CGFloat {
             (tile?.frame.height ?? MediaRowMetrics.liveHeight)
-                + (self == .poster || self == .continueWatching ? MediaRowMetrics.posterCaptionHeight : 0)
+                + (self == .poster ? MediaRowMetrics.posterCaptionHeight
+                   : self == .continueWatching ? MediaRowMetrics.cwCaptionHeight : 0)
         }
         /// The grid tile behind the kind; nil for Live TV, which has frame
         /// numbers of its own.

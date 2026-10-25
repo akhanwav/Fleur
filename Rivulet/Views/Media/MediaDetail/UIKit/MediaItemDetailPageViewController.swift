@@ -704,11 +704,15 @@ final class MediaItemDetailPageViewController: UIViewController {
 
     private var playPillTitle: String {
         if let copy = copySelection.selected, copy.remote != nil {
-            return EpisodePicker.playTitle(resumes: copy.item.isInProgress, watched: copy.item.isWatched)
+            return EpisodePicker.playTitle(
+                resumes: copy.item.isInProgress, watched: copy.item.isWatched,
+                timeLeft: ResumeText.timeLeft(offsetSeconds: copy.item.userState.viewOffset,
+                                              runtimeSeconds: copy.item.runtime))
         }
         return EpisodePicker.playTitle(
             resumes: WatchProgressPolicy.hasResumePoint(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime),
-            watched: isWatched)
+            watched: isWatched,
+            timeLeft: ResumeText.timeLeft(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime))
     }
 
     private func toggleWatched() {

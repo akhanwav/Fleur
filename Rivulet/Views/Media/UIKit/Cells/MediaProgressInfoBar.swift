@@ -38,6 +38,12 @@ final class MediaProgressInfoBar: UIView {
 
     private var progressFillWidthConstraint: NSLayoutConstraint!
 
+    /// False on Continue Watching, whose caption under the card carries the
+    /// time left: the row is then the glyph and the progress pill alone.
+    var showsInfoText = true {
+        didSet { infoLabel.isHidden = !showsInfoText }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false

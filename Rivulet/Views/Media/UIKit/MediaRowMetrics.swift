@@ -125,6 +125,8 @@ enum MediaRowMetrics {
     /// Room a poster row or grid adds under each tile for its title and year;
     /// 0 with the setting off.
     static var posterCaptionHeight: CGFloat { showsPosterTitles ? PosterCaptionView.height : 0 }
+    /// Continue Watching always has its caption: the card carries no title.
+    static var cwCaptionHeight: CGFloat { PosterCaptionView.height }
 
     /// Vertical insets around each row section. (Were 12 / 15.)
     static let rowTopInset: CGFloat = 8

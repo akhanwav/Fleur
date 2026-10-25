@@ -25,6 +25,9 @@ final class PosterCaptionView: UIStackView {
 
     private let titleLabel = UILabel()
     private let detailLabel = UILabel()
+    /// False where the caption is the only title a tile has (Continue
+    /// Watching): it then shows whatever Show Titles Under Posters says.
+    var followsTitleSetting = true
 
     init() {
         super.init(frame: .zero)
@@ -50,17 +53,22 @@ final class PosterCaptionView: UIStackView {
 
     /// Any second line: a year, or an episode's "S1 · E3".
     func configure(title: String?, detail: String?) {
-        isHidden = title == nil || !MediaRowMetrics.showsPosterTitles
+        isHidden = title == nil || (followsTitleSetting && !MediaRowMetrics.showsPosterTitles)
         titleLabel.text = title
         detailLabel.text = detail ?? " "
     }
 
-    /// Continue Watching's caption: a movie's title and year; an episode's
-    /// show and "S1 · E3".
-    static func continueWatchingText(title: String, year: Int?, show: String?, season: Int?, episode: Int?)
+    /// Continue Watching's caption: the title (an episode: its show) over
+    /// the time left after the server's resume point, "42 min left" or
+    /// "S2 · E5 · 23 min left" (`ResumeText`). A movie with no resume point
+    /// shows its year; an episode not started, its "S2 · E5".
+    static func continueWatchingText(title: String, year: Int?, show: String?, season: Int?, episode: Int?,
+                                     offsetSeconds: TimeInterval, runtimeSeconds: TimeInterval?)
         -> (title: String, detail: String?) {
-        if let show, let season, let episode { return (show, "S\(season) · E\(episode)") }
-        return (title, year.map(String.init))
+        let line = ResumeText.line(season: season, episode: episode,
+                                   offsetSeconds: offsetSeconds, runtimeSeconds: runtimeSeconds)
+        if let show, season != nil, episode != nil { return (show, line) }
+        return (title, line ?? year.map(String.init))
     }
 
     /// Pin under `frameView` (the lockup frame), inset to its artwork.

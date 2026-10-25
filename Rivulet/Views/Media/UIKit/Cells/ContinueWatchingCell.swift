@@ -28,14 +28,17 @@ final class ContinueWatchingCell: UICollectionViewCell {
     private let artworkImageView = UIImageView()
     private let placeholderView = UIView()
     private let placeholderIcon = UIImageView()
-    private let titleLogoView = ContinueWatchingTitleLogoView()
     private let infoBar = MediaProgressInfoBar()
-    /// Title and year (an episode: its show and "S1 · E3") under the card,
-    /// with Settings → Show Titles Under Posters.
+    /// The version that would play ("4K DV"), bottom-trailing on the card.
+    private let qualityTag = QualityTagView()
+    /// The title (an episode: its show) and the time left under the card. The
+    /// card carries no title of its own, so this shows whatever Settings → Show
+    /// Titles Under Posters says.
     private let caption = PosterCaptionView()
 
     private var artworkLoadTask: Task<Void, Never>?
     private var currentArtworkURL: URL?
+    private var qualityTask: Task<Void, Never>?
 
     private let cornerRadius: CGFloat = 24
 
@@ -65,6 +68,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         ])
         contentView.addSubview(caption)
         caption.pin(below: card, artInset: (MediaRowMetrics.cwWidth - MediaRowMetrics.continueWatching.art.width) / 2)
+        caption.followsTitleSetting = false
         caption.isHidden = true
 
         // No resting drop shadow (ATV+ reference: cards float clean over the
@@ -90,13 +94,15 @@ final class ContinueWatchingCell: UICollectionViewCell {
         artworkImageView.clipsToBounds = true
         card.contentView.addSubview(artworkImageView)
 
-        // Title logo (Plex clearLogo, falling back to the title).
-        titleLogoView.translatesAutoresizingMaskIntoConstraints = false
-        card.contentView.addSubview(titleLogoView)
-
-        // Bottom info bar.
+        // Bottom status row: the play glyph and progress pill. The time left
+        // is in the caption, so the row carries no text of its own.
+        infoBar.showsInfoText = false
         infoBar.translatesAutoresizingMaskIntoConstraints = false
         card.contentView.addSubview(infoBar)
+
+        qualityTag.translatesAutoresizingMaskIntoConstraints = false
+        qualityTag.isHidden = true
+        card.contentView.addSubview(qualityTag)
 
         let pad = ContinueWatchingCardCompositor.padding
         NSLayoutConstraint.activate([
@@ -115,16 +121,13 @@ final class ContinueWatchingCell: UICollectionViewCell {
             artworkImageView.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
             artworkImageView.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
 
-
-            titleLogoView.topAnchor.constraint(equalTo: card.contentView.topAnchor),
-            titleLogoView.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor),
-            titleLogoView.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
-            titleLogoView.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
-
             // Apple's status row: 14pt from the card's edges.
-            infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad).withPriority(999),
-            infoBar.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad).withPriority(999),
-            infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad)
+            infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad),
+            infoBar.trailingAnchor.constraint(lessThanOrEqualTo: qualityTag.leadingAnchor, constant: -8),
+            infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad),
+
+            qualityTag.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad),
+            qualityTag.centerYAnchor.constraint(equalTo: infoBar.centerYAnchor)
         ])
     }
 
@@ -134,7 +137,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
         super.didUpdateFocus(in: context, with: coordinator)
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
-        coordinator.addCoordinatedAnimations({ self.infoBar.setFocused(nowFocused) }, completion: nil)
+        coordinator.addCoordinatedAnimations({
+            self.infoBar.setFocused(nowFocused)
+            self.qualityTag.setFocused(nowFocused)
+        }, completion: nil)
     }
 
     override func layoutSubviews() {
@@ -153,17 +159,17 @@ final class ContinueWatchingCell: UICollectionViewCell {
     // MARK: - Configure
 
     func configure(item: PlexMetadata) {
-        // Title-logo view fetches the clearLogo asynchronously (with a
-        // text fallback if there is none).
         let url = artworkURL(for: item)
-        titleLogoView.configure(item: item, artworkURL: url)
 
-        // Info bar: play icon + (optional) progress capsule + info text.
+        // Status row: play icon + (optional) progress capsule.
         infoBar.configure(item: item)
+        let isEpisode = item.type == "episode"
         let text = PosterCaptionView.continueWatchingText(
             title: item.title ?? "", year: item.year,
-            show: item.type == "episode" ? item.grandparentTitle : nil,
-            season: item.parentIndex, episode: item.index)
+            show: isEpisode ? item.grandparentTitle : nil,
+            season: isEpisode ? item.parentIndex : nil, episode: isEpisode ? item.index : nil,
+            offsetSeconds: TimeInterval(item.viewOffset ?? 0) / 1000,
+            runtimeSeconds: item.duration.map { TimeInterval($0) / 1000 })
         caption.configure(title: text.title, detail: text.detail)
 
         // No show or episode background leaves the episode's own still.
@@ -174,23 +180,21 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
     func configure(item: MediaItem) {
-        // Episodes/shows: prefer the grandparent (show) logo; fall back to
-        // the item's own logo. The URL is already resolved — no async fetch.
-        let logoURL = item.grandparentArtwork?.logo ?? item.artwork.logo
         // Backdrop > thumbnail in landscape orientation.
         let url = item.grandparentArtwork?.backdrop
             ?? item.artwork.backdrop
             ?? item.artwork.thumbnail
-        titleLogoView.configure(logoURL: logoURL, fallbackTitle: item.title, artworkURL: url)
 
         infoBar.configure(item: item)
+        let isEpisode = item.kind == .episode
         let text = PosterCaptionView.continueWatchingText(
             title: item.title, year: item.year,
-            show: item.kind == .episode ? item.seriesTitle : nil,
-            season: item.seasonNumber, episode: item.episodeNumber)
+            show: isEpisode ? item.seriesTitle : nil,
+            season: isEpisode ? item.seasonNumber : nil, episode: isEpisode ? item.episodeNumber : nil,
+            offsetSeconds: item.userState.viewOffset, runtimeSeconds: item.runtime)
         caption.configure(title: text.title, detail: text.detail)
+        loadQuality(for: item.ref)
 
-        let isEpisode = item.kind == .episode
         let isEpisodeStill = isEpisode && item.grandparentArtwork?.backdrop == nil && item.artwork.backdrop == nil
         // An episode's fallback is its show's; the shared query covers movies and shows only.
         let fallback: ArtworkFallback.Query? = isEpisode
@@ -208,9 +212,30 @@ final class ContinueWatchingCell: UICollectionViewCell {
         artworkImageView.image = nil
         placeholderView.isHidden = false
         placeholderIcon.isHidden = true
-        titleLogoView.prepareForReuse()
+        qualityTask?.cancel()
+        qualityTask = nil
+        qualityTag.isHidden = true
         infoBar.reset()
         caption.configure(title: nil, detail: nil)
+    }
+
+    // MARK: - Quality
+
+    /// The tag for the version this card would play, fetched once per title.
+    private func loadQuality(for ref: MediaItemRef) {
+        qualityTask?.cancel()
+        qualityTag.isHidden = true
+        if let known = ContinueWatchingQuality.known(for: ref) {
+            qualityTag.text = known
+            qualityTag.isHidden = known == nil
+            return
+        }
+        qualityTask = Task { [weak self] in
+            let label = await ContinueWatchingQuality.label(for: ref)
+            guard !Task.isCancelled, let self else { return }
+            self.qualityTag.text = label
+            self.qualityTag.isHidden = label == nil
+        }
     }
 
     // MARK: - Artwork
@@ -302,205 +327,6 @@ final class ContinueWatchingCell: UICollectionViewCell {
     }
 }
 
-// MARK: - Title Logo (Plex clearLogo fetch)
-
-/// The item's clearLogo (the show's, for episodes) in the slot the still's
-/// analysis picks: either edge, any height. Falls back to the title as text.
-/// Nothing shows until the slot is known or a second passes, so the title never moves.
-@MainActor
-private final class ContinueWatchingTitleLogoView: UIView {
-    private typealias Compositor = ContinueWatchingCardCompositor
-
-    private let imageView = UIImageView()
-    private let titleLabel = UILabel()
-    private var imageTop: NSLayoutConstraint!
-    private var labelCenterY: NSLayoutConstraint!
-
-    private var fetchTask: Task<Void, Never>?
-    private var deadlineTask: Task<Void, Never>?
-    private var currentItemKey: String?
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        backgroundColor = .clear
-
-        // Fallback title: 30pt bold, white, soft drop shadow.
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 30, weight: .bold)
-        titleLabel.textColor = .white
-        titleLabel.numberOfLines = 1
-        titleLabel.shadowOffset = CGSize(width: 0, height: 2)
-        titleLabel.alpha = 0
-        addSubview(titleLabel)
-
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.alpha = 0
-        addSubview(imageView)
-
-        // The compositor's title bitmap: the title box plus room for its shadow.
-        let geometry = ContinueWatchingCell.geometry
-        let box = geometry.titleBox.insetBy(dx: -Compositor.titleShadowPad, dy: -Compositor.titleShadowPad)
-        imageTop = imageView.topAnchor.constraint(equalTo: topAnchor, constant: box.minY)
-        labelCenterY = titleLabel.centerYAnchor.constraint(equalTo: topAnchor, constant: geometry.titleBox.midY)
-        NSLayoutConstraint.activate([
-            // 999s: tolerate TVCardView's transient zero-width layout pass.
-            // Left and right, not leading and trailing: the slot is scored on the artwork's pixels.
-            titleLabel.leftAnchor.constraint(equalTo: leftAnchor, constant: geometry.titleBox.minX),
-            labelCenterY,
-            titleLabel.rightAnchor.constraint(equalTo: rightAnchor, constant: -geometry.titleBox.minX).withPriority(999),
-
-            imageView.leftAnchor.constraint(equalTo: leftAnchor, constant: box.minX),
-            imageTop,
-            imageView.widthAnchor.constraint(equalToConstant: box.width).withPriority(999),
-            imageView.heightAnchor.constraint(equalToConstant: box.height)
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func configure(item: PlexMetadata, artworkURL: URL?) {
-        configure(key: "\(item.ratingKey ?? "")|\(artworkURL?.absoluteString ?? "")",
-                  title: displayTitle(for: item), artworkURL: artworkURL) {
-            await Self.resolveLogoURL(for: item)
-        }
-    }
-
-    /// MediaItem path. The logo URL is already resolved.
-    func configure(logoURL: URL?, fallbackTitle: String, artworkURL: URL?) {
-        configure(key: "\(logoURL?.absoluteString ?? fallbackTitle)|\(artworkURL?.absoluteString ?? "")",
-                  title: fallbackTitle, artworkURL: artworkURL) { logoURL }
-    }
-
-    /// Loads the logo and the still's analysis side by side, then shows the
-    /// logo (or the title) once, in the slot they pick.
-    private func configure(key: String, title: String, artworkURL: URL?, logoURL: @escaping () async -> URL?) {
-        titleLabel.text = title
-        // Same item: shown already, or on its way.
-        guard key != currentItemKey else { return }
-        fetchTask?.cancel()
-        deadlineTask?.cancel()
-        imageView.image = nil
-        imageView.alpha = 0
-        titleLabel.alpha = 0
-        currentItemKey = key
-
-        let geometry = ContinueWatchingCell.geometry, scale = traitCollection.displayScale
-        let textSize = titleLabel.intrinsicContentSize
-        fetchTask = Task { [weak self] in
-            async let analysed = Self.signals(for: artworkURL)
-            var logo: (url: URL, size: CGSize)?
-            if let url = await logoURL(), let size = await ImageCacheManager.shared.image(for: url)?.size {
-                logo = (url, size)
-            }
-            let placement = Compositor.placement(signals: await analysed, logoSize: logo?.size,
-                                                 textSize: textSize, geometry: geometry)
-            var image: UIImage?
-            if let logo {
-                image = await Compositor.image(placement.strongShadow ? .titleStrong : .title, for: logo.url,
-                                               geometry: geometry, scale: scale)
-            }
-            guard !Task.isCancelled, let self, self.currentItemKey == key else { return }
-            self.show(image, logoSize: logo?.size, placement: placement)
-        }
-        // Slow server: show the text in the default slot rather than nothing.
-        deadlineTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, let self, self.currentItemKey == key,
-                  self.imageView.alpha == 0, self.titleLabel.alpha == 0 else { return }
-            self.show(nil, logoSize: nil, placement: Compositor.restingPlacement(
-                for: geometry.titleFootprint(logoSize: nil, textSize: textSize), geometry: geometry))
-        }
-    }
-
-    private static func signals(for artworkURL: URL?) async -> Compositor.Signals {
-        guard let artworkURL else { return .none }
-        return await Compositor.signals(for: artworkURL)
-    }
-
-    func prepareForReuse() {
-        fetchTask?.cancel()
-        fetchTask = nil
-        deadlineTask?.cancel()
-        currentItemKey = nil
-        imageView.image = nil
-        imageView.alpha = 0
-        titleLabel.alpha = 0
-        titleLabel.text = nil
-    }
-
-    private func displayTitle(for item: PlexMetadata) -> String {
-        if item.type == "episode" {
-            return item.grandparentTitle ?? item.title ?? "Unknown"
-        }
-        return item.title ?? "Unknown"
-    }
-
-    /// Both configure paths end here: move to the slot, then fade in.
-    private func show(_ image: UIImage?, logoSize: CGSize?, placement: Compositor.Placement) {
-        let geometry = ContinueWatchingCell.geometry
-        let box = geometry.titleBox.offsetBy(dx: 0, dy: placement.offset)
-        imageTop.constant = box.minY - Compositor.titleShadowPad
-        // A title already on screen keeps its slot.
-        if titleLabel.alpha == 0 {
-            labelCenterY.constant = box.midY
-            titleLabel.textAlignment = placement.side == .leading ? .left : .right
-            titleLabel.shadowColor = UIColor.black.withAlphaComponent(placement.strongShadow ? 0.8 : 0.5)
-        }
-        imageView.image = image
-        // The bitmap holds the logo on the box's leading edge: carry it to its
-        // slot, so a smaller or trailing logo keeps the edge it sits on.
-        let resting = geometry.titleFootprint(logoSize: logoSize)
-        let slot = geometry.titleRect(resting, side: placement.side, scale: placement.scale)
-        imageView.transform = CGAffineTransform(
-            translationX: slot.midX - box.midX - (resting.midX - box.midX) * placement.scale, y: 0)
-            .scaledBy(x: placement.scale, y: placement.scale)
-        layoutIfNeeded()
-        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseInOut]) {
-            self.imageView.alpha = image == nil ? 0 : 1
-            self.titleLabel.alpha = image == nil ? 1 : 0
-        }
-    }
-
-    /// Resolve the clearLogo URL — for episodes/shows, fetch the
-    /// grandparent metadata (hub items don't carry the Image array).
-    /// Caches the full-metadata response via PlexDataStore for reuse.
-    private static func resolveLogoURL(for item: PlexMetadata) async -> URL? {
-        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-              let token = PlexAuthManager.shared.selectedServerToken else {
-            return nil
-        }
-        // The hub item already carries grandparentRatingKey, so resolve the
-        // source key directly (one metadata fetch) via the shared resolver.
-        guard let ratingKey = TopShelfLogoResolver.sourceRatingKey(for: item) else { return nil }
-
-        // Plain metadata, not `getFullMetadata`: the only field read below is
-        // `clearLogoPath`, and the seven include params buy nothing here while
-        // costing 28% more bytes and twice the latency. This runs once per
-        // visible cell, so it is the app's one per-item metadata fan-out and
-        // showed up in Sentry as an N+1 (RIVULET-V).
-        let sourceMetadata: PlexMetadata
-        if let cached = PlexDataStore.shared.getCachedLogoMetadata(for: ratingKey) {
-            sourceMetadata = cached
-        } else {
-            do {
-                let fetched = try await PlexNetworkManager.shared.getMetadata(
-                    serverURL: serverURL,
-                    authToken: token,
-                    ratingKey: ratingKey
-                )
-                PlexDataStore.shared.cacheLogoMetadata(fetched, for: ratingKey)
-                sourceMetadata = fetched
-            } catch {
-                return nil
-            }
-        }
-
-        let urlString = TopShelfLogoResolver.logoURLString(from: sourceMetadata, serverURL: serverURL, token: token)
-        return urlString.isEmpty ? nil : URL(string: urlString)
-    }
-}
-
 // Info bar moved to `Rivulet/Views/Media/UIKit/Cells/MediaProgressInfoBar.swift`
 // for reuse by PosterCell (in-progress items in Recently Added /
 // Personalized Recommendations rows render the same composition).
@@ -540,5 +366,73 @@ enum ContinueWatchingArtwork {
         let source = replace ? (await ArtworkFallback.shared.backdrop(for: fallback) ?? url) : url
         sources[url] = source
         return source
+    }
+}
+
+/// The quality of the version a Continue Watching card would play: the title's
+/// best version (`VersionRanking`), worded like the detail page's copies
+/// (`DetailCopySelection.qualityText`: "4K DV", "1080p HDR", "1080p"). Hub listings carry no HDR or Dolby Vision
+/// detail, so each title's full detail is read once, when its card first
+/// shows, and kept for the session.
+@MainActor
+enum ContinueWatchingQuality {
+    private static var labels: [MediaItemRef: String?] = [:]
+    private static var inFlight: [MediaItemRef: Task<String?, Never>] = [:]
+
+    /// The label already read for `ref` (`.some(nil)` when there is none), or
+    /// nil before the first read.
+    static func known(for ref: MediaItemRef) -> String?? { labels[ref] }
+
+    static func label(for ref: MediaItemRef) async -> String? {
+        if let known = labels[ref] { return known }
+        if let task = inFlight[ref] { return await task.value }
+        let task = Task<String?, Never> {
+            guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID),
+                  let detail = try? await provider.fullDetail(for: ref) else { return nil }
+            return DetailCopySelection.qualityText(VersionRanking.ordered(detail.mediaSources).first)
+        }
+        inFlight[ref] = task
+        let label = await task.value
+        inFlight[ref] = nil
+        labels[ref] = .some(label)
+        return label
+    }
+}
+
+/// A small outlined tag, the way the Apple TV app marks a format on artwork:
+/// half-white text in a thin rounded rule, brightening with the card's focus.
+@MainActor
+final class QualityTagView: UIView {
+    private let label = UILabel()
+
+    var text: String? {
+        get { label.text }
+        set { label.text = newValue }
+    }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        layer.borderWidth = 1
+        layer.cornerRadius = 6
+        layer.cornerCurve = .continuous
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 16, weight: .semibold)
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+        ])
+        setFocused(false)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setFocused(_ focused: Bool) {
+        label.textColor = UIColor.white.withAlphaComponent(focused ? 0.9 : 0.5)
+        layer.borderColor = UIColor.white.withAlphaComponent(focused ? 0.6 : 0.3).cgColor
     }
 }

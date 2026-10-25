@@ -5,9 +5,8 @@
 //  TopShelfLogoResolver.swift
 //  Rivulet
 //
-//  Pure helpers for resolving a Plex clearLogo URL for Top Shelf items.
-//  Mirrors ContinueWatchingCell.resolveLogoURL: episodes resolve via the
-//  grandparent (show) metadata, movies via their own.
+//  Pure helpers for resolving a Plex clearLogo URL for Top Shelf items:
+//  episodes resolve via the grandparent (show) metadata, movies via their own.
 //
 
 import Foundation

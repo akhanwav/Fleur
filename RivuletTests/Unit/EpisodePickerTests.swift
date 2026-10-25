@@ -122,7 +122,7 @@ final class EpisodePickerTests: XCTestCase {
 
     func testShowPageResumesAnInProgressEpisode() {
         let ep = episode("e5", season: 2, number: 5, offset: 300)
-        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Resume S2, E5")
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Resume · S2 · E5 · 25 min left")
     }
 
     func testUntouchedFirstEpisodeIsNamed() {
@@ -132,7 +132,7 @@ final class EpisodePickerTests: XCTestCase {
         XCTAssertEqual(EpisodePicker.playTitle(for: s2e1, on: .season), "Play S2, E1")
         // Started, so it resumes instead.
         XCTAssertEqual(
-            EpisodePicker.playTitle(for: episode("e1", number: 1, offset: 300), on: .show), "Resume S1, E1")
+            EpisodePicker.playTitle(for: episode("e1", number: 1, offset: 300), on: .show), "Resume · S1 · E1 · 25 min left")
     }
 
     func testFullyWatchedShowPlaysAgain() {
@@ -145,7 +145,7 @@ final class EpisodePickerTests: XCTestCase {
         let ep = episode("e1", season: nil, number: nil)
         XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Play")
         let started = episode("e1", season: nil, number: nil, offset: 300)
-        XCTAssertEqual(EpisodePicker.playTitle(for: started, on: .show), "Resume")
+        XCTAssertEqual(EpisodePicker.playTitle(for: started, on: .show), "Resume · 25 min left")
     }
 
     /// An item's own page (movie or episode) never names the episode.
@@ -153,7 +153,7 @@ final class EpisodePickerTests: XCTestCase {
         XCTAssertEqual(EpisodePicker.playTitle(for: episode("e3", number: 3), on: .episode), "Play")
         XCTAssertEqual(EpisodePicker.playTitle(for: episode("e1", number: 1), on: .episode), "Play")
         XCTAssertEqual(
-            EpisodePicker.playTitle(for: episode("e3", number: 3, offset: 300), on: .episode), "Resume")
+            EpisodePicker.playTitle(for: episode("e3", number: 3, offset: 300), on: .episode), "Resume · 25 min left")
         XCTAssertEqual(
             EpisodePicker.playTitle(for: episode("e3", number: 3, played: true), on: .episode), "Play Again")
     }
@@ -161,7 +161,7 @@ final class EpisodePickerTests: XCTestCase {
     /// A resume point outranks the watched flag (a rewatch in progress).
     func testRewatchInProgressResumes() {
         let ep = episode("e3", number: 3, played: true, offset: 300)
-        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .episode), "Resume")
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .episode), "Resume · 25 min left")
     }
 
     /// Past the policy's completion ceiling there is nothing worth resuming:
@@ -175,6 +175,8 @@ final class EpisodePickerTests: XCTestCase {
     func testUnresolvedShowSaysPlay() {
         XCTAssertEqual(EpisodePicker.playTitle(resumes: false, watched: false), "Play")
         XCTAssertEqual(EpisodePicker.playTitle(resumes: false, watched: true), "Play Again")
+        // A resume with no runtime to measure against keeps the plain wording.
+        XCTAssertEqual(EpisodePicker.playTitle(resumes: true, watched: false), "Resume")
     }
 
     // MARK: - isInProgress

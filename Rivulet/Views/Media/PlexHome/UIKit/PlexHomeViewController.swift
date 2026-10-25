@@ -3086,7 +3086,7 @@ final class PlexHomeViewController: UIViewController {
     /// on the first scroll. See ShelfRowCell for the self-driven landing math.
     private func makeHubSectionLayout(section: HomeSectionData, isContinueWatching: Bool) -> NSCollectionLayoutSection {
         let tileHeight: CGFloat = isContinueWatching
-            ? MediaRowMetrics.cwHeight + MediaRowMetrics.posterCaptionHeight
+            ? MediaRowMetrics.cwHeight + MediaRowMetrics.cwCaptionHeight
             : (section.isMusic ? MediaRowMetrics.musicHeight
                : MediaRowMetrics.posterHeight + MediaRowMetrics.posterCaptionHeight)
         let rowHeight = tileHeight + MediaRowMetrics.focusGrowthPadding  // room for focus growth
