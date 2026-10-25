@@ -312,6 +312,9 @@ enum SettingsContent {
             toggle("personalizedRecs", "Personalized Recommendations", key: "enablePersonalizedRecommendations", default: false)
         ]
         rows += [
+            .header("Posters"),
+            toggle("posterTitles", "Show Titles Under Posters", key: "showPosterTitles", default: true),
+
             .header("Library"),
             toggle("libraryHero", "Hero", key: "showLibraryHero", default: true),
             toggle("discoveryRows", "Discovery Rows", key: "showLibraryRecommendations", default: true),

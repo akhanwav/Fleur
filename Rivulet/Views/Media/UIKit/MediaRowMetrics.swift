@@ -120,6 +120,12 @@ enum MediaRowMetrics {
     /// (Was 80 when tiles were smaller and carried a drop shadow.)
     static let focusGrowthPadding: CGFloat = 48
 
+    /// Settings → Appearance → Show Titles Under Posters (on by default).
+    static var showsPosterTitles: Bool { SettingsStore.bool("showPosterTitles", default: true) }
+    /// Room a poster row or grid adds under each tile for its title and year;
+    /// 0 with the setting off.
+    static var posterCaptionHeight: CGFloat { showsPosterTitles ? PosterCaptionView.height : 0 }
+
     /// Vertical insets around each row section. (Were 12 / 15.)
     static let rowTopInset: CGFloat = 8
     static let rowBottomInset: CGFloat = 8

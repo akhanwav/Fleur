@@ -86,6 +86,10 @@ enum SettingsDescriptorStore {
             icon: "pin",
             description: "A collection you pinned from its tile menu. Hold Select to reorder, or Select to unpin it."
         ),
+        "posterTitles": SettingDescriptor(
+            icon: "textformat",
+            description: "Shows each title and its year under the posters in Home rows, library grids and the Watchlist. Long titles are cut to one line."
+        ),
         "homeHero": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
             description: "Shows a large featured content banner at the top of the Home screen with artwork and quick actions."

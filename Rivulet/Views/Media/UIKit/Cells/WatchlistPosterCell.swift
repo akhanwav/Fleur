@@ -173,11 +173,24 @@ final class WatchlistPosterCell: UICollectionViewCell {
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 32, weight: .light))
         loadImage(from: item.posterURL, failureIcon: icon)
         ownedBadge.text = owned ? "On Server" : nil
+        showTitleCaption(item.title, year: item.year)
+    }
+
+    /// Title and year only (the Watchlist), when the setting is on. The
+    /// filmography's three-line caption is `configure(item:badge:caption:)`.
+    private func showTitleCaption(_ title: String, year: Int?) {
+        guard MediaRowMetrics.showsPosterTitles else { captionStack.isHidden = true; return }
+        captionTitle.text = title
+        captionDetail.text = year.map(String.init) ?? " "
+        captionDetail.isHidden = false
+        captionCredit.isHidden = true
+        captionStack.isHidden = false
     }
 
     /// MediaItem path. Artwork URLs are already resolved — no serverURL/token needed.
     func configure(item: MediaItem) {
         loadImage(from: item.artwork.poster, failureIcon: failureIconImage(for: item.kind))
+        showTitleCaption(item.title, year: item.year)
     }
 
     /// MediaItem with a badge (e.g. "On Server") and the caption lines below.

@@ -130,6 +130,31 @@ private nonisolated struct TMDBPersonSearchResponse: Codable, Sendable {
     }
 }
 
+/// A title's TMDB poster and backdrop paths (relative to the image CDN).
+nonisolated struct TMDBArtworkPaths: Codable, Sendable {
+    let posterPath: String?
+    let backdropPath: String?
+    enum CodingKeys: String, CodingKey {
+        case posterPath = "poster_path"
+        case backdropPath = "backdrop_path"
+    }
+}
+
+private nonisolated struct TMDBTitleSearchResponse: Codable, Sendable {
+    let results: [Result]?
+    struct Result: Codable, Sendable {
+        let title: String?
+        let name: String?
+        let posterPath: String?
+        let backdropPath: String?
+        enum CodingKeys: String, CodingKey {
+            case title, name
+            case posterPath = "poster_path"
+            case backdropPath = "backdrop_path"
+        }
+    }
+}
+
 private nonisolated struct TMDBKeywordsResponse: Codable, Sendable {
     let keywords: [TMDBKeyword]?
     let results: [TMDBKeyword]?
@@ -333,6 +358,27 @@ final class TMDBClient: @unchecked Sendable {
         return TMDBPersonFilmography(knownForDepartment: response.knownForDepartment,
                                      cast: response.combinedCredits?.cast ?? [],
                                      crew: response.combinedCredits?.crew ?? [])
+    }
+
+    // MARK: - Artwork fallback
+
+    /// A title's poster and backdrop, by TMDB id when known, else by a title
+    /// search (with the year), preferring an exact title match. For server
+    /// items whose own artwork is missing or a video frame.
+    func artworkPaths(tmdbId: Int?, type: TMDBMediaType, title: String, year: Int?) async -> TMDBArtworkPaths? {
+        if let tmdbId, let paths: TMDBArtworkPaths = try? await request(path: "\(type.rawValue)/\(tmdbId)") {
+            return paths
+        }
+        var query = [URLQueryItem(name: "query", value: title)]
+        if let year {
+            query.append(URLQueryItem(name: type == .movie ? "year" : "first_air_date_year", value: String(year)))
+        }
+        guard let search: TMDBTitleSearchResponse = try? await request(
+            path: "search/\(type.rawValue)", queryItems: query) else { return nil }
+        let results = search.results ?? []
+        let target = Self.normalizedName(title)
+        let match = results.first { Self.normalizedName($0.title ?? $0.name ?? "") == target } ?? results.first
+        return match.map { TMDBArtworkPaths(posterPath: $0.posterPath, backdropPath: $0.backdropPath) }
     }
 
     // MARK: - Structured cast (Insights)

@@ -2265,8 +2265,8 @@ final class PlexHomeViewController: UIViewController {
     /// immediately so the startup splash doesn't wait for an image that isn't
     /// coming. The non-nil case is reported by `onFirstImageLoaded` once the
     /// image is on screen.
-    private func setHeroBackdrop(url: URL?) {
-        backdropView.setBackdrop(url: url)
+    private func setHeroBackdrop(url: URL?, fallback: ArtworkFallback.Query? = nil) {
+        backdropView.setBackdrop(url: url, fallback: fallback)
         // The ambient wash tracks the hero: same artwork, diffused by the
         // frosted material in front of it. Every hero page change lands here,
         // so this is the only place the wash needs driving.
@@ -2329,8 +2329,11 @@ final class PlexHomeViewController: UIViewController {
             return
         }
         let request = item.heroBackdropRequest(serverURL: serverURL, authToken: token)
-        let url = request.backdropURL ?? request.thumbnailURL
-        setHeroBackdrop(url: url)
+        // No background art on the server (an unmatched item): TMDB's
+        // backdrop, not the poster stretched across the screen.
+        let fallback = ArtworkFallback.Query(item)
+        let url = request.backdropURL ?? (fallback == nil ? request.thumbnailURL : nil)
+        setHeroBackdrop(url: url, fallback: fallback)
     }
 
     /// MediaItem-backed backdrop (Discover hero — TMDB CDN URLs are absolute,
@@ -2340,7 +2343,9 @@ final class PlexHomeViewController: UIViewController {
             setHeroBackdrop(url: nil)
             return
         }
-        setHeroBackdrop(url: item.artwork.backdrop ?? item.artwork.thumbnail ?? item.artwork.poster)
+        let fallback = item.isMetadataOnly ? nil : ArtworkFallback.Query(item)
+        setHeroBackdrop(url: item.artwork.backdrop ?? (fallback == nil ? (item.artwork.thumbnail ?? item.artwork.poster) : nil),
+                        fallback: fallback)
     }
 
     /// Discover hero Play (pill in `.play` mode — library-matched items only):
@@ -2972,6 +2977,7 @@ final class PlexHomeViewController: UIViewController {
         // Music libraries render 1:1 square tiles; everything else 2:3.
         let tile = data.isMusic ? MediaRowMetrics.music : MediaRowMetrics.poster
         let groupHeight = tile.frame.height + MediaRowMetrics.focusGrowthPadding
+            + (data.isMusic ? 0 : MediaRowMetrics.posterCaptionHeight)
 
         let itemSize = NSCollectionLayoutSize(
             widthDimension: .fractionalWidth(1.0 / CGFloat(MediaRowMetrics.posterFullCount)),
@@ -3081,7 +3087,8 @@ final class PlexHomeViewController: UIViewController {
     private func makeHubSectionLayout(section: HomeSectionData, isContinueWatching: Bool) -> NSCollectionLayoutSection {
         let tileHeight: CGFloat = isContinueWatching
             ? MediaRowMetrics.cwHeight
-            : (section.isMusic ? MediaRowMetrics.musicHeight : MediaRowMetrics.posterHeight)
+            : (section.isMusic ? MediaRowMetrics.musicHeight
+               : MediaRowMetrics.posterHeight + MediaRowMetrics.posterCaptionHeight)
         let rowHeight = tileHeight + MediaRowMetrics.focusGrowthPadding  // room for focus growth
 
         let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
@@ -3892,6 +3899,7 @@ final class PlexHomeViewController: UIViewController {
                     self.setHeroBackdrop(url: nil)
                 }
                 self.updateContentTopInset()
+                self.relayoutIfPosterTitlesChanged()
                 self.reprojectIfHomeLibrariesChanged()
                 self.selectHeroItemsIfNeeded()
                 if case .home = self.mode {
@@ -3925,6 +3933,20 @@ final class PlexHomeViewController: UIViewController {
             }
             .store(in: &dataStoreObservers)
     }
+
+    /// Titles under posters change every poster row's and grid's height:
+    /// rebuild the layout and reconfigure the cells when the setting flips.
+    private func relayoutIfPosterTitlesChanged() {
+        let shows = MediaRowMetrics.showsPosterTitles
+        guard shows != lastShowsPosterTitles else { return }
+        lastShowsPosterTitles = shows
+        collectionView.collectionViewLayout.invalidateLayout()
+        var snapshot = dataSource.snapshot()
+        snapshot.reconfigureItems(snapshot.itemIdentifiers)
+        dataSource.apply(snapshot, animatingDifferences: false)
+    }
+
+    private var lastShowsPosterTitles = MediaRowMetrics.showsPosterTitles
 
     /// Last-seen shown-on-Home library set, so the UserDefaults observer can
     /// tell a library-visibility change from any other defaults write.
@@ -6970,8 +6992,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let copies = DetailCopySelection.ordered([own] + others.filter { $0.id != ownID })
             let rows = copies.map { copy in
                 (id: copy.id, isCurrent: copy.id == ownID,
-                 label: [copy.serverName, copy.sources.first.map(VersionPicker.rowLabel),
-                         DetailCopySelection.resumeText(copy.item)].compactMap { $0 }.joined(separator: " · "))
+                 label: [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
+                    .joined(separator: " · "))
             }
             let actions = rows.map { row in
                 TileMenuAction(title: row.label,

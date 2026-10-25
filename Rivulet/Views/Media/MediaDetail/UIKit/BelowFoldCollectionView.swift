@@ -334,7 +334,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // The ShelfRowCell draws its own header (self-aligned with the tiles),
         // so there's NO supplementary header — just one full-width item tall
         // enough for the header + the row.
-        let rowHeight = ShelfRowCell.headerHeight + MediaRowMetrics.posterHeight + MediaRowMetrics.focusGrowthPadding
+        let rowHeight = ShelfRowCell.headerHeight + MediaRowMetrics.posterHeight
+            + MediaRowMetrics.posterCaptionHeight + MediaRowMetrics.focusGrowthPadding
         let itemSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
                                               heightDimension: .absolute(rowHeight))
         let item = NSCollectionLayoutItem(layoutSize: itemSize)

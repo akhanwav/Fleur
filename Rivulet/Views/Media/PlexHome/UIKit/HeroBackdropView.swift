@@ -133,7 +133,30 @@ final class HeroBackdropView: UIView {
     /// Load the backdrop for the supplied URL. Cancels any in-flight load.
     /// Crossfades over 0.22s when replacing an existing image. Setting nil
     /// shows the placeholder gradient.
-    func setBackdrop(url: URL?) {
+    /// Below this width a backdrop is a stretched thumbnail on a 1920 pt
+    /// (3840 px) screen: the server's art is replaced by TMDB's.
+    private static let minimumBackdropPixels: CGFloat = 1280
+    /// Bumped per `setBackdrop`, so a late TMDB answer for an earlier slide is dropped.
+    private var backdropRequest: UInt64 = 0
+
+    /// `fallback` names the title for TMDB: used when there is no `url`, or
+    /// when the server's image is far below screen size (an unmatched item's
+    /// art, or a poster standing in for missing art).
+    func setBackdrop(url: URL?, fallback: ArtworkFallback.Query? = nil) {
+        backdropRequest &+= 1
+        let request = backdropRequest
+        if url == nil, let fallback {
+            loadTask?.cancel()
+            Task { [weak self] in
+                let tmdb = await ArtworkFallback.shared.backdrop(for: fallback)
+                await MainActor.run {
+                    // The hero may have moved on while TMDB answered.
+                    guard let self, self.backdropRequest == request else { return }
+                    self.setBackdrop(url: tmdb)
+                }
+            }
+            return
+        }
         guard url != currentURL else { return }
         loadTask?.cancel()
         clearPreviousTask?.cancel()
@@ -151,7 +174,12 @@ final class HeroBackdropView: UIView {
         currentURL = url
 
         loadTask = Task { [weak self] in
-            let image = await ImageCacheManager.shared.imageFullSize(for: url)
+            var image = await ImageCacheManager.shared.imageFullSize(for: url)
+            if let fallback, (image.map { $0.size.width * $0.scale } ?? 0) < Self.minimumBackdropPixels,
+               let tmdbURL = await ArtworkFallback.shared.backdrop(for: fallback),
+               let tmdb = await ImageCacheManager.shared.imageFullSize(for: tmdbURL) {
+                image = tmdb
+            }
             // The scrim is read off the same image, so both arrive together.
             let luma = await Task.detached(priority: .userInitiated) { image?.cgImage.flatMap(HeroScrim.luma) }.value
             guard !Task.isCancelled, let self else { return }

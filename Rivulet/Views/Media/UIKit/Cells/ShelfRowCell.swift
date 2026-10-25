@@ -41,7 +41,11 @@ final class ShelfRowCell: UICollectionViewCell {
 
         /// The cell: the lockup's frame, not its resting artwork.
         var tileWidth: CGFloat { tile?.frame.width ?? MediaRowMetrics.liveWidth }
-        var tileHeight: CGFloat { tile?.frame.height ?? MediaRowMetrics.liveHeight }
+        /// A poster cell also holds its title and year when they're shown.
+        var tileHeight: CGFloat {
+            (tile?.frame.height ?? MediaRowMetrics.liveHeight)
+                + (self == .poster ? MediaRowMetrics.posterCaptionHeight : 0)
+        }
         /// The grid tile behind the kind; nil for Live TV, which has frame
         /// numbers of its own.
         private var tile: MediaRowMetrics.Tile? {
@@ -303,7 +307,9 @@ final class ShelfRowCell: UICollectionViewCell {
                    contentToken: Int,
                    initialOffset: CGFloat,
                    panelOvershoot: (left: CGFloat, right: CGFloat) = (0, 0)) {
+        // The poster height follows the titles-under-posters setting.
         let kindChanged = kind != tileKind || panelOvershoot != self.panelOvershoot
+            || flow.itemSize.height != kind.tileHeight
         tileKind = kind
         self.panelOvershoot = panelOvershoot
         if kindChanged {

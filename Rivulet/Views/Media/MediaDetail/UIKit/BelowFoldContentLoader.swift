@@ -223,61 +223,23 @@ final class BelowFoldContentLoader {
         return content
     }
 
-    /// Cross-server availability for a metadata-only item — deferred exactly
-    /// like `loadAdvisory`, because `OtherServersAvailabilityChecker` can be
-    /// slow on its first call this session (pages every other server's
-    /// library once, then caches for the rest of the session). Each match is
-    /// then read on its own server for the entry's quality and resume line.
+    /// On Your Servers: every copy on every server, from the same lookup and
+    /// with the same summary line as Ways to Watch (`DetailCopySelection`),
+    /// so a show's card names the episode Play would start there, its
+    /// watched count and that episode's quality. Deferred exactly like
+    /// `loadAdvisory`, so the render never waits on the other servers.
     func loadServerAvailability(for item: MediaItem, detail: MediaItemDetail?) async -> ServerAvailability? {
-        let checker = OtherServersAvailabilityChecker.shared
-        let copies: [OtherServersAvailabilityChecker.ServerCopy]
-        if let guid = detail?.plexGuid {
-            copies = await checker.copies(plexGuid: guid)
-        } else if let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) {
-            copies = await checker.copies(forTmdbId: tmdbId, type: type)
-        } else if item.kind == .movie || item.kind == .show,
-                  let tmdbId = detail?.externalIDs["tmdb"].flatMap(Int.init) {
-            copies = await checker.copies(forTmdbId: tmdbId, type: item.kind == .movie ? .movie : .tv)
-        } else {
-            return nil
+        let (guid, _, copies) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
+        guard guid != nil else { return item.isMetadataOnly ? .notFound : nil }
+        let entries = DetailCopySelection.ordered(copies).compactMap { copy -> ServerCopyEntry? in
+            guard let remote = copy.remote else { return nil }
+            return ServerCopyEntry(
+                machineId: copy.machineId, ratingKey: remote.ratingKey, serverName: copy.serverName,
+                summary: DetailCopySelection.summary(copy),
+                target: .remote(serverURL: remote.serverURL, token: remote.token,
+                                ratingKey: remote.ratingKey, mediaID: nil))
         }
-        guard !copies.isEmpty else { return .notFound }
-        let entries = await withTaskGroup(of: ServerCopyEntry.self) { group in
-            for copy in copies {
-                group.addTask { await Self.entry(for: copy) }
-            }
-            var entries: [ServerCopyEntry] = []
-            for await entry in group { entries.append(entry) }
-            return entries
-        }
-        // `copies` is already in the user's server order.
-        let order = copies.map(\.id)
-        return .found(entries.sorted { (order.firstIndex(of: $0.copyID) ?? 0) < (order.firstIndex(of: $1.copyID) ?? 0) })
-    }
-
-    /// A copy's entry. A failed metadata read still yields a playable entry,
-    /// just without its summary line.
-    private static func entry(for copy: OtherServersAvailabilityChecker.ServerCopy) async -> ServerCopyEntry {
-        let target = WaysToWatchTarget.remote(serverURL: copy.serverURL, token: copy.token,
-                                              ratingKey: copy.ratingKey, mediaID: nil)
-        guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
-            serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey
-        ) else { return ServerCopyEntry(machineId: copy.machineId, ratingKey: copy.ratingKey,
-                                        serverName: copy.serverName, summary: nil, target: target) }
-        var parts: [String] = []
-        if meta.type == "show" {
-            if let count = meta.leafCount { parts.append(count == 1 ? "1 episode" : "\(count) episodes") }
-        } else {
-            if meta.isInProgress { parts.append("Resume") }
-            let detail = PlexMediaMapper.detail(meta, providerID: "plex:\(copy.machineId)",
-                                                serverURL: copy.serverURL, authToken: copy.token)
-            if let best = VersionRanking.ordered(detail.mediaSources).first {
-                parts.append(VersionPicker.rowLabel(best))
-            }
-        }
-        return ServerCopyEntry(machineId: copy.machineId, ratingKey: copy.ratingKey, serverName: copy.serverName,
-                               summary: parts.isEmpty ? nil : parts.joined(separator: " · "),
-                               target: target)
+        return entries.isEmpty ? .notFound : .found(entries)
     }
 
     /// Deferred Common Sense Media fetch — runs AFTER the below-fold renders so

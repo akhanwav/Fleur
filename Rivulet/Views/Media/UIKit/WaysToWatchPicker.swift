@@ -49,9 +49,13 @@ struct DetailCopy {
     var detail: MediaItemDetail?
     /// nil on the main server, whose copy plays through the page's own route.
     let remote: RemoteAccess?
-    /// A show's next episode on this server (remote copies only; the main
-    /// copy's comes from the page's own resolver).
+    /// A show's or season's episode that Play would start on this server,
+    /// and that episode's detail (its files: the quality a row shows).
     var playTarget: MediaItem?
+    var playTargetDetail: MediaItemDetail?
+
+    /// Whether this copy is a show or season (rows describe its next episode).
+    var isSeries: Bool { item.kind == .show || item.kind == .season }
 
     var sources: [MediaSource] { VersionRanking.ordered(detail?.mediaSources ?? []) }
     /// A server can hold the title in several libraries: a copy is a server
@@ -112,6 +116,19 @@ final class DetailCopySelection {
                                  item: item, detail: mainDetail, remote: nil)]
             selectedIndex = 0
             onChange?()
+            if item.kind == .show || item.kind == .season {
+                Task { @MainActor [weak self] in
+                    guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
+                          let target = await EpisodePicker.resolvePlayTarget(for: item, provider: provider)
+                    else { return }
+                    let detail = try? await provider.fullDetail(for: target.ref)
+                    guard let self, self.token == current,
+                          let index = self.copies.firstIndex(where: \.isMainServer) else { return }
+                    self.copies[index].playTarget = target
+                    self.copies[index].playTargetDetail = detail
+                    self.onChange?()
+                }
+            }
         }
         guard item.ref.isPlex || item.isMetadataOnly else { return }
 
@@ -121,6 +138,8 @@ final class DetailCopySelection {
             guard let self, self.token == current else { return }
             self.hasLookedUp = true
             guard let guid else { self.onChange?(); return }
+            // `self.copies`, not a fresh copy: the main copy may already hold
+            // its resolved Play target.
             var own = self.copies.filter(\.isMainServer)
             // The lookup searches the main server too, so it finds the
             // page's own item again: list that one once, as the page's.
@@ -204,12 +223,12 @@ final class DetailCopySelection {
     func present(from host: UIViewController, sourceFrame: CGRect?) {
         var actions: [TileMenuAction] = []
         for (index, copy) in copies.enumerated() {
-            let resume = Self.resumeText(copy.playTarget ?? copy.item)
+            let resume = Self.resumeText(copy.item)
             let sources = copy.sources
-            if sources.isEmpty || copy.item.kind == .show || copy.item.kind == .season {
-                // A show has no file of its own: one row per server.
-                let next = copy.playTarget.map { EpisodePicker.playTitle(for: $0, on: .show) }
-                let label = [copy.serverName, next ?? resume].compactMap { $0 }.joined(separator: " · ")
+            if sources.isEmpty || copy.isSeries {
+                // A show has no file of its own: one row per server, about
+                // the episode Play would start there.
+                let label = ([copy.serverName] + Self.seriesSummary(copy)).joined(separator: " · ")
                 actions.append(row(label, selected: index == selectedIndex, copyID: copy.id, mediaID: nil))
                 continue
             }
@@ -245,6 +264,43 @@ final class DetailCopySelection {
                               machineId: copy.machineId, from: host)
     }
 
+    /// What a show's or season's copy offers on its server, the same in Ways
+    /// to Watch and On Your Servers, wherever the page was opened from: the
+    /// episode Play would start ("S2, E3", with its resume time), the
+    /// watched count ("3 of 10 watched", or "10 episodes"), and that
+    /// episode's quality ("4K DV", "1080p").
+    static func seriesSummary(_ copy: DetailCopy) -> [String] {
+        var parts: [String] = []
+        if let target = copy.playTarget, let season = target.seasonNumber, let episode = target.episodeNumber {
+            parts.append(["S\(season), E\(episode)", resumeText(target)].compactMap { $0 }.joined(separator: " "))
+        }
+        if let progress = copy.detail?.item.childProgress ?? copy.item.childProgress, progress.total > 0 {
+            parts.append(progress.played > 0
+                ? "\(progress.played) of \(progress.total) watched"
+                : (progress.total == 1 ? "1 episode" : "\(progress.total) episodes"))
+        }
+        if let quality = qualityText(VersionRanking.ordered(copy.playTargetDetail?.mediaSources ?? []).first) {
+            parts.append(quality)
+        }
+        return parts
+    }
+
+    /// The card / row line for any copy: a series' summary, else the best
+    /// version's quality led by the server's resume time.
+    static func summary(_ copy: DetailCopy) -> String? {
+        let parts = copy.isSeries
+            ? seriesSummary(copy)
+            : [resumeText(copy.item), copy.sources.first.map(VersionPicker.rowLabel)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "4K DV", "1080p HDR", "1080p".
+    static func qualityText(_ source: MediaSource?) -> String? {
+        guard let source else { return nil }
+        let text = [source.resolutionBadge, source.rangeBadge].compactMap { $0 }.joined(separator: " ")
+        return text.isEmpty ? nil : text
+    }
+
     /// "Resume 42:10" when that server holds a resume point.
     static func resumeText(_ item: MediaItem) -> String? {
         guard item.isInProgress else { return nil }
@@ -263,10 +319,17 @@ final class DetailCopySelection {
             item: PlexMediaMapper.item(meta, providerID: providerID, serverURL: copy.serverURL, authToken: copy.token),
             detail: PlexMediaMapper.detail(meta, providerID: providerID, serverURL: copy.serverURL, authToken: copy.token),
             remote: .init(serverURL: copy.serverURL, token: copy.token, ratingKey: copy.ratingKey))
-        if meta.type == "show", let next = await RemoteCopyPlayer.nextEpisode(
+        // A show or season: the episode Play would start on that server, read
+        // in full so its row can name its quality.
+        if meta.type == "show" || meta.type == "season",
+           let next = await RemoteCopyPlayer.nextEpisode(
             serverURL: copy.serverURL, token: copy.token, showRatingKey: copy.ratingKey) {
-            detailCopy.playTarget = PlexMediaMapper.item(next, providerID: providerID,
+            let episode = (try? await network.getFullMetadata(
+                serverURL: copy.serverURL, authToken: copy.token, ratingKey: next.ratingKey ?? "")) ?? next
+            detailCopy.playTarget = PlexMediaMapper.item(episode, providerID: providerID,
                                                          serverURL: copy.serverURL, authToken: copy.token)
+            detailCopy.playTargetDetail = PlexMediaMapper.detail(episode, providerID: providerID,
+                                                                 serverURL: copy.serverURL, authToken: copy.token)
         }
         return detailCopy
     }
@@ -307,8 +370,8 @@ enum RemoteCopyPlayer {
         }
     }
 
-    /// A show's next episode on that server: the one in progress, else the
-    /// first unwatched, else the first.
+    /// A show's (or season's) next episode on that server: the one in
+    /// progress, else the first unwatched, else the first.
     static func nextEpisode(serverURL: String, token: String, showRatingKey: String) async -> PlexMetadata? {
         guard let leaves = try? await PlexNetworkManager.shared.getAllLeaves(
             serverURL: serverURL, authToken: token, ratingKey: showRatingKey) else { return nil }

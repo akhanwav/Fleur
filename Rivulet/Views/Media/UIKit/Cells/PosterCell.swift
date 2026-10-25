@@ -52,6 +52,8 @@ final class PosterCell: UICollectionViewCell {
 
     private let watchedBadge = PosterWatchedBadge()
     private let sourceBadge = SourceBadgeView(style: .onArtwork)
+    /// Title and year under the frame (see `PosterCaptionView`).
+    private let caption = PosterCaptionView()
     private let failureIcon = UIImageView()
 
     /// Glass card shown in place of the bare `TVPosterView` gray while the
@@ -149,6 +151,10 @@ final class PosterCell: UICollectionViewCell {
         failureIcon.isHidden = true
         overlayContainer.addSubview(failureIcon)
 
+        contentView.addSubview(caption)
+        caption.pin(below: posterView, artInset: (posterWidth - MediaRowMetrics.poster.art.width) / 2)
+        caption.isHidden = true
+
         posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: posterWidth)
         posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: posterHeight)
         NSLayoutConstraint.activate([
@@ -239,6 +245,10 @@ final class PosterCell: UICollectionViewCell {
     func configure(item: PlexMetadata) {
         sourceBadge.text = nil
         setSquare(["artist", "album", "track"].contains(item.type ?? ""))
+        setFallbackQuery(ArtworkFallback.Query(item))
+        let isAudio = ["artist", "album", "track"].contains(item.type ?? "")
+        caption.configure(title: isAudio ? nil : (item.type == "episode" ? item.grandparentTitle ?? item.title : item.title),
+                          year: item.type == "episode" ? nil : item.year)
         let url = posterURL(for: item)
         loadImage(from: url, item: item)
         configureWatchedBadge(item: item)
@@ -248,6 +258,9 @@ final class PosterCell: UICollectionViewCell {
     func configure(item: MediaItem) {
         sourceBadge.text = nil
         setSquare(item.isMusic == true)
+        setFallbackQuery(item.isMusic == true ? nil : ArtworkFallback.Query(item))
+        caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
+                          year: item.kind == .episode ? nil : item.year)
         // Episodes prefer the grandparent (show) poster so hub rows render
         // show art instead of letterboxed episode stills, matching the Plex path.
         let url = item.grandparentArtwork?.poster ?? item.artwork.poster
@@ -261,8 +274,43 @@ final class PosterCell: UICollectionViewCell {
     /// The badge's text while it shows (tests).
     var sourceBadgeText: String? { sourceBadge.isHidden ? nil : sourceBadge.text }
 
+    /// The title to ask TMDB for when the server's poster is missing or is
+    /// a video frame (an item no agent matched). nil for music.
+    private var fallbackQuery: ArtworkFallback.Query?
+    /// Set once this tile has tried TMDB, so it never loops.
+    private var triedFallback = false
+    private var isSquareTile = false
+
+    /// Swap in TMDB's poster when the server's is missing, failed, or is a
+    /// landscape frame in a portrait slot.
+    private func posterNeedsFallback(_ image: UIImage?) -> Bool {
+        guard !isSquareTile, !triedFallback, fallbackQuery != nil else { return false }
+        guard let image else { return true }
+        return image.size.width > image.size.height
+    }
+
+    /// A different title (a reconfigured cell) gets its own TMDB try.
+    private func setFallbackQuery(_ query: ArtworkFallback.Query?) {
+        if query != fallbackQuery { triedFallback = false }
+        fallbackQuery = query
+    }
+
+    private func loadFallbackPoster(failureIcon: UIImage?) {
+        guard let query = fallbackQuery, !triedFallback else { return }
+        triedFallback = true
+        let original = currentURL
+        Task { [weak self] in
+            guard let url = await ArtworkFallback.shared.poster(for: query) else { return }
+            await MainActor.run {
+                guard let self, self.currentURL == original, self.fallbackQuery == query else { return }
+                self.loadImage(from: url, failureIcon: failureIcon)
+            }
+        }
+    }
+
     /// Music tiles are 1:1 square; everything else keeps the 2:3 poster ratio.
     private func setSquare(_ square: Bool) {
+        isSquareTile = square
         let height = square ? MediaRowMetrics.musicHeight : posterHeight
         if posterHeightConstraint.constant != height {
             posterWidthConstraint.constant = square ? MediaRowMetrics.musicWidth : posterWidth
@@ -294,6 +342,9 @@ final class PosterCell: UICollectionViewCell {
         clearArtwork()
         watchedBadge.isHidden = true
         sourceBadge.text = nil
+        fallbackQuery = nil
+        triedFallback = false
+        caption.configure(title: nil, year: nil)
         failureIcon.isHidden = true
         failureIcon.image = nil
         // A recycled cell must not inherit a prior occupant's stranded focus
@@ -320,6 +371,7 @@ final class PosterCell: UICollectionViewCell {
             clearArtwork()
             currentURL = nil
             showPlaceholderFailure(failureIcon)
+            loadFallbackPoster(failureIcon: failureIcon)
             return
         }
         if currentURL == url, hasArtwork {
@@ -333,6 +385,7 @@ final class PosterCell: UICollectionViewCell {
             posterView.image = cached
             hasArtwork = true
             hidePlaceholder()
+            if posterNeedsFallback(cached) { loadFallbackPoster(failureIcon: failureIcon) }
             return
         }
         // Glass panel up immediately (covers the bare gray); the load now
@@ -354,6 +407,7 @@ final class PosterCell: UICollectionViewCell {
                     self.clearArtwork()
                     self.showPlaceholderFailure(failureIcon)
                 }
+                if self.posterNeedsFallback(image) { self.loadFallbackPoster(failureIcon: failureIcon) }
             }
         }
     }

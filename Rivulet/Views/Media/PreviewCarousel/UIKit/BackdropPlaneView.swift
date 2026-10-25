@@ -167,14 +167,27 @@ final class BackdropPlaneView: UIView {
         let item = items[panel.index]
         panel.loadToken &+= 1
         let token = panel.loadToken
-        // Backdrop falls back to poster. This plane fills most of the screen in
-        // both carousel and expanded-detail, so decode at full quality.
-        guard let url = item.artwork.backdrop ?? item.artwork.poster else {
+        // This plane fills most of the screen in both carousel and
+        // expanded-detail, so decode at full quality.
+        // A server item with no art, or art far below screen size (an item
+        // no agent matched), takes TMDB's backdrop instead.
+        let fallback = item.isMetadataOnly ? nil : ArtworkFallback.Query(item)
+        let serverURL = item.artwork.backdrop ?? (fallback == nil ? item.artwork.poster : nil)
+        guard serverURL != nil || fallback != nil else {
             panel.imageView.image = nil
             return
         }
         Task { [weak panel] in
-            let image = await ImageCacheManager.shared.image(for: url, quality: .full)
+            var image: UIImage?
+            if let serverURL { image = await ImageCacheManager.shared.image(for: serverURL, quality: .full) }
+            if let fallback, (image.map { $0.size.width * $0.scale } ?? 0) < 1280,
+               let tmdbURL = await ArtworkFallback.shared.backdrop(for: fallback),
+               let tmdb = await ImageCacheManager.shared.image(for: tmdbURL, quality: .full) {
+                image = tmdb
+            }
+            if image == nil, let poster = item.artwork.poster {
+                image = await ImageCacheManager.shared.image(for: poster, quality: .full)
+            }
             await MainActor.run {
                 guard let panel, panel.loadToken == token else { return }
                 panel.imageView.image = image
