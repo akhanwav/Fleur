@@ -526,6 +526,9 @@ final class PlexHomeViewController: UIViewController {
 
     private let dataStore = PlexDataStore.shared
     private let authManager = PlexAuthManager.shared
+    /// The Ways to Watch / Play From popup while it is up (one at a time).
+    private weak var waysToWatchPopup: TileMenuPopupViewController?
+    private var waysToWatchPrefetch: DispatchWorkItem?
     private let watchlistService = PlexWatchlistService.shared
     private let recommendationService = PersonalizedRecommendationService.shared
 
@@ -4187,6 +4190,9 @@ final class PlexHomeViewController: UIViewController {
         cell.onOffsetChanged = { [weak self] offset in
             self?.shelfOffsets[sectionID] = offset
         }
+        cell.onFocusItem = { [weak self] itemIndex in
+            self?.prefetchWaysToWatch(self?.shelfSection(id: sectionID)?.items[safe: itemIndex])
+        }
         cell.configure(
             kind: section.kind == .continueWatching ? .continueWatching : (section.isMusic ? .music : .poster),
             realCount: shelfRealCount(section),
@@ -7027,41 +7033,69 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     /// Opening the tile then lands on that copy
     /// (`DetailCopySelection.pendingServer`), where it can still be switched.
     /// Nothing plays from here.
+    ///
+    /// Opens at once on what `WaysToWatchLookup` knows (this server's copy at
+    /// least, under a "Checking other servers…" row) and adds each server's
+    /// copies as it answers. One at a time: a second press while it is up
+    /// does nothing.
     private func presentServerChoices(for item: MediaItem, from tileFrame: CGRect?) {
-        guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
-        Task { @MainActor [weak self] in
-            guard let self, let detail = try? await provider.fullDetail(for: item.ref) else { return }
-            let (guid, _, others) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
-            let main = DetailCopySelection.mainMachineId ?? "main"
-            let ownID = "\(main):\(item.ref.itemID)"
-            let shownID = self.chosenCopies[item.ref]?.copy.id ?? ownID
-            let own = DetailCopy(machineId: main, serverName: self.authManager.mainServerName ?? "This Server",
-                                 isMainServer: true, item: item, detail: detail, remote: nil)
-            // The lookup searches the main server too: this tile's own item
-            // comes back from it, and is listed once, as the current copy.
-            let copies = DetailCopySelection.ordered([own] + others.filter { $0.id != ownID })
-            let rows = copies.map { copy in
-                (id: copy.id, isCurrent: copy.id == shownID,
-                 label: [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
-                    .joined(separator: " · "))
-            }
-            let actions = zip(rows, copies).map { row, copy in
-                TileMenuAction(title: row.label,
-                               systemImage: row.isCurrent ? "checkmark.circle.fill" : "circle") { [weak self] in
-                    guard let self, !row.isCurrent else { return }
-                    if row.id == ownID || guid == nil {
-                        self.chosenCopies[item.ref] = nil
-                        if let guid { DetailCopySelection.pendingServer[guid] = nil }
-                    } else if let guid {
-                        self.chosenCopies[item.ref] = (guid: guid, copy: copy)
-                    }
-                    self.refreshTiles(showing: item.ref)
-                }
-            }
-            let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: tileFrame,
-                                                    header: TileMenuHeader(title: "Ways to Watch"))
-            self.topmostPresented.present(popup, animated: false)
+        guard waysToWatchPopup == nil, WaysToWatchLookup.offersWaysToWatch(item) else { return }
+        let lookup = WaysToWatchLookup.lookup(for: item)
+        presentLookupPopup(lookup, title: "Ways to Watch", sourceFrame: tileFrame) { [weak self] in
+            self?.serverChoiceRows(lookup) ?? []
         }
+    }
+
+    /// The Ways to Watch or Play From popup over `lookup`, rebuilt on every
+    /// change while it is up.
+    private func presentLookupPopup(_ lookup: WaysToWatchLookup, title: String, sourceFrame: CGRect?,
+                                    rows: @escaping () -> [TileMenuAction]) {
+        let popup = TileMenuPopupViewController(sections: [rows()], sourceFrame: sourceFrame,
+                                                header: TileMenuHeader(title: title))
+        let token = lookup.observe { [weak popup] in popup?.update(sections: [rows()]) }
+        popup.onDismiss = { lookup.stopObserving(token) }
+        waysToWatchPopup = popup
+        topmostPresented.present(popup, animated: false)
+    }
+
+    /// One row per copy, the one the tile shows checked. Picking one switches
+    /// the tile to it.
+    private func serverChoiceRows(_ lookup: WaysToWatchLookup) -> [TileMenuAction] {
+        let item = lookup.item
+        let ownID = lookup.ownCopy.id
+        let shownID = chosenCopies[item.ref]?.copy.id ?? ownID
+        var actions = lookup.copies.map { copy in
+            let isCurrent = copy.id == shownID
+            let label = [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
+                .joined(separator: " · ")
+            return TileMenuAction(title: label,
+                                  systemImage: isCurrent ? "checkmark.circle.fill" : "circle") { [weak self] in
+                guard let self, !isCurrent else { return }
+                let guid = lookup.guid
+                if copy.id == ownID || guid == nil {
+                    self.chosenCopies[item.ref] = nil
+                    if let guid { DetailCopySelection.pendingServer[guid] = nil }
+                } else if let guid {
+                    self.chosenCopies[item.ref] = (guid: guid, copy: copy)
+                }
+                self.refreshTiles(showing: item.ref)
+            }
+        }
+        if !lookup.isFinished { actions.append(Self.checkingServersRow) }
+        return actions
+    }
+
+    private static let checkingServersRow = TileMenuAction(
+        title: "Checking other servers…", systemImage: "ellipsis", isEnabled: false) {}
+
+    /// Start the focused tile's Ways to Watch lookup once focus has rested on
+    /// it, so a long press finds it ready. Not on every tile focus passes.
+    private func prefetchWaysToWatch(_ item: MediaItem?) {
+        waysToWatchPrefetch?.cancel()
+        guard let item, WaysToWatchLookup.offersWaysToWatch(item) else { return }
+        let work = DispatchWorkItem { WaysToWatchLookup.prefetch(item) }
+        waysToWatchPrefetch = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
     /// Redraw every tile of `ref` after it changed copy: a visible row is
@@ -7085,40 +7119,35 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     /// show (the episode Play would start there). Picking a row plays it
     /// there; a plain press still plays the slide as before.
     private func presentPlayChoices(for item: MediaItem) {
-        guard item.ref.isPlex, item.kind == .movie || item.kind == .show || item.kind == .episode,
-              let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
-        let sourceFrame = focusedViewFrame()
-        Task { @MainActor [weak self] in
-            guard let self, let detail = try? await provider.fullDetail(for: item.ref) else { return }
-            let (_, _, others) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
-            let main = DetailCopySelection.mainMachineId ?? "main"
-            let ownID = "\(main):\(item.ref.itemID)"
-            let own = DetailCopy(machineId: main, serverName: self.authManager.mainServerName ?? "This Server",
-                                 isMainServer: true, item: item, detail: detail, remote: nil)
-            let copies = DetailCopySelection.ordered([own] + others.filter { $0.id != ownID })
-            var actions: [TileMenuAction] = []
-            for copy in copies {
-                let sources = copy.sources
-                if sources.isEmpty || copy.isSeries {
-                    let label = ([copy.serverName] + DetailCopySelection.seriesSummary(copy)).joined(separator: " · ")
-                    actions.append(TileMenuAction(title: label, systemImage: "play.fill") { [weak self] in
-                        self?.play(copy, of: item, mediaID: nil)
-                    })
-                    continue
-                }
-                let resume = DetailCopySelection.resumeText(copy.item)
-                for (source, label) in zip(sources, VersionPicker.labels(for: sources)) {
-                    let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")
-                    actions.append(TileMenuAction(title: text, systemImage: "play.fill") { [weak self] in
-                        self?.play(copy, of: item, mediaID: source.id)
-                    })
-                }
-            }
-            guard !actions.isEmpty else { return }
-            let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: sourceFrame,
-                                                    header: TileMenuHeader(title: "Play From"))
-            self.topmostPresented.present(popup, animated: false)
+        guard waysToWatchPopup == nil, WaysToWatchLookup.offersWaysToWatch(item) else { return }
+        let lookup = WaysToWatchLookup.lookup(for: item)
+        presentLookupPopup(lookup, title: "Play From", sourceFrame: focusedViewFrame()) { [weak self] in
+            self?.playChoiceRows(lookup) ?? []
         }
+    }
+
+    private func playChoiceRows(_ lookup: WaysToWatchLookup) -> [TileMenuAction] {
+        let item = lookup.item
+        var actions: [TileMenuAction] = []
+        for copy in lookup.copies {
+            let sources = copy.sources
+            if sources.isEmpty || copy.isSeries {
+                let label = ([copy.serverName] + DetailCopySelection.seriesSummary(copy)).joined(separator: " · ")
+                actions.append(TileMenuAction(title: label, systemImage: "play.fill") { [weak self] in
+                    self?.play(copy, of: item, mediaID: nil)
+                })
+                continue
+            }
+            let resume = DetailCopySelection.resumeText(copy.item)
+            for (source, label) in zip(sources, VersionPicker.labels(for: sources)) {
+                let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")
+                actions.append(TileMenuAction(title: text, systemImage: "play.fill") { [weak self] in
+                    self?.play(copy, of: item, mediaID: source.id)
+                })
+            }
+        }
+        if !lookup.isFinished { actions.append(Self.checkingServersRow) }
+        return actions
     }
 
     /// Play `copy` of `item`: another server's through `RemoteCopyPlayer`
@@ -7410,6 +7439,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let kind: HomeSectionKind? = sectionsSnapshot.indices.contains(nextSectionIndex)
             ? sectionsSnapshot[nextSectionIndex].kind
             : nil
+        if kind == .grid, let path = context.nextFocusedIndexPath, path.section == nextSectionIndex {
+            prefetchWaysToWatch(sectionsSnapshot[nextSectionIndex].items[safe: path.item])
+        }
         // The staged Menu back has landed; stop routing focus to the top. A
         // directional move clears it too — if the top cell never took focus the
         // flag would otherwise latch and yank focus back on some later,

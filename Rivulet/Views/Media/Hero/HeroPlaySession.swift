@@ -52,14 +52,12 @@ enum HeroPlaySession {
                 )
             }
 
-            // Walk the hierarchy: show → first season → first episode
-            let children = try await network.getChildren(
-                serverURL: serverURL,
-                authToken: authToken,
-                ratingKey: ratingKey
-            )
-
             if type == "season" {
+                let children = try await network.getChildren(
+                    serverURL: serverURL,
+                    authToken: authToken,
+                    ratingKey: ratingKey
+                )
                 // Already a season — children are the episodes. Start at the
                 // first UNPLAYED one, not blindly at E01 (a rewatched season
                 // would otherwise always replay its first episode).
@@ -72,13 +70,16 @@ enum HeroPlaySession {
                     )
                 }
             } else {
-                guard let firstSeasonKey = children.first?.ratingKey else { return item }
-                let episodes = try await network.getChildren(
+                // No On Deck: every episode, in order, through the shared rule.
+                let episodes = try await network.getAllLeaves(
                     serverURL: serverURL,
                     authToken: authToken,
-                    ratingKey: firstSeasonKey
+                    ratingKey: ratingKey
                 )
-                if let target = firstUnplayed(in: episodes) {
+                let index = EpisodePicker.nextUpIndex(
+                    inProgress: episodes.map { ($0.viewOffset ?? 0) > 0 && ($0.viewCount ?? 0) == 0 },
+                    played: episodes.map { ($0.viewCount ?? 0) > 0 })
+                if let target = index.map({ episodes[$0] }) {
                     heroPlayLog.info("[HeroPlay] Show \(ratingKey, privacy: .public) → \(target.ratingKey ?? "?", privacy: .public)")
                     return await fetchFullIfPossible(
                         target,

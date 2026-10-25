@@ -68,12 +68,21 @@ final class HeroButtonRowView: UIView {
         }
     }
 
+    /// The Play pill's title, as the detail page's Play button words it
+    /// ("Play S5 · E3", "Resume · 42 min left"; `EpisodePicker.playTitle`).
+    var playTitle: String = "Play" {
+        didSet {
+            guard playTitle != oldValue, primaryAction == .play else { return }
+            renderPrimaryAction()
+        }
+    }
+
     private func renderPrimaryAction() {
         switch primaryAction {
         case .play:
-            playButton.title = "Play"
+            playButton.title = playTitle
             playButton.iconImage = UIImage(systemName: "play.fill")
-            playButton.accessibilityLabel = "Play"
+            playButton.accessibilityLabel = playTitle
             watchlistButton.isHidden = false
         case .watchlist:
             playButton.title = "Watchlist"

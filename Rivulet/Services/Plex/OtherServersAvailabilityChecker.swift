@@ -78,6 +78,39 @@ actor OtherServersAvailabilityChecker {
         return ServerPreferences.sorted(all.filter { ServerPreferences.isEnabled($0.machineId) }, by: \.machineId)
     }
 
+    /// `copies(plexGuid:)` one server at a time: each server's copies go to
+    /// `perServer` as soon as that server answers (all at once from the
+    /// cache), so a slow server holds up only its own rows. Returns what
+    /// every `perServer` call returned.
+    func copies<T: Sendable>(plexGuid: String,
+                             perServer: @escaping @Sendable ([ServerCopy]) async -> [T]) async -> [T] {
+        let servers = await reachableServers()
+        if let cached = copiesCache[plexGuid] { return await perServer(Self.enabled(cached)) }
+        let start = ContinuousClock.now
+        var found: [ServerCopy] = []
+        var results: [T] = []
+        await withTaskGroup(of: ([ServerCopy], [T]).self) { group in
+            for server in servers {
+                group.addTask {
+                    let copies = await Self.lookup(plexGuid, on: server)
+                    let enabled = Self.enabled(copies)
+                    return (copies, enabled.isEmpty ? [] : await perServer(enabled))
+                }
+            }
+            for await (copies, result) in group {
+                found += copies
+                results += result
+            }
+        }
+        copiesCache[plexGuid] = found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
+        otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
+        return results
+    }
+
+    private nonisolated static func enabled(_ copies: [ServerCopy]) -> [ServerCopy] {
+        ServerPreferences.sorted(copies.filter { ServerPreferences.isEnabled($0.machineId) }, by: \.machineId)
+    }
+
     private func allCopies(plexGuid: String) async -> [ServerCopy] {
         let servers = await reachableServers()
         if let cached = copiesCache[plexGuid] { return cached }

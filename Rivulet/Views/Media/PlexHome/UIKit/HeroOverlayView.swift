@@ -316,6 +316,7 @@ final class HeroOverlayView: UIView {
 
     private func updateButtonStateForCurrentItem() {
         buttonRow.canAdvance = items.count > 1
+        updatePlayTitle()
         if let item = currentItem {
             let tmdb = resolvedTmdbId(for: item)
             let onList = tmdb.map { PlexWatchlistService.shared.contains(tmdbId: $0) } ?? false
@@ -324,6 +325,36 @@ final class HeroOverlayView: UIView {
             buttonRow.isOnWatchlist = false
         }
     }
+
+    /// Name what Play starts. A show's episode is resolved in the
+    /// background (and kept, so the press plays it at once); until then the
+    /// pill says Play.
+    private func updatePlayTitle() {
+        guard let item = currentItem else { buttonRow.playTitle = "Play"; return }
+        if item.type == "movie" || item.type == "episode" {
+            buttonRow.playTitle = EpisodePicker.playTitle(for: item)
+            return
+        }
+        guard let key = item.ratingKey else { buttonRow.playTitle = "Play"; return }
+        if let target = resolvedPlayTargets[key] {
+            buttonRow.playTitle = EpisodePicker.playTitle(for: target)
+            return
+        }
+        buttonRow.playTitle = "Play"
+        guard item.type == "show" || item.type == "season", !titleResolving.contains(key) else { return }
+        titleResolving.insert(key)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let resolved = await HeroPlaySession.resolvePlaybackTarget(
+                for: item, serverURL: self.serverURL, authToken: self.authToken)
+            self.titleResolving.remove(key)
+            guard resolved.type == "episode" else { return }
+            self.resolvedPlayTargets[key] = resolved
+            if self.currentItem?.ratingKey == key { self.updatePlayTitle() }
+        }
+    }
+
+    private var titleResolving = Set<String>()
 
     private func handlePlay() {
         guard !isResolvingPlay, let item = currentItem else { return }
@@ -608,7 +639,37 @@ final class MediaItemHeroOverlayView: UIView {
         }
         renderPagingDots()
         buttonRow.canAdvance = items.count > 1
+        updatePlayTitle()
     }
+
+    /// Name what Play starts, as the Plex hero does. A show's episode is
+    /// resolved through its provider in the background and kept.
+    private func updatePlayTitle() {
+        guard let item = currentItem, !item.isMetadataOnly else { buttonRow.playTitle = "Play"; return }
+        if item.kind == .movie || item.kind == .episode {
+            buttonRow.playTitle = EpisodePicker.playTitle(for: item)
+            return
+        }
+        if let target = playTargets[item.ref] {
+            buttonRow.playTitle = EpisodePicker.playTitle(for: target)
+            return
+        }
+        buttonRow.playTitle = "Play"
+        guard item.kind == .show || item.kind == .season, !resolvingTitles.contains(item.ref),
+              let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
+        resolvingTitles.insert(item.ref)
+        Task { @MainActor [weak self] in
+            let target = await EpisodePicker.resolvePlayTarget(for: item, provider: provider)
+            guard let self else { return }
+            self.resolvingTitles.remove(item.ref)
+            guard let target else { return }
+            self.playTargets[item.ref] = target
+            if self.currentItem?.ref == item.ref { self.updatePlayTitle() }
+        }
+    }
+
+    private var playTargets: [MediaItemRef: MediaItem] = [:]
+    private var resolvingTitles = Set<MediaItemRef>()
 
     // MARK: - Focus
 
@@ -697,6 +758,7 @@ final class MediaItemHeroOverlayView: UIView {
         currentIndex = newIndex
         if let item = currentItem { onIndexChanged?(newIndex, item) }
         buttonRow.canAdvance = items.count > 1
+        updatePlayTitle()
         // Advance the dots NOW, on the press, with the backdrop image.
         renderPagingDots()
 

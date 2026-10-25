@@ -5,10 +5,10 @@
 //  ResumeText.swift
 //  Rivulet
 //
-//  The time left after the server's resume point, worded once for the
-//  Continue Watching card ("S2 · E5 · 23 min left") and the detail page's
-//  Resume button ("Resume · 42 min left"). Whether there is a resume point at
-//  all is `WatchProgressPolicy`'s call, as everywhere else.
+//  The time left after the server's resume point ("42 min left"), for the
+//  Play button's title (`EpisodePicker.playTitle`) wherever it shows. Whether
+//  there is a resume point at all is `WatchProgressPolicy`'s call, as
+//  everywhere else.
 //
 
 import Foundation
@@ -25,16 +25,5 @@ enum ResumeText {
         let hours = minutes / 60, rest = minutes % 60
         if hours == 0 { return "\(minutes) min left" }
         return rest == 0 ? "\(hours) hr left" : "\(hours) hr \(rest) min left"
-    }
-
-    /// The Continue Watching line: "S2 · E5 · 23 min left" for an episode,
-    /// "42 min left" for a movie, "S2 · E5" for an episode not started yet;
-    /// nil when there is neither.
-    static func line(season: Int?, episode: Int?,
-                     offsetSeconds: TimeInterval, runtimeSeconds: TimeInterval?) -> String? {
-        var parts: [String] = []
-        if let season, let episode { parts.append("S\(season) · E\(episode)") }
-        if let left = timeLeft(offsetSeconds: offsetSeconds, runtimeSeconds: runtimeSeconds) { parts.append(left) }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

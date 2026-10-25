@@ -32,12 +32,36 @@ enum EpisodePicker {
             ?? ordered.first
     }
 
+    /// Where a whole show's Play goes when Plex has no On Deck episode for it
+    /// (Plex drops a show from On Deck after a while unwatched), over its
+    /// episodes in playback order:
+    ///
+    /// 1. one in progress, to resume it;
+    /// 2. the first unplayed one after the last played, so a new episode of a
+    ///    show you were caught up on is next (not an old one you skipped);
+    /// 3. the first unplayed one;
+    /// 4. the first, to start again.
+    ///
+    /// Indexes into the arrays, so the Plex-metadata callers share it.
+    static func nextUpIndex(inProgress: [Bool], played: [Bool]) -> Int? {
+        guard !played.isEmpty else { return nil }
+        if let index = inProgress.firstIndex(of: true) { return index }
+        if let last = played.lastIndex(of: true),
+           let next = played[(last + 1)...].firstIndex(of: false) { return next }
+        return played.firstIndex(of: false) ?? 0
+    }
+
+    static func nextUp(in episodes: [MediaItem]) -> MediaItem? {
+        let ordered = inPlaybackOrder(episodes)
+        return nextUpIndex(inProgress: ordered.map(\.userState.isInProgress),
+                           played: ordered.map(\.userState.isPlayed)).map { ordered[$0] }
+    }
+
     /// The episode a Play press on `item` should start. `nil` if it can't be
     /// resolved (no provider data), in which case the caller plays `item` as-is.
     ///
     ///  - movie / episode: plays itself (returned unchanged).
-    ///  - show: its Plex OnDeck episode; if nothing's started, the first
-    ///    season's first unplayed episode.
+    ///  - show: its Plex OnDeck episode, else `nextUp` over every episode.
     ///  - season: that season's first unplayed episode.
     ///
     /// Shared by the carousel's Play button and its title, so the title can
@@ -52,6 +76,9 @@ enum EpisodePicker {
             if let onDeck = try? await provider.fullDetail(for: item.ref).nextEpisode {
                 return onDeck
             }
+            if let episodes = try? await provider.allEpisodes(of: item.ref), let next = nextUp(in: episodes) {
+                return next
+            }
             guard let firstSeason = try? await provider.children(of: item.ref).first
             else { return nil }
             let episodes = (try? await provider.children(of: firstSeason.ref)) ?? []
@@ -64,39 +91,46 @@ enum EpisodePicker {
         }
     }
 
-    /// The Play button's title for `target` (what Play starts) on a page of
-    /// kind `page`. A show or season page names the episode; an episode's own
-    /// page names it only to Resume, the way its Continue Watching card does.
-    static func playTitle(for target: MediaItem, on page: MediaKind) -> String {
+    /// The Play button's title for `target`, what Play will start, wherever it
+    /// shows: the detail and episode pages, the Home hero, Continue Watching
+    /// and each server's Ways to Watch row. An episode is always named.
+    static func playTitle(for target: MediaItem) -> String {
         let isEpisode = target.kind == .episode
-        let resumes = target.isInProgress
-        let named = isEpisode && (resumes || page == .show || page == .season)
         return playTitle(
-            resumes: resumes,
+            resumes: target.isInProgress,
             watched: target.isWatched,
-            season: named ? target.seasonNumber : nil,
-            episode: named ? target.episodeNumber : nil,
+            season: isEpisode ? target.seasonNumber : nil,
+            episode: isEpisode ? target.episodeNumber : nil,
             timeLeft: ResumeText.timeLeft(offsetSeconds: target.userState.viewOffset,
                                           runtimeSeconds: target.runtime))
     }
 
+    /// The same title for a Plex item (the Home hero's slides).
+    static func playTitle(for target: PlexMetadata) -> String {
+        let isEpisode = target.type == "episode"
+        let offset = TimeInterval(target.viewOffset ?? 0) / 1000
+        let runtime = target.duration.map { TimeInterval($0) / 1000 }
+        return playTitle(
+            resumes: WatchProgressPolicy.hasResumePoint(offsetSeconds: offset, runtimeSeconds: runtime),
+            watched: target.isWatched,
+            season: isEpisode ? target.parentIndex : nil,
+            episode: isEpisode ? target.index : nil,
+            timeLeft: ResumeText.timeLeft(offsetSeconds: offset, runtimeSeconds: runtime))
+    }
+
     /// Apple's wording, our rule: a resume point (`WatchProgressPolicy`) says
     /// Resume and outranks the watched flag; a watched target says Play Again;
-    /// else Play. A show or season page names the episode, the first one
-    /// included ("Play S1, E1"), so it reads the same on every server.
-    ///
-    /// Resume carries the Continue Watching card's line when the time left is
-    /// known: "Resume · 42 min left", "Resume · S2 · E5 · 23 min left".
+    /// else Play. An episode is named, and a resume carries the time left:
+    /// "Play S5 · E3", "Resume S5 · E3 · 12 min left", "Resume · 42 min left".
     static func playTitle(resumes: Bool, watched: Bool, season: Int? = nil, episode: Int? = nil,
                           timeLeft: String? = nil) -> String {
-        if resumes, let timeLeft {
-            let code = season.flatMap { s in episode.map { "S\(s) · E\($0) · " } } ?? ""
-            return "Resume · " + code + timeLeft
+        let code = season.flatMap { s in episode.map { "S\(s) · E\($0)" } }
+        if resumes {
+            if let code { return (["Resume " + code] + [timeLeft].compactMap { $0 }).joined(separator: " · ") }
+            return timeLeft.map { "Resume · " + $0 } ?? "Resume"
         }
-        let code = season.flatMap { s in episode.map { " S\(s), E\($0)" } } ?? ""
-        if resumes { return "Resume" + code }
         if watched { return "Play Again" }
-        return "Play" + code
+        return code.map { "Play " + $0 } ?? "Play"
     }
 
     /// Sort by season then episode number when those are present, so a caller

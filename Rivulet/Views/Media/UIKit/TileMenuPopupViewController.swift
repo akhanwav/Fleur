@@ -38,6 +38,9 @@ struct TileMenuAction {
     let title: String
     let systemImage: String
     var destructive: Bool = false
+    /// A status line ("Checking other servers…"): shown dimmed and skipped
+    /// by focus.
+    var isEnabled: Bool = true
     let handler: () -> Void
 }
 
@@ -96,17 +99,22 @@ final class TileMenuPopupViewController: UIViewController {
 
     /// Action groups; a hairline divider is drawn between groups, matching
     /// the SwiftUI menu's `Divider()`s.
-    private let sections: [[TileMenuAction]]
+    private var sections: [[TileMenuAction]]
     private let header: TileMenuHeader?
     /// The pressed tile's frame in window coordinates. The popup is
     /// full-screen, so window coords map 1:1 onto its view. The panel
     /// top-aligns with the tile and sits beside it.
     private let sourceFrame: CGRect?
     private var firstRow: MenuRowButton?
+    private var rows: [MenuRowButton] = []
+    private var stack: UIStackView!
+    private var headerView: UIView?
     private var panel: UIVisualEffectView!
     /// The dim the backdrop animates to.
     private let dimColor = UIColor.black.withAlphaComponent(0.55)
     private var isDismissing = false
+    /// Runs once the popup is gone, however it closed.
+    var onDismiss: (() -> Void)?
 
     /// Present with `animated: false` — entrance/exit run in-controller so
     /// the panel can grow from / shrink to the tile's corner.
@@ -134,30 +142,13 @@ final class TileMenuPopupViewController: UIViewController {
         // visible (no blur). Starts clear; the entrance animates it in.
         view.backgroundColor = .clear
 
-        var arranged: [UIView] = []
-        let headerView = header.map(Self.makeHeaderView)
-        if let headerView {
-            arranged.append(headerView)
-            if !sections.isEmpty { arranged.append(DividerView()) }
-        }
-        for (sectionIndex, section) in sections.enumerated() {
-            if sectionIndex > 0 {
-                arranged.append(DividerView())
-            }
-            for action in section {
-                let row = MenuRowButton(action: action) { [weak self] handler in
-                    self?.animateOut { handler() }
-                }
-                if firstRow == nil { firstRow = row }
-                arranged.append(row)
-            }
-        }
-
-        let stack = UIStackView(arrangedSubviews: arranged)
+        headerView = header.map(Self.makeHeaderView)
+        stack = UIStackView()
         stack.axis = .vertical
         stack.alignment = .fill
         stack.spacing = 0
         stack.translatesAutoresizingMaskIntoConstraints = false
+        buildRows()
 
         let effect: UIVisualEffect
         if #available(tvOS 26.0, *) { effect = UIGlassEffect() }
@@ -174,8 +165,80 @@ final class TileMenuPopupViewController: UIViewController {
             stack.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -panelInset),
         ])
 
-        // Panel size: rows + dividers, wide enough for the longest title. A
-        // header asks for a wider panel so its description reads as prose.
+        let (frame, growsFromLeftEdge) = panelFrame()
+        panel.frame = frame
+        view.addSubview(panel)
+
+        // The system menu grows out of the tile's top corner and shrinks
+        // back into it. Anchor the scale at the panel's tile-adjacent top
+        // corner (re-deriving position so the frame stays put).
+        let anchor = CGPoint(x: growsFromLeftEdge ? 0 : 1, y: 0)
+        panel.layer.anchorPoint = anchor
+        panel.layer.position = CGPoint(x: frame.minX + frame.width * anchor.x,
+                                       y: frame.minY + frame.height * anchor.y)
+
+        // Entrance start state; animated in viewDidAppear.
+        panel.transform = CGAffineTransform(scaleX: 0.02, y: 0.02)
+        panel.alpha = 0
+
+        // Menu cancels (rows own Select via their own recognizers).
+        let menuTap = UITapGestureRecognizer(target: self, action: #selector(menuPressed))
+        menuTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        view.addGestureRecognizer(menuTap)
+    }
+
+    /// Replace the rows in place (Ways to Watch adds each server's copies as
+    /// it answers). Focus stays on the row it was on, matched by title, and
+    /// the panel keeps its tile-adjacent top corner where it is.
+    func update(sections newSections: [[TileMenuAction]]) {
+        sections = newSections.filter { !$0.isEmpty }
+        guard isViewLoaded, !isDismissing else { return }
+        let focusedTitle = rows.first(where: \.isFocused)?.title
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        buildRows()
+        let (frame, _) = panelFrame()
+        let anchor = panel.layer.anchorPoint
+        let transform = panel.transform
+        panel.transform = .identity
+        panel.bounds = CGRect(origin: .zero, size: frame.size)
+        panel.layer.position = CGPoint(x: frame.minX + frame.width * anchor.x,
+                                       y: frame.minY + frame.height * anchor.y)
+        panel.transform = transform
+        refocusTarget = rows.first { $0.title == focusedTitle && $0.canBecomeFocused }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+        refocusTarget = nil
+    }
+
+    private var refocusTarget: MenuRowButton?
+
+    private func buildRows() {
+        rows = []
+        firstRow = nil
+        if let headerView {
+            stack.addArrangedSubview(headerView)
+            if !sections.isEmpty { stack.addArrangedSubview(DividerView()) }
+        }
+        for (sectionIndex, section) in sections.enumerated() {
+            if sectionIndex > 0 {
+                stack.addArrangedSubview(DividerView())
+            }
+            for action in section {
+                let row = MenuRowButton(action: action) { [weak self] handler in
+                    self?.animateOut { handler() }
+                }
+                if firstRow == nil, action.isEnabled { firstRow = row }
+                rows.append(row)
+                stack.addArrangedSubview(row)
+            }
+        }
+    }
+
+    /// Rows + dividers, wide enough for the longest title, beside the tile
+    /// with top edges aligned: right of it when there's room, else left.
+    /// Clamped into the overscan-safe region.
+    private func panelFrame() -> (CGRect, growsFromLeftEdge: Bool) {
+        // A header asks for a wider panel so its description reads as prose.
         let actionCount = sections.reduce(0) { $0 + $1.count }
         let dividerCount = max(0, sections.count - 1) + (headerView != nil && !sections.isEmpty ? 1 : 0)
         let minimumWidth: CGFloat = headerView == nil ? 440 : 620
@@ -193,8 +256,6 @@ final class TileMenuPopupViewController: UIViewController {
             + headerHeight
             + panelInset * 2
 
-        // Beside the tile, top edges aligned: right of it when there's
-        // room, else left. Clamped into the overscan-safe region.
         let safe = view.bounds.insetBy(dx: 80, dy: 50)
         let gap: CGFloat = 16
         var origin: CGPoint
@@ -211,26 +272,7 @@ final class TileMenuPopupViewController: UIViewController {
         }
         origin.x = min(max(origin.x, safe.minX), safe.maxX - panelWidth)
         origin.y = min(max(origin.y, safe.minY), safe.maxY - panelHeight)
-        panel.frame = CGRect(origin: origin, size: CGSize(width: panelWidth, height: panelHeight))
-        view.addSubview(panel)
-
-        // The system menu grows out of the tile's top corner and shrinks
-        // back into it. Anchor the scale at the panel's tile-adjacent top
-        // corner (re-deriving position so the frame stays put).
-        let anchor = CGPoint(x: growsFromLeftEdge ? 0 : 1, y: 0)
-        let frame = panel.frame
-        panel.layer.anchorPoint = anchor
-        panel.layer.position = CGPoint(x: frame.minX + frame.width * anchor.x,
-                                       y: frame.minY + frame.height * anchor.y)
-
-        // Entrance start state; animated in viewDidAppear.
-        panel.transform = CGAffineTransform(scaleX: 0.02, y: 0.02)
-        panel.alpha = 0
-
-        // Menu cancels (rows own Select via their own recognizers).
-        let menuTap = UITapGestureRecognizer(target: self, action: #selector(menuPressed))
-        menuTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
-        view.addGestureRecognizer(menuTap)
+        return (CGRect(origin: origin, size: CGSize(width: panelWidth, height: panelHeight)), growsFromLeftEdge)
     }
 
     /// Title, a detail line, and up to four lines of summary, inset to line up
@@ -300,13 +342,16 @@ final class TileMenuPopupViewController: UIViewController {
             self.view.backgroundColor = .clear
         }
         exit.addCompletion { _ in
-            self.dismiss(animated: false) { completion?() }
+            self.dismiss(animated: false) {
+                self.onDismiss?()
+                completion?()
+            }
         }
         exit.startAnimation()
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        [firstRow].compactMap { $0 }
+        [refocusTarget ?? firstRow].compactMap { $0 }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -372,11 +417,15 @@ private final class MenuRowButton: UIView {
     private let destructive: Bool
     private let onPress: (@escaping () -> Void) -> Void
     private let handler: () -> Void
+    private let isEnabled: Bool
+    let title: String
 
-    override var canBecomeFocused: Bool { true }
+    override var canBecomeFocused: Bool { isEnabled }
 
     init(action: TileMenuAction, onPress: @escaping (@escaping () -> Void) -> Void) {
         self.destructive = action.destructive
+        self.isEnabled = action.isEnabled
+        self.title = action.title
         self.onPress = onPress
         self.handler = action.handler
         super.init(frame: .zero)
@@ -398,6 +447,7 @@ private final class MenuRowButton: UIView {
         addSubview(labelView)
 
         applyUnfocusedAppearance()
+        if !isEnabled { alpha = 0.5 }
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 72),

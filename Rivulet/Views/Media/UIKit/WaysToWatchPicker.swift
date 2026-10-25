@@ -182,7 +182,10 @@ final class DetailCopySelection {
 
     /// Every OTHER server's copy of `item`, read from each server, with the
     /// Plex guid it was found by (and the TMDB key for an unowned title).
-    static func otherCopies(of item: MediaItem, mainDetail: MediaItemDetail?) async
+    /// `onCopy` gets each copy as its server answers, before the rest.
+    static func otherCopies(of item: MediaItem, mainDetail: MediaItemDetail?,
+                            onGuid: (@MainActor @Sendable (String?) -> Void)? = nil,
+                            onCopy: (@MainActor @Sendable (DetailCopy) -> Void)? = nil) async
         -> (guid: String?, tmdbKey: String?, copies: [DetailCopy]) {
         let checker = OtherServersAvailabilityChecker.shared
         var guid = mainDetail?.plexGuid
@@ -196,13 +199,19 @@ final class DetailCopySelection {
             // TMDB id still names the title on the other servers.
             guid = await checker.plexGuid(forTmdbId: tmdbId, type: item.kind == .movie ? .movie : .tv)
         }
+        await onGuid?(guid)
         guard let guid else { return (nil, tmdbKey, []) }
-        let found = await checker.copies(plexGuid: guid)
-        let copies = await withTaskGroup(of: DetailCopy?.self) { group in
-            for copy in found { group.addTask { await remoteCopy(copy) } }
-            var copies: [DetailCopy] = []
-            for await copy in group { if let copy { copies.append(copy) } }
-            return copies
+        let copies = await checker.copies(plexGuid: guid) { found in
+            await withTaskGroup(of: DetailCopy?.self) { group in
+                for copy in found { group.addTask { await remoteCopy(copy) } }
+                var copies: [DetailCopy] = []
+                for await copy in group {
+                    guard let copy else { continue }
+                    copies.append(copy)
+                    await onCopy?(copy)
+                }
+                return copies
+            }
         }
         return (guid, tmdbKey, copies)
     }
@@ -266,13 +275,14 @@ final class DetailCopySelection {
 
     /// What a show's or season's copy offers on its server, the same in Ways
     /// to Watch and On Your Servers, wherever the page was opened from: the
-    /// episode Play would start ("S2, E3", with its resume time), the
+    /// episode Play would start, as its Play button names it ("Play S2 · E3",
+    /// "Resume S2 · E3 · 12 min left"), the
     /// watched count ("3 of 10 watched", or "10 episodes"), and that
     /// episode's quality ("4K DV", "1080p").
     static func seriesSummary(_ copy: DetailCopy) -> [String] {
         var parts: [String] = []
-        if let target = copy.playTarget, let season = target.seasonNumber, let episode = target.episodeNumber {
-            parts.append(["S\(season), E\(episode)", resumeText(target)].compactMap { $0 }.joined(separator: " "))
+        if let target = copy.playTarget, target.kind == .episode {
+            parts.append(EpisodePicker.playTitle(for: target))
         }
         if let progress = copy.detail?.item.childProgress ?? copy.item.childProgress, progress.total > 0 {
             parts.append(progress.played > 0
@@ -301,10 +311,11 @@ final class DetailCopySelection {
         return text.isEmpty ? nil : text
     }
 
-    /// "Resume 42:10" when that server holds a resume point.
+    /// The Play button's title when that server holds a resume point:
+    /// "Resume · 42 min left", "Resume S5 · E3 · 12 min left".
     static func resumeText(_ item: MediaItem) -> String? {
         guard item.isInProgress else { return nil }
-        return "Resume \(PlexMetadata.formatResumeTime(Int(item.userState.viewOffset * 1000)))"
+        return EpisodePicker.playTitle(for: item)
     }
 
     private static func remoteCopy(_ copy: OtherServersAvailabilityChecker.ServerCopy) async -> DetailCopy? {
@@ -375,7 +386,8 @@ enum RemoteCopyPlayer {
     static func nextEpisode(serverURL: String, token: String, showRatingKey: String) async -> PlexMetadata? {
         guard let leaves = try? await PlexNetworkManager.shared.getAllLeaves(
             serverURL: serverURL, authToken: token, ratingKey: showRatingKey) else { return nil }
-        return leaves.first(where: \.isInProgress)
-            ?? leaves.first(where: { ($0.viewCount ?? 0) == 0 }) ?? leaves.first
+        let index = EpisodePicker.nextUpIndex(inProgress: leaves.map(\.isInProgress),
+                                              played: leaves.map { ($0.viewCount ?? 0) > 0 })
+        return index.map { leaves[$0] }
     }
 }

@@ -22,29 +22,24 @@ final class ResumeTextTests: XCTestCase {
         XCTAssertNil(ResumeText.timeLeft(offsetSeconds: 600, runtimeSeconds: nil))
     }
 
-    func test_line() {
-        XCTAssertEqual(ResumeText.line(season: 2, episode: 5, offsetSeconds: 300, runtimeSeconds: 1680),
-                       "S2 · E5 · 23 min left")
-        XCTAssertEqual(ResumeText.line(season: nil, episode: nil, offsetSeconds: 600, runtimeSeconds: 3120),
-                       "42 min left")
-        XCTAssertEqual(ResumeText.line(season: 2, episode: 5, offsetSeconds: 0, runtimeSeconds: 1680), "S2 · E5")
-        XCTAssertNil(ResumeText.line(season: nil, episode: nil, offsetSeconds: 0, runtimeSeconds: 3120))
-    }
-
     func test_continueWatchingCaption() {
         let movie = PosterCaptionView.continueWatchingText(
             title: "Superman", year: 2025, show: nil, season: nil, episode: nil,
             offsetSeconds: 600, runtimeSeconds: 3120)
         XCTAssertEqual(movie.title, "Superman")
-        XCTAssertEqual(movie.detail, "42 min left")
+        XCTAssertEqual(movie.detail, "Resume · 42 min left")
         let episode = PosterCaptionView.continueWatchingText(
             title: "Pilot", year: nil, show: "Silo", season: 2, episode: 5,
             offsetSeconds: 300, runtimeSeconds: 1680)
         XCTAssertEqual(episode.title, "Silo")
-        XCTAssertEqual(episode.detail, "S2 · E5 · 23 min left")
+        XCTAssertEqual(episode.detail, "Resume S2 · E5 · 23 min left")
         let unstarted = PosterCaptionView.continueWatchingText(
             title: "Superman", year: 2025, show: nil, season: nil, episode: nil,
             offsetSeconds: 0, runtimeSeconds: 3120)
         XCTAssertEqual(unstarted.detail, "2025")
+        let nextUp = PosterCaptionView.continueWatchingText(
+            title: "Pilot", year: nil, show: "Silo", season: 2, episode: 6,
+            offsetSeconds: 0, runtimeSeconds: 1680)
+        XCTAssertEqual(nextUp.detail, "Play S2 · E6")
     }
 }

@@ -58,17 +58,19 @@ final class PosterCaptionView: UIStackView {
         detailLabel.text = detail ?? " "
     }
 
-    /// Continue Watching's caption: the title (an episode: its show) over
-    /// the time left after the server's resume point, "42 min left" or
-    /// "S2 · E5 · 23 min left" (`ResumeText`). A movie with no resume point
-    /// shows its year; an episode not started, its "S2 · E5".
+    /// Continue Watching's caption: the title (an episode: its show) over the
+    /// Play button's own title (`EpisodePicker.playTitle`), "Resume S5 · E3 ·
+    /// 12 min left", "Play S5 · E3", "Resume · 42 min left". A movie with no
+    /// resume point shows its year instead of a bare "Play".
     static func continueWatchingText(title: String, year: Int?, show: String?, season: Int?, episode: Int?,
                                      offsetSeconds: TimeInterval, runtimeSeconds: TimeInterval?)
         -> (title: String, detail: String?) {
-        let line = ResumeText.line(season: season, episode: episode,
-                                   offsetSeconds: offsetSeconds, runtimeSeconds: runtimeSeconds)
+        let resumes = WatchProgressPolicy.hasResumePoint(offsetSeconds: offsetSeconds, runtimeSeconds: runtimeSeconds)
+        let line = EpisodePicker.playTitle(
+            resumes: resumes, watched: false, season: season, episode: episode,
+            timeLeft: ResumeText.timeLeft(offsetSeconds: offsetSeconds, runtimeSeconds: runtimeSeconds))
         if let show, season != nil, episode != nil { return (show, line) }
-        return (title, line ?? year.map(String.init))
+        return (title, resumes ? line : year.map(String.init))
     }
 
     /// Pin under `frameView` (the lockup frame), inset to its artwork.

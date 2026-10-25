@@ -1196,7 +1196,7 @@ final class MediaDetailChromeView: UIView {
         playProgressTrack?.isHidden = !resumes
         playProgressFillWidth?.constant = resumes
             ? Self.playProgressTrackWidth * CGFloat(target.watchProgress ?? 0) : 0
-        playTitleLabel?.text = EpisodePicker.playTitle(for: target, on: item?.kind ?? target.kind)
+        playTitleLabel?.text = EpisodePicker.playTitle(for: target)
     }
 
     private func makeCircleButton(systemImage: String, caption: String) -> FocusableActionButton {
