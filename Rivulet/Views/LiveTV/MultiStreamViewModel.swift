@@ -328,8 +328,7 @@ final class MultiStreamViewModel: ObservableObject {
                     // Keep the query's key names (that's what diagnoses a bad
                     // client profile) and drop every value.
                     scope.setExtra(value: SensitiveDataRedactor.safeURLString(url), key: "stream_url")
-                    scope.setExtra(value: url.host ?? "unknown", key: "stream_host")
-                    scope.setExtra(value: url.path, key: "stream_path")
+                    scope.setExtra(value: SensitiveDataRedactor.safePath(url.path), key: "stream_path")
                     scope.setExtra(value: SensitiveDataRedactor.redact(url.query ?? ""), key: "stream_query_params")
                 }
 

@@ -629,7 +629,7 @@ class PlexAuthManager: ObservableObject {
         let breadcrumb = Breadcrumb(level: .warning, category: "plex_auth")
         breadcrumb.message = "Connection probe failed"
         breadcrumb.data = [
-            "host": URL(string: urlString)?.host ?? "invalid-url",
+            "host": SensitiveDataRedactor.safeHost(URL(string: urlString)?.host),
             "port": URL(string: urlString)?.port ?? 0,
             "scheme": URL(string: urlString)?.scheme ?? "?",
             "outcome": outcome

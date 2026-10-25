@@ -10,7 +10,6 @@
 
 import SwiftUI
 import SwiftData
-import Sentry
 
 // MARK: - App
 
@@ -49,7 +48,6 @@ struct RivuletApp: App {
         }
         PlexUserProfileManager.onInitialProfileSelected = { LibrarySettingsManager.shared.onProfileSwitched() }
 
-        #if !DEBUG
         // Sentry start is DEFERRED off the launch window. Starting it in init()
         // fired envelope/session uploads to sentry.io before the network nexus
         // was ready — every cold launch spammed `NECP [22: Invalid argument]`
@@ -67,7 +65,6 @@ struct RivuletApp: App {
             try? await Task.sleep(for: .seconds(3))
             await Self.startSentry()
         }
-        #endif
 
         // NowPlayingService disabled — AVPlayerViewController handles Now Playing natively.
         // NowPlayingService.shared.initialize()
@@ -79,7 +76,6 @@ struct RivuletApp: App {
         }
     }
 
-    #if !DEBUG
     /// Starts Sentry. MUST be main-actor isolated: `SentrySDK.start` builds the
     /// SDK's dependency container, which reads `UIApplication.applicationState`
     /// and installs swizzling + session / app-hang tracking. Called from the
@@ -96,7 +92,6 @@ struct RivuletApp: App {
         // Already on the main actor here, so no hop.
         AppHangContext.setScreen("launch")
     }
-    #endif
 
     var sharedModelContainer: ModelContainer = {
         // Runs BEFORE init()'s body (Swift initializes stored properties first),

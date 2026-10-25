@@ -1123,8 +1123,12 @@ every UIViewController appearance and HTTP request, and a saturated quota makes
 Sentry drop spans server-side (biasing the named measurements, not just thinning
 them). Add new measured transaction names to the sampler's 1.0 branch; do not
 restore a flat 1.0. Start transactions through `SentryBridge.startTransaction`,
-which no-ops in DEBUG.
+which no-ops until the SDK starts (no DSN, no SDK). tvOS Debug builds report
+too, under environment `debug`.
 
 **Never send stream URLs to Sentry.** Xtream-style IPTV paths embed credentials
 (`/live/user/pass/id.ts`) and Plex URLs carry tokens. Derive a category and send
 that (see `LiveJoinTelemetry`), or use `SensitiveDataRedactor.safeURLString`.
+Server addresses are scrubbed too: `safeHost` turns anything but plex.tv, TMDB
+and IntroDB into `[server]`. Transactions skip `beforeSend`, so `beforeSendSpan`
+scrubs their HTTP spans.

@@ -55,7 +55,13 @@ nonisolated enum SentryEventRedaction {
         // Anything we attached via scope.setExtra, including response bodies —
         // a Plex error page can echo the request URL back at us.
         if let extra = event.extra {
-            event.extra = extra.mapValues(redactAny)
+            event.extra = redactDictionary(extra)
+        }
+
+        // NSError userInfo lands here as "user info", Foundation's failing-URL
+        // keys included, so it carries the same token and host as the request.
+        if let context = event.context {
+            event.context = context.mapValues(redactDictionary)
         }
 
         if let tags = event.tags {
@@ -66,7 +72,7 @@ nonisolated enum SentryEventRedaction {
             for crumb in breadcrumbs {
                 crumb.message = SensitiveDataRedactor.redactOptional(crumb.message)
                 if let data = crumb.data {
-                    crumb.data = data.mapValues(redactAny)
+                    crumb.data = redactDictionary(data)
                 }
             }
         }
@@ -87,11 +93,38 @@ nonisolated enum SentryEventRedaction {
     /// The same scrub for structured logs, which `beforeSend` never sees.
     static func redact(_ log: SentryLog) -> SentryLog {
         log.body = SensitiveDataRedactor.redact(log.body)
-        log.attributes = log.attributes.mapValues { attribute in
-            guard let string = attribute.value as? String else { return attribute }
-            return SentryLog.Attribute(string: SensitiveDataRedactor.redact(string))
-        }
+        log.attributes = Dictionary(uniqueKeysWithValues: log.attributes.map { key, attribute in
+            guard let string = attribute.value as? String else { return (key, attribute) }
+            let redacted = hostKeys.contains(key.lowercased())
+                ? SensitiveDataRedactor.safeHost(string)
+                : SensitiveDataRedactor.redact(string)
+            return (key, SentryLog.Attribute(string: redacted))
+        })
         return log
+    }
+
+    /// Transactions skip `beforeSend` as well. The SDK's own HTTP spans carry
+    /// the request URL in the description and its full query in `http.query`.
+    static func redact(_ span: Span) -> Span {
+        span.spanDescription = SensitiveDataRedactor.redactOptional(span.spanDescription)
+        for (key, value) in span.data {
+            span.setData(value: redactValue(value, forKey: key), key: key)
+        }
+        return span
+    }
+
+    /// Keys whose value is a bare host name, which no URL pattern can spot.
+    private static let hostKeys: Set<String> = ["host", "hostname", "server.address", "stream_host"]
+
+    private static func redactDictionary(_ dictionary: [String: Any]) -> [String: Any] {
+        Dictionary(uniqueKeysWithValues: dictionary.map { ($0.key, redactValue($0.value, forKey: $0.key)) })
+    }
+
+    private static func redactValue(_ value: Any, forKey key: String) -> Any {
+        if hostKeys.contains(key.lowercased()), let host = value as? String {
+            return SensitiveDataRedactor.safeHost(host)
+        }
+        return redactAny(value)
     }
 
     /// Extras and breadcrumb data are `[String: Any]`, so recurse through the
@@ -106,7 +139,7 @@ nonisolated enum SentryEventRedaction {
         case let array as [Any]:
             return array.map(redactAny)
         case let dictionary as [String: Any]:
-            return dictionary.mapValues(redactAny)
+            return redactDictionary(dictionary)
         default:
             // Numbers, dates, bools — nothing to leak.
             return value

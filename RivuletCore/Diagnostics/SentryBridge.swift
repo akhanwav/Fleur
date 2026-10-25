@@ -5,9 +5,10 @@
 //  SentryBridge.swift
 //  Rivulet
 //
-//  Thin wrapper around SentrySDK that silently no-ops in DEBUG builds.
-//  The SDK is never started in debug, so calling it directly generates
-//  console noise for every breadcrumb and capture call.
+//  Thin wrapper around SentrySDK that silently no-ops until the SDK has been
+//  started (no DSN configured, or the iOS app's DEBUG builds). Calling a
+//  stopped SDK directly generates console noise for every breadcrumb and
+//  capture call.
 //
 
 import Sentry
@@ -32,7 +33,6 @@ nonisolated enum SentryBridge {
     /// crumbs are mirrored as logs: a session with no error is still searchable.
     /// High-frequency crumbs (per remote press) stay `.debug` to skip the mirror.
     static func addBreadcrumb(_ crumb: Breadcrumb) {
-        #if !DEBUG
         guard isActive else { return }
         SentrySDK.addBreadcrumb(crumb)
         guard crumb.level.rawValue >= SentryLevel.info.rawValue else { return }
@@ -44,51 +44,42 @@ nonisolated enum SentryBridge {
         default: .info
         }
         log(level, crumb.message ?? crumb.category, attributes: attributes)
-        #endif
     }
 
     /// Structured log for failures that are not Rivulet bugs (server down,
     /// timeouts, third-party 5xx). Logs bill against their own quota and are
     /// searchable by attribute; errors are for things we can fix.
     static func log(_ level: SentryLog.Level, _ body: String, attributes: [String: Any] = [:]) {
-        #if !DEBUG
         guard isActive else { return }
         switch level {
         case .error, .fatal: SentrySDK.logger.error(body, attributes: attributes)
         case .warn: SentrySDK.logger.warn(body, attributes: attributes)
         default: SentrySDK.logger.info(body, attributes: attributes)
         }
-        #endif
     }
 
     static func capture(error: Error, configure: ((Scope) -> Void)? = nil) {
-        #if !DEBUG
         guard isActive else { return }
         if let configure {
             SentrySDK.capture(error: error) { configure($0) }
         } else {
             SentrySDK.capture(error: error)
         }
-        #endif
     }
 
     static func capture(event: Event) {
-        #if !DEBUG
         guard isActive else { return }
         SentrySDK.capture(event: event)
-        #endif
     }
 
     static func configureScope(_ configure: @escaping (Scope) -> Void) {
-        #if !DEBUG
         guard isActive else { return }
         SentrySDK.configureScope(configure)
-        #endif
     }
 
     /// Starts a performance transaction, or returns nil when the SDK is inactive
-    /// (DEBUG, or no DSN configured). Callers hold the result optionally so the
-    /// whole measurement path compiles away to nil-checks in debug builds.
+    /// (no DSN configured). Callers hold the result optionally, so an inactive
+    /// SDK costs only nil-checks on the measurement path.
     ///
     /// Transactions are sampled by `options.tracesSampler` in RivuletApp, NOT by
     /// the flat `tracesSampleRate` — named transactions we deliberately measure
@@ -96,11 +87,7 @@ nonisolated enum SentryBridge {
     /// sampled down, so ambient auto-instrumentation can't crowd a small
     /// performance quota and silently bias what lands.
     static func startTransaction(name: String, operation: String) -> (any Span)? {
-        #if !DEBUG
         guard isActive else { return nil }
         return SentrySDK.startTransaction(name: name, operation: operation)
-        #else
-        return nil
-        #endif
     }
 }

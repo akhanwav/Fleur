@@ -13,8 +13,8 @@
 //  username/password reaches an event. A second copy that drifted would leak
 //  credentials or bias the measurements on whichever platform fell behind.
 //
-//  Callers own their own deferral and DEBUG gating; this only configures and
-//  starts the SDK.
+//  Callers own their own deferral and gating; this only configures and starts
+//  the SDK.
 //
 
 import Sentry
@@ -43,6 +43,11 @@ public enum SentryStartup {
         SentrySDK.start { options in
             options.dsn = Secrets.sentryDSN
             options.debug = false
+            // Builds run from Xcode report too, under their own environment so
+            // they filter apart from TestFlight and App Store traffic.
+            #if DEBUG
+            options.environment = "debug"
+            #endif
             // Set as the initial scope rather than via configureScope after
             // start, so events captured during startup carry the tag too.
             //
@@ -82,6 +87,8 @@ public enum SentryStartup {
             // Logs skip beforeSend, so they get their own scrub.
             options.enableLogs = true
             options.beforeSendLog = { SentryEventRedaction.redact($0) }
+            // Transactions skip beforeSend; their HTTP spans carry the URL.
+            options.beforeSendSpan = { SentryEventRedaction.redact($0) }
             // App Hang tracking. On tvOS the SDK uses ANR Tracker V2
             // unconditionally (no `enableAppHangTrackingV2` toggle exists
             // in 9.x — it was made GA and removed), which snapshots ALL
