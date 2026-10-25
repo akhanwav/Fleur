@@ -125,12 +125,11 @@ final class EpisodePickerTests: XCTestCase {
         XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .show), "Resume S2, E5")
     }
 
-    func testUntouchedFirstEpisode() {
-        XCTAssertEqual(EpisodePicker.playTitle(for: episode("e1", number: 1), on: .show), "Play First Episode")
-        // A later season's opener is the first episode of its own page only.
+    func testUntouchedFirstEpisodeIsNamed() {
+        XCTAssertEqual(EpisodePicker.playTitle(for: episode("e1", number: 1), on: .show), "Play S1, E1")
         let s2e1 = episode("s2e1", season: 2, number: 1)
         XCTAssertEqual(EpisodePicker.playTitle(for: s2e1, on: .show), "Play S2, E1")
-        XCTAssertEqual(EpisodePicker.playTitle(for: s2e1, on: .season), "Play First Episode")
+        XCTAssertEqual(EpisodePicker.playTitle(for: s2e1, on: .season), "Play S2, E1")
         // Started, so it resumes instead.
         XCTAssertEqual(
             EpisodePicker.playTitle(for: episode("e1", number: 1, offset: 300), on: .show), "Resume S1, E1")

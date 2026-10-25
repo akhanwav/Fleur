@@ -62,7 +62,7 @@ final class MediaDetailChromeView: UIView {
     /// Action-button sizing shared with the home hero's
     /// `HeroPillButton`/`HeroCircleButton` (see `HeroButtonRowView`) so the
     /// carousel/expanded-detail row matches the hero exactly. The pill width
-    /// is a floor: a long title ("Play First Episode") grows past it.
+    /// is a floor: a long title ("Resume S12, E24") grows past it.
     private static let actionButtonHeight: CGFloat = HeroPillButton.buttonHeight
     private static let actionPillWidth: CGFloat = HeroPillButton.pillWidth
     private static let playProgressTrackWidth: CGFloat = 50

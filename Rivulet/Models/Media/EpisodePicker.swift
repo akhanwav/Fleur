@@ -69,25 +69,21 @@ enum EpisodePicker {
     /// page does not.
     static func playTitle(for target: MediaItem, on page: MediaKind) -> String {
         let onParent = (page == .show || page == .season) && target.kind == .episode
-        let first = target.episodeNumber == 1 && (page == .season || target.seasonNumber == 1)
         return playTitle(
             resumes: target.isInProgress,
             watched: target.isWatched,
             season: onParent ? target.seasonNumber : nil,
-            episode: onParent ? target.episodeNumber : nil,
-            isFirstEpisode: onParent && first)
+            episode: onParent ? target.episodeNumber : nil)
     }
 
     /// Apple's wording, our rule: a resume point (`WatchProgressPolicy`) says
     /// Resume and outranks the watched flag; a watched target says Play Again;
-    /// an untouched first episode says Play First Episode; else Play.
-    static func playTitle(
-        resumes: Bool, watched: Bool, season: Int? = nil, episode: Int? = nil, isFirstEpisode: Bool = false
-    ) -> String {
+    /// else Play. A show or season page names the episode, the first one
+    /// included ("Play S1, E1"), so it reads the same on every server.
+    static func playTitle(resumes: Bool, watched: Bool, season: Int? = nil, episode: Int? = nil) -> String {
         let code = season.flatMap { s in episode.map { " S\(s), E\($0)" } } ?? ""
         if resumes { return "Resume" + code }
         if watched { return "Play Again" }
-        if isFirstEpisode { return "Play First Episode" }
         return "Play" + code
     }
 
