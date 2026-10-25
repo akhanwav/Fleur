@@ -25,7 +25,7 @@ actor LibraryGUIDIndex {
 
     private struct TypedKey: Hashable {
         let type: PlexItemType
-        let key: String
+        let tmdbId: Int
     }
 
     enum PlexItemType: Hashable {
@@ -33,8 +33,129 @@ actor LibraryGUIDIndex {
         case show
     }
 
-    private var byTypedTmdbId: [TypedKey: PlexMetadata] = [:]
-    private var byGuid: [String: PlexMetadata] = [:]
+    /// One indexed title: the list-level fields the index's callers show (a
+    /// tile, a hero slide, a watchlist badge) and its external GUIDs, nothing
+    /// else.
+    ///
+    /// The index used to keep each title's whole `PlexMetadata`, which is about
+    /// 80 optionals stored inline plus every tag, genre and Media array of the
+    /// `/all` listing: 3.3 KB a title, measured. A shared server with 166,000
+    /// titles held 670 MB in it on an Apple TV, and the build kept growing
+    /// until jetsam killed the app at the 2 GB limit. An entry is a few hundred
+    /// bytes, and each page of the build is reduced to entries as it arrives.
+    struct Entry: Codable, Sendable {
+        let ratingKey: String?
+        let key: String?
+        let guid: String?
+        let type: String?
+        let title: String?
+        let editionTitle: String?
+        let year: Int?
+        let summary: String?
+        let tagline: String?
+        /// Only the first genre: the hero's metadata row shows no other.
+        let genre: String?
+        let contentRating: String?
+        let duration: Int?
+        let originallyAvailableAt: String?
+        let addedAt: Int?
+        let thumb: String?
+        let art: String?
+        let clearLogo: String?
+        let librarySectionID: Int?
+        let viewCount: Int?
+        let viewOffset: Int?
+        let lastViewedAt: Int?
+        let userRating: Double?
+        let leafCount: Int?
+        let viewedLeafCount: Int?
+        let childCount: Int?
+        /// Distinct Media versions, which drive the version picker.
+        let versionCount: Int?
+        let externalGuids: [String]
+
+        /// nil for anything the index does not answer for: a type other than
+        /// movie or show, or a title with no external GUID to find it by.
+        init?(_ item: PlexMetadata) {
+            guard item.type == "movie" || item.type == "show" else { return nil }
+            let externalGuids = (item.Guid ?? []).compactMap(\.id)
+            guard !externalGuids.isEmpty else { return nil }
+            ratingKey = item.ratingKey
+            key = item.key
+            guid = item.guid
+            type = item.type
+            title = item.title
+            editionTitle = item.editionTitle
+            year = item.year
+            summary = item.summary
+            tagline = item.tagline
+            genre = item.Genre?.first?.tag
+            contentRating = item.contentRating
+            duration = item.duration
+            originallyAvailableAt = item.originallyAvailableAt
+            addedAt = item.addedAt
+            thumb = item.thumb
+            art = item.art
+            clearLogo = item.clearLogoPath
+            librarySectionID = item.librarySectionID
+            viewCount = item.viewCount
+            viewOffset = item.viewOffset
+            lastViewedAt = item.lastViewedAt
+            userRating = item.userRating
+            leafCount = item.leafCount
+            viewedLeafCount = item.viewedLeafCount
+            childCount = item.childCount
+            versionCount = item.Media.map { Set($0.map(\.id)).count }
+            self.externalGuids = externalGuids
+        }
+
+        /// The list-level item callers get back. Built per lookup, so the index
+        /// never holds one.
+        var metadata: PlexMetadata {
+            var item = PlexMetadata(
+                ratingKey: ratingKey,
+                key: key,
+                guid: guid,
+                type: type,
+                title: title,
+                contentRating: contentRating,
+                summary: summary,
+                tagline: tagline,
+                year: year,
+                thumb: thumb,
+                art: art,
+                Genre: genre.map { [PlexTag(_id: nil, tag: $0)] },
+                duration: duration,
+                originallyAvailableAt: originallyAvailableAt,
+                addedAt: addedAt,
+                librarySectionID: librarySectionID,
+                leafCount: leafCount,
+                viewedLeafCount: viewedLeafCount,
+                childCount: childCount,
+                viewCount: viewCount,
+                viewOffset: viewOffset,
+                lastViewedAt: lastViewedAt,
+                userRating: userRating,
+                // Only the count survives; the stubs exist so `versionCount`
+                // maps the same as from the full listing.
+                Media: versionCount.map { count in
+                    (0..<count).map {
+                        PlexMedia(id: $0, duration: nil, bitrate: nil, width: nil, height: nil,
+                                  aspectRatio: nil, audioChannels: nil, audioCodec: nil, videoCodec: nil,
+                                  videoResolution: nil, container: nil, videoFrameRate: nil, Part: nil)
+                    }
+                }
+            )
+            item.editionTitle = editionTitle
+            item.Guid = externalGuids.map { PlexGuid(id: $0) }
+            item.Image = clearLogo.map { [PlexImage(alt: nil, type: "clearLogo", url: $0)] }
+            return item
+        }
+    }
+
+    private var entries: [Entry] = []
+    private var byTypedTmdbId: [TypedKey: Int] = [:]
+    private var byGuid: [String: Int] = [:]
 
     /// Live network data always supersedes a disk-hydrated snapshot. Once a real
     /// `replace(with:completeness:)` has run this launch, a late `hydrateFromDisk()`
@@ -81,7 +202,7 @@ actor LibraryGUIDIndex {
     ///
     /// Persists to disk only when `completeness` is `.complete`. See the
     /// `Completeness` doc comment for why a partial build must not be written.
-    func replace(with items: [PlexMetadata], completeness: Completeness) {
+    func replace(with items: [Entry], completeness: Completeness) {
         rebuild(from: items, source: "replace")
 
         // Set regardless of completeness. `hasFreshData` guards against a late
@@ -119,12 +240,13 @@ actor LibraryGUIDIndex {
     }
 
     /// Shared ingest + notify used by both `replace` and `hydrateFromDisk`.
-    private func rebuild(from items: [PlexMetadata], source: String) {
+    private func rebuild(from items: [Entry], source: String) {
+        entries = items
         byTypedTmdbId.removeAll(keepingCapacity: true)
         byGuid.removeAll(keepingCapacity: true)
 
-        for item in items {
-            ingest(item)
+        for (position, item) in items.enumerated() {
+            ingest(item, at: position)
         }
         generation += 1
 
@@ -146,11 +268,11 @@ actor LibraryGUIDIndex {
 
     func lookup(tmdbId: Int, type: TMDBMediaType) -> PlexMetadata? {
         let plexType: PlexItemType = (type == .movie) ? .movie : .show
-        return byTypedTmdbId[TypedKey(type: plexType, key: "\(tmdbId)")]
+        return byTypedTmdbId[TypedKey(type: plexType, tmdbId: tmdbId)].map { entries[$0].metadata }
     }
 
     func lookup(guid: String) -> PlexMetadata? {
-        byGuid[guid]
+        byGuid[guid].map { entries[$0].metadata }
     }
 
     func contains(guid: String) -> Bool {
@@ -159,7 +281,7 @@ actor LibraryGUIDIndex {
 
     // MARK: - Ingestion
 
-    private func ingest(_ item: PlexMetadata) {
+    private func ingest(_ item: Entry, at position: Int) {
         let plexType: PlexItemType
         switch item.type {
         case "movie": plexType = .movie
@@ -167,12 +289,11 @@ actor LibraryGUIDIndex {
         default: return
         }
 
-        let externalGuids = (item.Guid ?? []).compactMap { $0.id }
-        for raw in externalGuids {
-            byGuid[raw] = item
+        for raw in item.externalGuids {
+            byGuid[raw] = position
 
             if let tmdbId = Self.tmdbId(from: raw) {
-                byTypedTmdbId[TypedKey(type: plexType, key: "\(tmdbId)")] = item
+                byTypedTmdbId[TypedKey(type: plexType, tmdbId: tmdbId)] = position
             }
         }
     }
@@ -187,12 +308,13 @@ actor LibraryGUIDIndex {
 
     /// Bump when the persisted shape changes so old caches are ignored, not
     /// mis-decoded, on the next launch after an app update.
-    private static let cacheVersion = 1
+    /// 2: entries replaced whole `PlexMetadata` items.
+    private static let cacheVersion = 2
 
     private struct DiskCache: Codable {
         let version: Int
         let savedAt: Date
-        let items: [PlexMetadata]
+        let items: [Entry]
     }
 
     private static var cacheURL: URL? {
@@ -214,7 +336,7 @@ actor LibraryGUIDIndex {
     /// Persist the ingested snapshot for the next launch. Fire-and-forget on a
     /// background task so the encode + write never serializes behind other
     /// actor work or the caller's critical path.
-    private func persist(_ items: [PlexMetadata]) {
+    private func persist(_ items: [Entry]) {
         guard let url = Self.cacheURL else { return }
         Task.detached(priority: .utility) {
             let cache = DiskCache(version: Self.cacheVersion, savedAt: Date(), items: items)
@@ -230,7 +352,7 @@ actor LibraryGUIDIndex {
 
     /// Load and validate the persisted snapshot. Returns nil on miss, version
     /// mismatch, or decode failure (caller falls back to the network build).
-    private static func loadFromDisk() -> [PlexMetadata]? {
+    private static func loadFromDisk() -> [Entry]? {
         guard let url = cacheURL,
               let data = try? Data(contentsOf: url) else {
             return nil

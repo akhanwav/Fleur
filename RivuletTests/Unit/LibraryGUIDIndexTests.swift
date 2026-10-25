@@ -24,7 +24,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         ]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .complete)
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
 
         let byTmdb = await index.lookup(tmdbId: 12345, type: .movie)
         XCTAssertEqual(byTmdb?.ratingKey, "1")
@@ -42,7 +42,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
     func testIgnoresItemsWithoutExternalGUIDs() async {
         let item = PlexMetadata(ratingKey: "1", guid: "plex://movie/abc", type: "movie", title: "Foo")
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .complete)
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
 
         let result = await index.lookup(tmdbId: 1, type: .movie)
         XCTAssertNil(result)
@@ -56,7 +56,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         show.Guid = [PlexGuid(id: "tmdb://100")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [movie, show], completeness: .complete)
+        await index.replace(with: [movie, show].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
 
         let movieMatch = await index.lookup(tmdbId: 100, type: .movie)
         XCTAssertEqual(movieMatch?.ratingKey, "1")
@@ -73,8 +73,8 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item2.Guid = [PlexGuid(id: "tmdb://2")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item1], completeness: .complete)
-        await index.replace(with: [item2], completeness: .complete)
+        await index.replace(with: [item1].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        await index.replace(with: [item2].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
 
         let stale = await index.lookup(tmdbId: 1, type: .movie)
         XCTAssertNil(stale)
@@ -91,7 +91,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .partial)
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
 
         let match = await index.lookup(tmdbId: 42, type: .movie)
         XCTAssertEqual(match?.ratingKey, "1")
@@ -105,7 +105,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [item], completeness: .partial)
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
 
         let hydrated = await index.hydrateFromDisk()
         XCTAssertEqual(hydrated, 0, "a late hydrate must be a no-op after any live build")
@@ -124,11 +124,11 @@ final class LibraryGUIDIndexTests: XCTestCase {
         let index = LibraryGUIDIndex()
         let start = await index.generation
 
-        await index.replace(with: [item], completeness: .complete)
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
         let afterComplete = await index.generation
         XCTAssertEqual(afterComplete, start + 1)
 
-        await index.replace(with: [item], completeness: .partial)
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
         let afterPartial = await index.generation
         XCTAssertEqual(afterPartial, start + 2)
     }
@@ -138,7 +138,7 @@ final class LibraryGUIDIndexTests: XCTestCase {
         episode.Guid = [PlexGuid(id: "tmdb://500")]
 
         let index = LibraryGUIDIndex()
-        await index.replace(with: [episode], completeness: .complete)
+        await index.replace(with: [episode].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
 
         // Episodes shouldn't be indexed by tmdbId — that index is movie/show only.
         let asMovie = await index.lookup(tmdbId: 500, type: .movie)
@@ -146,5 +146,38 @@ final class LibraryGUIDIndexTests: XCTestCase {
 
         let asTV = await index.lookup(tmdbId: 500, type: .tv)
         XCTAssertNil(asTV)
+    }
+
+    func testLookupKeepsTheFieldsTilesAndTheHeroShow() async {
+        var item = PlexMetadata(
+            ratingKey: "7", key: "/library/metadata/7", guid: "plex://movie/x", type: "movie",
+            title: "Foo", contentRating: "PG-13", summary: "First. Second.", year: 2021,
+            thumb: "/t", art: "/a", Genre: [PlexTag(_id: 1, tag: "Drama"), PlexTag(_id: 2, tag: "War")],
+            duration: 5_400_000, librarySectionID: 9, viewOffset: 60_000, userRating: 10,
+            Media: [
+                PlexMedia(id: 1, duration: nil, bitrate: nil, width: nil, height: nil, aspectRatio: nil,
+                          audioChannels: nil, audioCodec: nil, videoCodec: nil, videoResolution: "4k",
+                          container: nil, videoFrameRate: nil, Part: nil),
+                PlexMedia(id: 2, duration: nil, bitrate: nil, width: nil, height: nil, aspectRatio: nil,
+                          audioChannels: nil, audioCodec: nil, videoCodec: nil, videoResolution: "1080",
+                          container: nil, videoFrameRate: nil, Part: nil),
+            ]
+        )
+        item.Guid = [PlexGuid(id: "tmdb://3"), PlexGuid(id: "imdb://tt3")]
+        item.Role = [PlexRole(tag: "Someone")]
+
+        let index = LibraryGUIDIndex()
+        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
+
+        let match = await index.lookup(guid: "imdb://tt3")
+        XCTAssertEqual(match?.title, "Foo")
+        XCTAssertEqual(match?.summary, "First. Second.")
+        XCTAssertEqual(match?.contentRating, "PG-13")
+        XCTAssertEqual(match?.Genre?.map(\.tag), ["Drama"])
+        XCTAssertEqual(match?.librarySectionID, 9)
+        XCTAssertEqual(match?.viewOffset, 60_000)
+        XCTAssertEqual(match?.tmdbId, 3)
+        XCTAssertEqual(match?.Media.map { Set($0.map(\.id)).count }, 2)
+        XCTAssertNil(match?.Role, "cast is not part of an entry")
     }
 }
