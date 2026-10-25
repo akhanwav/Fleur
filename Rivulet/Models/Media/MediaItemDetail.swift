@@ -49,6 +49,10 @@ struct MediaItemDetail: Sendable {
     /// External ids keyed lowercase: "tmdb", "imdb", "tvdb".
     var externalIDs: [String: String] = [:]
 
+    /// Plex's own agent guid ("plex://movie/5d776…"), the same on every
+    /// server that matched the title. nil off Plex and for unmatched items.
+    var plexGuid: String? = nil
+
     /// Show-level season count (TMDB `number_of_seasons`; Plex shows surface
     /// this through their own season rail instead, so it's nil there). Feeds
     /// the Information column's "Seasons" row for titles with no season rail.

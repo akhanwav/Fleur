@@ -681,35 +681,46 @@ final class MediaDetailChromeView: UIView {
     /// own versions plus every copy on another accessible server, even when
     /// that is one copy, so its server and quality can always be read. A
     /// show or season lists its Play target's copies (`detail` nil: fetched
-    /// here). The lookup pages every other server's library on first use
-    /// this session only; cached after.
+    /// here). The button appears with this server's versions; other servers'
+    /// copies join the list when their lookup answers, so nothing waits on it.
     private func addVersionsButton(item: MediaItem, detail: MediaItemDetail?, token: UInt64) {
         guard versionsButton == nil, infoButton != nil else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
             var resolved = detail
             if resolved == nil { resolved = await Self.fetchDetail(item.ref) }
-            guard let resolved else { return }
-            let rows = await WaysToWatchPicker.rows(for: item, detail: resolved)
-            guard !rows.isEmpty, self.loadToken == token, self.versionsButton == nil, let info = self.infoButton,
-                  let index = self.actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
-            let button = self.makeCircleButton(systemImage: "square.stack")
-            button.onPrimaryAction = { [weak self, weak button] in
-                guard let self, let button, let host = self.hostViewController else { return }
-                WaysToWatchPicker.present(rows, from: host, sourceFrame: button.convert(button.bounds, to: nil)) {
-                    [weak self] target in
-                    guard let self else { return }
-                    switch target {
-                    case .local(let id): self.onPlayVersion?(item, id)
-                    case .remote:
-                        guard let host = self.hostViewController else { return }
-                        RemoteCopyPlayer.play(target, from: host)
-                    }
+            guard let resolved, self.loadToken == token else { return }
+            self.waysToWatchRows = WaysToWatchPicker.localRows(for: resolved)
+            self.insertVersionsButtonIfNeeded(item: item)
+            let remote = await WaysToWatchPicker.otherServerRows(for: item, detail: resolved)
+            guard self.loadToken == token, !remote.isEmpty else { return }
+            self.waysToWatchRows += remote
+            self.insertVersionsButtonIfNeeded(item: item)
+        }
+    }
+
+    /// The rows the Ways to Watch button opens, read when it's pressed.
+    private var waysToWatchRows: [WaysToWatchPicker.Row] = []
+
+    private func insertVersionsButtonIfNeeded(item: MediaItem) {
+        guard !waysToWatchRows.isEmpty, versionsButton == nil, let info = infoButton,
+              let index = actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
+        let button = makeCircleButton(systemImage: "square.stack")
+        button.onPrimaryAction = { [weak self, weak button] in
+            guard let self, let button, let host = self.hostViewController else { return }
+            WaysToWatchPicker.present(self.waysToWatchRows, from: host,
+                                      sourceFrame: button.convert(button.bounds, to: nil)) { [weak self] target in
+                guard let self else { return }
+                switch target {
+                case .local(let id): self.onPlayVersion?(item, id)
+                case .remote:
+                    guard let host = self.hostViewController else { return }
+                    RemoteCopyPlayer.play(target, from: host)
                 }
             }
-            self.actionButtonsStack.insertArrangedSubview(button, at: index + 1)
-            self.versionsButton = button
         }
+        actionButtonsStack.insertArrangedSubview(button, at: index + 1)
+        versionsButton = button
     }
 
     /// Trailer button for metadata-only items (TMDB's YouTube trailer, opened

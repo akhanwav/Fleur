@@ -438,7 +438,7 @@ enum PlexMediaMapper {
         }
         let collections = (meta.Collection ?? []).compactMap(\.tag)
 
-        return MediaItemDetail(
+        var detail = MediaItemDetail(
             item: item(meta, providerID: providerID, serverURL: serverURL, authToken: authToken),
             tagline: meta.tagline,
             genres: meta.Genre?.compactMap(\.tag) ?? [],
@@ -458,6 +458,8 @@ enum PlexMediaMapper {
             contentAdvisory: meta.CommonSenseMedia?.first.map(Self.contentAdvisory(from:)),
             externalIDs: externalIDs(meta.Guid)
         )
+        detail.plexGuid = meta.guid.flatMap { $0.hasPrefix("plex://") ? $0 : nil }
+        return detail
     }
 
     /// `rating` is the critic score and `audienceRating` the audience score,

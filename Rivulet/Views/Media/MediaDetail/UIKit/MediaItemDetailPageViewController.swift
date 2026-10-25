@@ -603,29 +603,42 @@ final class MediaItemDetailPageViewController: UIViewController {
     /// Ways to Watch button after Watchlist, whenever the episode has a copy
     /// to list, one included (see `MediaDetailChromeView`'s twin for the
     /// movie/show route; this is the episode route, which every host opens,
-    /// Continue Watching's tile menu and deep links included).
+    /// Continue Watching's tile menu and deep links included). It appears
+    /// with this server's versions; other servers' copies join when their
+    /// lookup answers.
     private func addVersionsButton(_ detail: MediaItemDetail) {
-        guard versionsButton == nil, let row = actionRow, let watchlist = watchlistButton else { return }
+        guard versionsButton == nil else { return }
+        waysToWatchRows = WaysToWatchPicker.localRows(for: detail)
+        insertVersionsButtonIfNeeded()
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let rows = await WaysToWatchPicker.rows(for: self.item, detail: detail)
-            guard !rows.isEmpty, self.versionsButton == nil,
-                  let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
-            let button = self.circleButton(systemImage: "square.stack")
-            button.onPrimaryAction = { [weak self, weak button] in
-                guard let self, let button else { return }
-                WaysToWatchPicker.present(rows, from: self, sourceFrame: button.convert(button.bounds, to: nil)) {
-                    [weak self] target in
-                    guard let self else { return }
-                    switch target {
-                    case .local(let id): self.onPlay(self.item, id)
-                    case .remote: RemoteCopyPlayer.play(target, from: self)
-                    }
+            let remote = await WaysToWatchPicker.otherServerRows(for: self.item, detail: detail)
+            guard !remote.isEmpty else { return }
+            self.waysToWatchRows += remote
+            self.insertVersionsButtonIfNeeded()
+        }
+    }
+
+    /// The rows the Ways to Watch button opens, read when it's pressed.
+    private var waysToWatchRows: [WaysToWatchPicker.Row] = []
+
+    private func insertVersionsButtonIfNeeded() {
+        guard !waysToWatchRows.isEmpty, versionsButton == nil, let row = actionRow, let watchlist = watchlistButton,
+              let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
+        let button = circleButton(systemImage: "square.stack")
+        button.onPrimaryAction = { [weak self, weak button] in
+            guard let self, let button else { return }
+            WaysToWatchPicker.present(self.waysToWatchRows, from: self,
+                                      sourceFrame: button.convert(button.bounds, to: nil)) { [weak self] target in
+                guard let self else { return }
+                switch target {
+                case .local(let id): self.onPlay(self.item, id)
+                case .remote: RemoteCopyPlayer.play(target, from: self)
                 }
             }
-            row.insertArrangedSubview(button, at: index + 1)
-            self.versionsButton = button
         }
+        row.insertArrangedSubview(button, at: index + 1)
+        versionsButton = button
     }
 
     // MARK: - Watch-state refresh (issue #228)

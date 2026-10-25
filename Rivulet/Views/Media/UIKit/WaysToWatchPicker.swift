@@ -10,9 +10,9 @@
 //  this server's own multi-version list. Built on the same tile-menu popup
 //  as the single-server `VersionPicker`; this is its cross-server sibling.
 //
-//  Cross-server lookup reuses `OtherServersAvailabilityChecker`'s per-session
-//  guid index (same expensive first-call full-library page, same session
-//  cache) rather than building a second one.
+//  Other servers come from `OtherServersAvailabilityChecker`: one lookup of
+//  the title's Plex guid per server, in parallel, each with a short timeout.
+//  The button and its rows fill in when that answers; nothing waits on it.
 //
 
 import UIKit
@@ -33,43 +33,34 @@ enum WaysToWatchPicker {
         let target: WaysToWatchTarget
     }
 
-    /// Every row for `item`: this server's own versions (ranked, best first)
-    /// plus every copy on each OTHER server that has a match, each labeled
-    /// with its server name. One row is still a list worth showing: it is
-    /// where the server, resolution, HDR/DV, bitrate, size and audio of the
-    /// only copy are read.
-    static func rows(for item: MediaItem, detail: MediaItemDetail) async -> [Row] {
+    /// This server's own versions of `item`, ranked, best first. One row is
+    /// still a list worth showing: it is where the server, resolution,
+    /// HDR/DV, bitrate, size and audio of the only copy are read. Synchronous,
+    /// so the button can appear with the detail.
+    static func localRows(for detail: MediaItemDetail) -> [Row] {
         let localSources = VersionRanking.ordered(detail.mediaSources)
-        guard !localSources.isEmpty else { return [] }
-
-        let localName = await MainActor.run {
-            PlexAuthManager.shared.selectedServer?.sourceTitle ?? PlexAuthManager.shared.selectedServer?.name
-        } ?? "This Server"
-
-        var rows: [Row] = zip(localSources, VersionPicker.labels(for: localSources)).enumerated().map { index, pair in
+        let localName = PlexAuthManager.shared.selectedServer?.sourceTitle
+            ?? PlexAuthManager.shared.selectedServer?.name ?? "This Server"
+        return zip(localSources, VersionPicker.labels(for: localSources)).enumerated().map { index, pair in
             let (source, label) = pair
             return Row(label: "\(localName) · \(label)", isDefault: index == 0, target: .local(mediaID: source.id))
         }
+    }
 
-        guard item.ref.isPlex else { return rows }
-
-        let matchGuids = await guidsForMatching(item: item, detail: detail)
-        guard !matchGuids.isEmpty else { return rows }
-
-        let copies = await OtherServersAvailabilityChecker.shared.copies(forGuids: matchGuids)
-        for copy in copies {
-            guard let remoteDetail = await remoteDetail(for: item, copy: copy) else { continue }
-            let remoteSources = VersionRanking.ordered(remoteDetail.mediaSources)
-            guard !remoteSources.isEmpty else { continue }
-            let labels = VersionPicker.labels(for: remoteSources)
-            rows += zip(remoteSources, labels).map { source, label in
-                Row(label: "\(copy.serverName) · \(label)", isDefault: false,
-                    target: .remote(serverURL: copy.serverURL, token: copy.token,
-                                    ratingKey: remoteDetail.item.ref.itemID, mediaID: source.id))
+    /// Every version on each OTHER server that holds `item`, labeled with
+    /// its server name. Plex's own guid names the same title (movie, show or
+    /// episode) on every server that matched it; an unmatched item has none.
+    static func otherServerRows(for item: MediaItem, detail: MediaItemDetail) async -> [Row] {
+        guard item.ref.isPlex, let plexGuid = detail.plexGuid else { return [] }
+        let copies = await OtherServersAvailabilityChecker.shared.copies(plexGuid: plexGuid)
+        return await withTaskGroup(of: (String, [Row]).self) { group in
+            for copy in copies {
+                group.addTask { (copy.serverName, await remoteRows(for: copy)) }
             }
+            var byServer: [(String, [Row])] = []
+            for await result in group { byServer.append(result) }
+            return byServer.sorted { $0.0 < $1.0 }.flatMap(\.1)
         }
-
-        return rows
     }
 
     static func present(_ rows: [Row], from host: UIViewController, sourceFrame: CGRect?,
@@ -85,51 +76,22 @@ enum WaysToWatchPicker {
         host.topmostPresented.present(popup, animated: false)
     }
 
-    /// Guids to search other servers by. A movie matches on its own guids;
-    /// an episode has none of its own worth matching on (Plex rarely tags
-    /// per-episode external ids), so it matches on the SHOW's guids and the
-    /// specific episode is resolved afterward by season/episode number.
-    private static func guidsForMatching(item: MediaItem, detail: MediaItemDetail) async -> [String] {
-        let source: [String: String]
-        if item.kind == .episode, let showRef = item.grandparentRef,
-           let provider = await MainActor.run { MediaProviderRegistry.shared.provider(for: showRef.providerID) },
-           let showDetail = try? await provider.fullDetail(for: showRef) {
-            source = showDetail.externalIDs
-        } else {
-            source = detail.externalIDs
-        }
-        return source.compactMap { key, value in
-            switch key {
-            case "tmdb", "imdb", "tvdb": return "\(key)://\(value)"
-            default: return nil
-            }
-        }
-    }
-
-    /// Full detail for `item` on `copy`'s server: the matched ratingKey
-    /// directly for a movie; for an episode, the matched ratingKey is the
-    /// SHOW, so its episode list is paged to find the one with the same
-    /// season/episode numbers.
-    static func remoteDetail(for item: MediaItem,
-                                     copy: OtherServersAvailabilityChecker.ServerCopy) async -> MediaItemDetail? {
-        let network = PlexNetworkManager.shared
-        var ratingKey = copy.ratingKey
-        if item.kind == .episode, let season = item.seasonNumber, let episode = item.episodeNumber {
-            guard let leaves = try? await network.getAllLeaves(
-                serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey
-            ), let match = leaves.first(where: { $0.parentIndex == season && $0.index == episode }),
-            let matchKey = match.ratingKey else { return nil }
-            ratingKey = matchKey
-        }
-        guard let meta = try? await network.getFullMetadata(
-            serverURL: copy.serverURL, authToken: copy.token, ratingKey: ratingKey
-        ) else { return nil }
+    /// One row per version of `copy`, read from its own server.
+    private static func remoteRows(for copy: OtherServersAvailabilityChecker.ServerCopy) async -> [Row] {
+        guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
+            serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey
+        ) else { return [] }
         // Never registered with MediaProviderRegistry — this detail is only
-        // read locally for its ratingKey/mediaSources, so a provider id
-        // scoped to the REMOTE server (not the selected one) just keeps
-        // `.ref.isPlex` honest for a value that stays entirely in this file.
-        return PlexMediaMapper.detail(meta, providerID: "plex:\(copy.machineId)",
-                                      serverURL: copy.serverURL, authToken: copy.token)
+        // read locally for its mediaSources, so a provider id scoped to the
+        // REMOTE server just keeps `.ref.isPlex` honest.
+        let detail = PlexMediaMapper.detail(meta, providerID: "plex:\(copy.machineId)",
+                                            serverURL: copy.serverURL, authToken: copy.token)
+        let sources = VersionRanking.ordered(detail.mediaSources)
+        return zip(sources, VersionPicker.labels(for: sources)).map { source, label in
+            Row(label: "\(copy.serverName) · \(label)", isDefault: false,
+                target: .remote(serverURL: copy.serverURL, token: copy.token,
+                                ratingKey: copy.ratingKey, mediaID: source.id))
+        }
     }
 }
 

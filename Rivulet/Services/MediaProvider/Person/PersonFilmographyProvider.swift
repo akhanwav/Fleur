@@ -279,12 +279,24 @@ final class PersonFilmographyProvider: PersonFilmographyProviding {
         return onServer + FilmographyEntry.excluding(onServer, from: known)
     }
 
+    /// Three lookups at a time (each is a Discover match plus one small
+    /// request per other server), stopping when the page's task is cancelled.
     nonisolated func markingOtherServers(_ entries: [FilmographyEntry]) async -> [FilmographyEntry] {
         var result = entries
-        for index in result.indices where !result[index].isOnServer {
-            guard let tmdbId = result[index].tmdbId else { continue }
-            if await onOtherServer(tmdbId, result[index].item.kind == .movie ? .movie : .tv) {
-                result[index].isOnServer = true
+        let pending = result.indices.filter { !result[$0].isOnServer && result[$0].tmdbId != nil }
+        let lookup = onOtherServer
+        await withTaskGroup(of: (Int, Bool).self) { group in
+            var next = pending.makeIterator()
+            func addNext() -> Bool {
+                guard !Task.isCancelled, let index = next.next(), let tmdbId = result[index].tmdbId else { return false }
+                let type: TMDBMediaType = result[index].item.kind == .movie ? .movie : .tv
+                group.addTask { (index, await lookup(tmdbId, type)) }
+                return true
+            }
+            for _ in 0..<3 where !addNext() { break }
+            for await (index, found) in group {
+                if found { result[index].isOnServer = true }
+                _ = addNext()
             }
         }
         return result

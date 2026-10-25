@@ -18,17 +18,17 @@ enum TMDBMediaType: String, Codable, Sendable {
     case tv
 }
 
-struct TMDBKeyword: Codable {
+nonisolated struct TMDBKeyword: Codable, Sendable {
     let id: Int?
     let name: String?
 }
 
-struct TMDBGenre: Codable, Sendable {
+nonisolated struct TMDBGenre: Codable, Sendable {
     let id: Int?
     let name: String?
 }
 
-struct TMDBDetails: Codable {
+nonisolated struct TMDBDetails: Codable, Sendable {
     let genres: [TMDBGenre]?
     let voteAverage: Double?
     let voteCount: Int?
@@ -40,7 +40,7 @@ struct TMDBDetails: Codable {
     }
 }
 
-struct TMDBCredit: Codable, Sendable {
+nonisolated struct TMDBCredit: Codable, Sendable {
     let id: Int?
     let name: String?
     let job: String?
@@ -53,7 +53,7 @@ struct TMDBCredit: Codable, Sendable {
     }
 }
 
-struct TMDBPersonDetails: Codable, Sendable {
+nonisolated struct TMDBPersonDetails: Codable, Sendable {
     let biography: String?
     let profilePath: String?
     enum CodingKeys: String, CodingKey {
@@ -65,7 +65,7 @@ struct TMDBPersonDetails: Codable, Sendable {
 /// One title in a person's TMDB combined credits (`person/{id}/combined_credits`).
 /// A person credited twice on one title (two characters, or a cast and a
 /// crew credit) appears once per credit.
-struct TMDBPersonCredit: Codable, Sendable {
+nonisolated struct TMDBPersonCredit: Codable, Sendable {
     let id: Int
     let mediaType: String?      // "movie" | "tv"
     let title: String?          // movies
@@ -89,16 +89,16 @@ struct TMDBPersonCredit: Codable, Sendable {
 
 /// A person's TMDB credits, with the department they're known for
 /// ("Acting", "Directing", …) so a director's page lists what they directed.
-struct TMDBPersonFilmography: Sendable {
+nonisolated struct TMDBPersonFilmography: Sendable {
     let knownForDepartment: String?
     let cast: [TMDBPersonCredit]
     let crew: [TMDBPersonCredit]
 }
 
-private struct TMDBPersonCreditsResponse: Codable {
+private nonisolated struct TMDBPersonCreditsResponse: Codable, Sendable {
     let knownForDepartment: String?
     let combinedCredits: Credits?
-    struct Credits: Codable {
+    struct Credits: Codable, Sendable {
         let cast: [TMDBPersonCredit]?
         let crew: [TMDBPersonCredit]?
     }
@@ -108,7 +108,7 @@ private struct TMDBPersonCreditsResponse: Codable {
     }
 }
 
-private struct TMDBKeywordsResponse: Codable {
+private nonisolated struct TMDBKeywordsResponse: Codable, Sendable {
     let keywords: [TMDBKeyword]?
     let results: [TMDBKeyword]?
 
@@ -119,12 +119,12 @@ private struct TMDBKeywordsResponse: Codable {
     }
 }
 
-private struct TMDBCreditsResponse: Codable {
+private nonisolated struct TMDBCreditsResponse: Codable, Sendable {
     let cast: [TMDBCredit]?
     let crew: [TMDBCredit]?
 }
 
-struct TMDBEpisodeCreditsResponse: Codable {
+nonisolated struct TMDBEpisodeCreditsResponse: Codable, Sendable {
     let cast: [TMDBCredit]?
     let guestStars: [TMDBCredit]?
     enum CodingKeys: String, CodingKey {
@@ -213,7 +213,10 @@ final class TMDBClient: @unchecked Sendable {
 
     // MARK: - Networking
 
-    private func request<T: Decodable>(path: String, queryItems: [URLQueryItem] = []) async throws -> T {
+    /// Decodes off the main actor: this class inherits the module's default
+    /// MainActor isolation, and a prolific actor's combined credits run to
+    /// hundreds of KB (the same reason PlexNetworkManager decodes detached).
+    private func request<T: Decodable & Sendable>(path: String, queryItems: [URLQueryItem] = []) async throws -> T {
         guard let req = TMDBConfig.request(path: path, queryItems: queryItems) else {
             throw URLError(.badURL)
         }
@@ -223,7 +226,9 @@ final class TMDBClient: @unchecked Sendable {
             throw URLError(.badServerResponse)
         }
 
-        return try JSONDecoder().decode(T.self, from: data)
+        return try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(T.self, from: data)
+        }.value
     }
 
     // MARK: - Local Cache

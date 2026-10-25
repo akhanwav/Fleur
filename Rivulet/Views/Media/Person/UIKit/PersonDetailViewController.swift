@@ -29,6 +29,9 @@
 //
 
 import UIKit
+import os.log
+
+private let personLog = Logger(subsystem: "com.rivulet.app", category: "PersonDetail")
 
 @MainActor
 final class PersonDetailViewController: UIViewController {
@@ -455,6 +458,7 @@ final class PersonDetailViewController: UIViewController {
     // MARK: - Data
 
     private func reload() async {
+        let start = ContinuousClock.now
         let loaded: PersonDetail
         do {
             loaded = try await provider.load(person: person)
@@ -479,15 +483,34 @@ final class PersonDetailViewController: UIViewController {
         entries = onServer
         isLoading = false
         applySnapshot(animated: false)
+        personLog.info("[Person] bio + \(onServer.count, privacy: .public) server title(s) in \(Self.ms(since: start), privacy: .public)ms")
 
         entries = await provider.filmography(person: person, onServer: onServer)
         if Task.isCancelled { return }
         applySnapshot(animated: false)
+        personLog.info("[Person] filmography \(self.entries.count, privacy: .public) title(s) in \(Self.ms(since: start), privacy: .public)ms")
 
-        let marked = await provider.markingOtherServers(entries)
-        if Task.isCancelled || marked == entries { return }
-        entries = marked
-        applySnapshot(animated: false)
+        // Other servers last, a batch at a time in the grid's own order, so
+        // the badges on screen land first and the grid never waits on them.
+        let order = query.apply(entries).map(\.key)
+        for batchStart in stride(from: 0, to: order.count, by: 24) {
+            let keys = Set(order[batchStart..<min(batchStart + 24, order.count)])
+            let batch = entries.filter { keys.contains($0.key) }
+            let marked = await provider.markingOtherServers(batch)
+            if Task.isCancelled { return }
+            let found = Set(marked.filter(\.isOnServer).map(\.key))
+            guard !found.isEmpty else { continue }
+            for index in entries.indices where found.contains(entries[index].key) {
+                entries[index].isOnServer = true
+            }
+            applySnapshot(animated: false)
+        }
+        personLog.info("[Person] other servers checked in \(Self.ms(since: start), privacy: .public)ms")
+    }
+
+    private static func ms(since start: ContinuousClock.Instant) -> Int {
+        let elapsed = ContinuousClock.now - start
+        return Int(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
     }
 
     private func applySnapshot(animated: Bool) {

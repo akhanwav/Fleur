@@ -5,19 +5,21 @@
 //  OtherServersAvailabilityChecker.swift
 //  Rivulet
 //
-//  "On Your Servers" for a metadata-only (TMDB) detail page: is this title on
-//  any Plex server this account can reach, OWNED or SHARED, other than the
-//  currently selected one? (The selected server's own answer is already why
-//  the item is metadata-only — LibraryGUIDIndex already said no.)
+//  Which Plex servers this account can reach, OWNED or SHARED, other than the
+//  selected one, hold a given title — "On Your Servers" on an unowned detail
+//  page and the other-server rows of Ways to Watch.
 //
-//  There is no lightweight "does server X have GUID Y" endpoint — the one
-//  proven technique in this codebase is the full-library-page-through
-//  LibraryGUIDIndex already uses for the selected server (TVSidebarView).
-//  This generalizes that same technique to every OTHER accessible server,
-//  built lazily (first metadata-only detail page opened this session) and
-//  cached in memory for the rest of the session — never persisted to disk,
-//  since server membership changes are rare and worth re-deriving per launch
-//  rather than risking a stale "available on X" after a share is revoked.
+//  One title at a time: each server is asked for the title's Plex guid
+//  (`/library/all?guid=plex://…`), all servers in parallel, each with a short
+//  timeout, so one asleep server costs at most that timeout and never holds up
+//  the rest. Plex's agent guid is the same on every server that matched the
+//  title; a TMDB id is turned into it once through Discover's matches endpoint.
+//
+//  This replaced paging every other server's whole library into a guid index
+//  (2000 items a page, includeGuids, every movie and show section). On large
+//  shared libraries that took minutes, and the pages' decoding filled the
+//  cooperative thread pool of a 3-core Apple TV, so every other task in the
+//  app (detail fetches, image loads, taps that start a Task) queued behind it.
 //
 
 import Foundation
@@ -38,132 +40,158 @@ actor OtherServersAvailabilityChecker {
         let machineId: String
     }
 
-    private struct ServerIndex {
-        let displayName: String
+    private struct Server: Sendable {
+        let machineId: String
+        let name: String
         let serverURL: String
         let token: String
-        /// Every guid string seen (any namespace: tmdb/imdb/tvdb, Plex's own
-        /// "scheme://value" shape) mapped to that item's ratingKey on this
-        /// server — `copies(forGuids:)`'s index.
-        var guidToRatingKey: [String: String] = [:]
-        /// ratingKey → Plex type ("movie" / "show"). TMDB numbers movies and
-        /// shows separately, so a tmdb:// guid alone can name both.
-        var typeByRatingKey: [String: String] = [:]
     }
 
-    private var serverIndexes: [String: ServerIndex] = [:]
-    private var buildTask: Task<Void, Never>?
+    /// Per-server lookup limit: an asleep or slow server is skipped after this.
+    private static let lookupTimeout: TimeInterval = 5
+    /// Connection probe limit per server, once per `serversTTL`.
+    private static let probeTimeout: TimeInterval = 4
+    /// Reachable servers are re-resolved after this, so a server that woke up
+    /// (or a share that was revoked) shows within minutes, not next launch.
+    private static let serversTTL: TimeInterval = 600
 
-    /// Every other accessible server holding `tmdbId` as a `type`. Triggers
-    /// the one-time background build on first call; subsequent calls (any
-    /// title, for the rest of the session) are instant.
+    private var serversTask: Task<[Server], Never>?
+    private var serversResolvedAt: Date?
+    private var copiesCache: [String: [ServerCopy]] = [:]
+    private var tmdbGuidCache: [String: String] = [:]
+
+    /// Every other reachable server holding `tmdbId` as a `type`.
     func copies(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> [ServerCopy] {
-        await copies(forGuids: ["tmdb://\(tmdbId)"], plexType: type == .movie ? "movie" : "show")
+        guard let plexGuid = await plexGuid(forTmdbId: tmdbId, type: type) else { return [] }
+        return await copies(plexGuid: plexGuid)
     }
 
-    /// Resolves an owned item (not just a metadata-only one) to every OTHER
-    /// server that holds a matching copy, keyed by any of its own guids
-    /// (tmdb/imdb/tvdb — Plex's "scheme://value" shape, e.g. "tmdb://603").
-    /// One copy per matching server, first guid match wins.
-    func copies(forGuids guids: [String], plexType: String? = nil) async -> [ServerCopy] {
-        guard !guids.isEmpty else { return [] }
-        await ensureBuilt()
-        var results: [ServerCopy] = []
-        for (machineId, index) in serverIndexes {
-            for guid in guids {
-                guard let ratingKey = index.guidToRatingKey[guid] else { continue }
-                if let plexType, index.typeByRatingKey[ratingKey] != plexType { continue }
-                results.append(ServerCopy(serverName: index.displayName, serverURL: index.serverURL,
-                                          token: index.token, ratingKey: ratingKey, machineId: machineId))
-                break
+    /// Every other reachable server holding the title with this Plex guid
+    /// ("plex://movie/…", "plex://show/…", "plex://episode/…"). Cached per
+    /// guid for the session's server list.
+    func copies(plexGuid: String) async -> [ServerCopy] {
+        let servers = await reachableServers()
+        if let cached = copiesCache[plexGuid] { return cached }
+        let start = ContinuousClock.now
+        let found = await withTaskGroup(of: ServerCopy?.self) { group in
+            for server in servers {
+                group.addTask { await Self.lookup(plexGuid, on: server) }
             }
+            var found: [ServerCopy] = []
+            for await copy in group { if let copy { found.append(copy) } }
+            return found.sorted { $0.serverName < $1.serverName }
         }
-        return results.sorted { $0.serverName < $1.serverName }
+        copiesCache[plexGuid] = found
+        otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
+        return found
     }
 
-    private func ensureBuilt() async {
-        if let buildTask {
-            await buildTask.value
-            return
-        }
-        let task = Task { await self.build() }
-        buildTask = task
-        await task.value
+    // MARK: - Lookup
+
+    private static func lookup(_ plexGuid: String, on server: Server) async -> ServerCopy? {
+        let start = ContinuousClock.now
+        guard var components = URLComponents(string: "\(server.serverURL)/library/all") else { return nil }
+        var query = [URLQueryItem(name: "guid", value: plexGuid),
+                     // Container-Size is ignored without Start (CLAUDE.md).
+                     URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
+                     URLQueryItem(name: "X-Plex-Container-Size", value: "5")]
+        if let type = plexType(of: plexGuid) { query.append(URLQueryItem(name: "type", value: type)) }
+        components.queryItems = query
+        guard let url = components.url else { return nil }
+        let headers = await PlexNetworkManager.shared.plexHeaders(authToken: server.token)
+        let container: PlexMediaContainerWrapper? = try? await PlexNetworkManager.shared.request(
+            url, headers: headers, timeout: lookupTimeout)
+        // Checked, not trusted: a server that ignored the filter must not
+        // pass its first item off as this title.
+        let match = container?.MediaContainer.Metadata?.first { $0.guid == plexGuid }
+        otherServersLog.debug("[OtherServers] \(server.name, privacy: .public): \(match == nil ? "no" : "yes", privacy: .public) in \(ms(since: start), privacy: .public)ms\(container == nil ? " (failed or timed out)" : "", privacy: .public)")
+        guard let ratingKey = match?.ratingKey else { return nil }
+        return ServerCopy(serverName: server.name, serverURL: server.serverURL, token: server.token,
+                          ratingKey: ratingKey, machineId: server.machineId)
     }
 
-    private func build() async {
+    /// Plex's search type for a guid's kind: movie 1, show 2, episode 4.
+    private static func plexType(of plexGuid: String) -> String? {
+        if plexGuid.hasPrefix("plex://movie/") { return "1" }
+        if plexGuid.hasPrefix("plex://show/") { return "2" }
+        if plexGuid.hasPrefix("plex://episode/") { return "4" }
+        return nil
+    }
+
+    /// A TMDB title's Plex guid. Discover's matches endpoint answers with the
+    /// title's Discover ratingKey, which is the id in its plex:// guid.
+    private func plexGuid(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> String? {
+        let key = "\(type.rawValue):\(tmdbId)"
+        if let cached = tmdbGuidCache[key] { return cached }
+        guard let token = await MainActor.run(body: { PlexAuthManager.shared.authToken }),
+              var components = URLComponents(string: "https://metadata.provider.plex.tv/library/metadata/matches")
+        else { return nil }
+        components.queryItems = [URLQueryItem(name: "type", value: type == .movie ? "1" : "2"),
+                                 URLQueryItem(name: "guid", value: "tmdb://\(tmdbId)")]
+        guard let url = components.url else { return nil }
+        struct Matches: Decodable, Sendable {
+            struct Inner: Decodable, Sendable { let Metadata: [Item]? }
+            struct Item: Decodable, Sendable { let ratingKey: String? }
+            let MediaContainer: Inner
+        }
+        let headers = await PlexNetworkManager.shared.plexHeaders(authToken: token)
+        guard let matches: Matches = try? await PlexNetworkManager.shared.request(
+            url, headers: headers, timeout: Self.lookupTimeout),
+              let ratingKey = matches.MediaContainer.Metadata?.first?.ratingKey
+        else { return nil }
+        let guid = "plex://\(type == .movie ? "movie" : "show")/\(ratingKey)"
+        tmdbGuidCache[key] = guid
+        return guid
+    }
+
+    // MARK: - Servers
+
+    /// The other servers that answered a probe, resolved once per
+    /// `serversTTL`. Unreachable servers are left out until the next resolve.
+    private func reachableServers() async -> [Server] {
+        if let resolvedAt = serversResolvedAt, Date().timeIntervalSince(resolvedAt) > Self.serversTTL {
+            serversTask = nil
+            copiesCache = [:]
+        }
+        if let serversTask { return await serversTask.value }
+        let task = Task { await Self.resolveServers() }
+        serversTask = task
+        let servers = await task.value
+        serversResolvedAt = Date()
+        return servers
+    }
+
+    private static func resolveServers() async -> [Server] {
+        let start = ContinuousClock.now
         let (authToken, selectedMachineId): (String?, String?) = await MainActor.run {
             (PlexAuthManager.shared.authToken, PlexAuthManager.shared.selectedServer?.machineIdentifier)
         }
-        guard let authToken else { return }
-        guard let servers = try? await PlexNetworkManager.shared.getServers(authToken: authToken) else {
-            otherServersLog.error("[OtherServers] getServers failed; no cross-server availability this session")
-            return
+        guard let authToken,
+              let devices = try? await PlexNetworkManager.shared.getServers(authToken: authToken) else {
+            otherServersLog.error("[OtherServers] getServers failed; no cross-server lookups until the next resolve")
+            return []
         }
-        let others = servers.filter { $0.machineIdentifier != nil && $0.machineIdentifier != selectedMachineId }
-        guard !others.isEmpty else { return }
-
-        await withTaskGroup(of: (String, ServerIndex)?.self) { group in
-            for server in others {
-                group.addTask { await Self.buildIndex(for: server) }
-            }
-            for await result in group {
-                guard let (machineId, index) = result else { continue }
-                serverIndexes[machineId] = index
-            }
-        }
-        otherServersLog.info("[OtherServers] built \(self.serverIndexes.count, privacy: .public) of \(others.count, privacy: .public) other server(s)")
-    }
-
-    /// Resolves a reachable connection, then pages every movie/show section's
-    /// full item list (includeGuids) into a guid → ratingKey index. Any failure
-    /// (unreachable, no token, no libraries) is a quiet skip, not an error —
-    /// a shared server being asleep just means we can't say "available" for
-    /// it this session, not that the title isn't there.
-    private static func buildIndex(for server: PlexDevice) async -> (String, ServerIndex)? {
-        guard let machineId = server.machineIdentifier, let token = server.accessToken else { return nil }
-        guard let serverURL = await resolveConnection(server, token: token) else { return nil }
-        guard let libraries = try? await PlexNetworkManager.shared.getLibraries(serverURL: serverURL, authToken: token) else {
-            return nil
-        }
-
-        var index = ServerIndex(displayName: server.sourceTitle ?? server.name, serverURL: serverURL, token: token)
-        let pageSize = 2000
-        let maxPagesPerSection = 20   // safety cap: 40,000 items/section
-
-        for library in libraries where library.type == "movie" || library.type == "show" {
-            var start = 0
-            for _ in 0..<maxPagesPerSection {
-                guard let result = try? await PlexNetworkManager.shared.getLibraryItemsWithTotal(
-                    serverURL: serverURL,
-                    authToken: token,
-                    sectionId: library.key,
-                    start: start,
-                    size: pageSize,
-                    includeGuids: true
-                ) else { break }
-
-                for item in result.items {
-                    guard let ratingKey = item.ratingKey else { continue }
-                    index.typeByRatingKey[ratingKey] = item.type
-                    for guid in item.Guid ?? [] {
-                        guard let id = guid.id else { continue }
-                        index.guidToRatingKey[id] = ratingKey
-                    }
+        let others = devices.filter { $0.machineIdentifier != nil && $0.machineIdentifier != selectedMachineId }
+        let servers = await withTaskGroup(of: Server?.self) { group in
+            for device in others {
+                group.addTask {
+                    guard let machineId = device.machineIdentifier, let token = device.accessToken,
+                          let url = await resolveConnection(device, token: token) else { return nil }
+                    return Server(machineId: machineId, name: device.sourceTitle ?? device.name,
+                                  serverURL: url, token: token)
                 }
-                start += result.items.count
-                if result.items.isEmpty || start >= (result.totalSize ?? 0) { break }
             }
+            var servers: [Server] = []
+            for await server in group { if let server { servers.append(server) } }
+            return servers
         }
-        return (machineId, index)
+        otherServersLog.info("[OtherServers] \(servers.count, privacy: .public) of \(others.count, privacy: .public) other server(s) reachable, resolved in \(ms(since: start), privacy: .public)ms")
+        return servers
     }
 
     /// Races this server's connections (local non-relay first, then remote
     /// non-relay, then relay) and returns the first one that answers
-    /// `/identity`. Lighter than `PlexAuthManager.findBestConnection` on
-    /// purpose — this runs once per OTHER server per session, in parallel
-    /// with every other server's own probe, so it doesn't need that method's
-    /// last-known-good fast path or raw-HTTPS fallback chain.
+    /// `/identity`, each probe capped at `probeTimeout`.
     private static func resolveConnection(_ server: PlexDevice, token: String) async -> String? {
         let candidates = (server.connections ?? []).sorted { score($0) > score($1) }
         guard !candidates.isEmpty else { return nil }
@@ -173,10 +201,9 @@ actor OtherServersAvailabilityChecker {
                 group.addTask {
                     guard let url = URL(string: "\(connection.uri)/identity") else { return nil }
                     struct Probe: Decodable, Sendable {}
-                    let headers = PlexNetworkManager.shared.plexHeaders(authToken: token)
-                    guard let _: Probe = try? await PlexNetworkManager.shared.request(url, headers: headers, timeout: 6) else {
-                        return nil
-                    }
+                    let headers = await PlexNetworkManager.shared.plexHeaders(authToken: token)
+                    guard let _: Probe = try? await PlexNetworkManager.shared.request(
+                        url, headers: headers, timeout: probeTimeout) else { return nil }
                     return connection.uri
                 }
             }
@@ -193,5 +220,10 @@ actor OtherServersAvailabilityChecker {
     private static func score(_ connection: PlexConnection) -> Int {
         if connection.relay { return 0 }
         return connection.local ? 2 : 1
+    }
+
+    private static func ms(since start: ContinuousClock.Instant) -> Int {
+        let elapsed = ContinuousClock.now - start
+        return Int(elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000)
     }
 }
