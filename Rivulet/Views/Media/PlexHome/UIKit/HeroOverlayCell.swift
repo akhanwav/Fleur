@@ -58,6 +58,8 @@ final class HeroOverlayCell: UICollectionViewCell {
         let onInfo: (PlexMetadata) -> Void
         let onPlay: (PlexMetadata) -> Void
         let onFocusEntered: (() -> Void)?
+        /// Select held on Play: choose the server and file.
+        var onPlayHold: ((PlexMetadata) -> Void)? = nil
     }
 
     /// MediaItem-based configuration. Additive path — PlexMetadata path above is
@@ -69,6 +71,8 @@ final class HeroOverlayCell: UICollectionViewCell {
         let onPlay: (MediaItem) -> Void
         let onInfo: (MediaItem) -> Void
         var onToggleWatchlist: ((MediaItem) -> Void)? = nil
+        /// Select held on Play: choose the server and file.
+        var onPlayHold: ((MediaItem) -> Void)? = nil
         /// The server badge for a slide, nil for none.
         var badge: ((MediaItem) -> String?)? = nil
     }
@@ -77,6 +81,7 @@ final class HeroOverlayCell: UICollectionViewCell {
         overlay.onIndexChanged = config.onIndexChanged
         overlay.onInfo = config.onInfo
         overlay.onPlay = config.onPlay
+        overlay.onPlayHold = config.onPlayHold
         overlay.onFocusEntered = config.onFocusEntered
         overlay.configure(
             items: config.items,
@@ -94,7 +99,8 @@ final class HeroOverlayCell: UICollectionViewCell {
             onPlay: config.onPlay,
             onInfo: config.onInfo,
             onToggleWatchlist: config.onToggleWatchlist,
-            badge: config.badge
+            badge: config.badge,
+            onPlayHold: config.onPlayHold
         )
     }
 }

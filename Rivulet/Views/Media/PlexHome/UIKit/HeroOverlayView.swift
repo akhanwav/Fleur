@@ -50,6 +50,13 @@ final class HeroOverlayView: UIView {
     var onIndexChanged: ((Int, PlexMetadata) -> Void)?
     var onInfo: ((PlexMetadata) -> Void)?
     var onPlay: ((PlexMetadata) -> Void)?
+    /// Select held on Play (Ways to Watch and versions), with the slide's item.
+    var onPlayHold: ((PlexMetadata) -> Void)? {
+        didSet { buttonRow.onPlayHold = onPlayHold == nil ? nil : { [weak self] in
+            guard let self, let item = self.currentItem else { return }
+            self.onPlayHold?(item)
+        } }
+    }
     var onFocusEntered: (() -> Void)?
 
     // MARK: - Subviews
@@ -427,7 +434,8 @@ final class HeroOverlayView: UIView {
         onPlay: @escaping (MediaItem) -> Void,
         onInfo: @escaping (MediaItem) -> Void,
         onToggleWatchlist: ((MediaItem) -> Void)? = nil,
-        badge: ((MediaItem) -> String?)? = nil
+        badge: ((MediaItem) -> String?)? = nil,
+        onPlayHold: ((MediaItem) -> Void)? = nil
     ) {
         if mediaItemOverlay == nil {
             let v = MediaItemHeroOverlayView()
@@ -451,6 +459,7 @@ final class HeroOverlayView: UIView {
         mediaItemOverlay?.isHidden = false
         mediaItemOverlay?.onToggleWatchlist = onToggleWatchlist
         mediaItemOverlay?.badge = badge
+        mediaItemOverlay?.onPlayHold = onPlayHold
         mediaItemOverlay?.configure(
             items: mediaItems,
             initialIndex: initialIndex,
@@ -504,6 +513,13 @@ final class MediaItemHeroOverlayView: UIView {
     var onIndexChanged: ((Int, MediaItem) -> Void)?
     var onPlay: ((MediaItem) -> Void)?
     var onInfo: ((MediaItem) -> Void)?
+    /// Select held on Play (Ways to Watch and versions), with the slide's item.
+    var onPlayHold: ((MediaItem) -> Void)? {
+        didSet { buttonRow.onPlayHold = onPlayHold == nil ? nil : { [weak self] in
+            guard let self, let item = self.currentItem else { return }
+            self.onPlayHold?(item)
+        } }
+    }
     /// nil hides the watchlist circle: only Discover has a watchlist to
     /// toggle from the hero.
     var onToggleWatchlist: ((MediaItem) -> Void)? {

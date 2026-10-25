@@ -3240,6 +3240,8 @@ final class PlexHomeViewController: UIViewController {
                     } : { [weak self, weak cell] item in
                         self?.toggleProviderWatchlist(for: item, on: cell)
                     },
+                    // Discover's titles are TMDB's: Play there opens the library match.
+                    onPlayHold: isDiscover ? nil : { [weak self] item in self?.presentPlayChoices(for: item) },
                     // Home names each slide's server while both are signed in.
                     badge: isHome ? { item in
                         Self.sourceBadge(for: item.ref,
@@ -3271,6 +3273,13 @@ final class PlexHomeViewController: UIViewController {
                 onPlay: { [weak self] item in self?.playItemDirectly(item) },
                 onFocusEntered: { [weak self] in
                     self?.scrollHeroIntoView()
+                },
+                onPlayHold: { [weak self] meta in
+                    guard let self, let serverURL = self.authManager.selectedServerURL,
+                          let token = self.authManager.selectedServerToken else { return }
+                    let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
+                    self.presentPlayChoices(for: PlexMediaMapper.item(meta, providerID: providerID,
+                                                                       serverURL: serverURL, authToken: token))
                 }
             ))
             return cell
@@ -3290,7 +3299,7 @@ final class PlexHomeViewController: UIViewController {
                     cell.configurePlaceholder()
                 } else {
                     Perf.interval(.cellPrepare, key: perfKey) {
-                        cell.configure(item: item)
+                        cell.configure(item: displayed(item))
                     }
                 }
             }
@@ -4105,10 +4114,22 @@ final class PlexHomeViewController: UIViewController {
     /// Resting scroll offset per shelf section, restored across cell reuse.
     private var shelfOffsets: [HomeSectionID: CGFloat] = [:]
 
-    /// Continue Watching cards switched to another server's copy from Ways
-    /// to Watch, by the card's own item: the card draws that copy, and
-    /// opening it names the copy for the page (`DetailCopySelection.pendingServer`).
+    /// Tiles switched to another server's copy from Ways to Watch, by the
+    /// tile's own item: the tile draws that copy (its poster or artwork,
+    /// resume point and versions), and opening it names the copy for the page
+    /// (`DetailCopySelection.pendingServer`). For the session.
     private var chosenCopies: [MediaItemRef: (guid: String, copy: DetailCopy)] = [:]
+
+    /// What a tile draws: its chosen server copy's item, else its own.
+    private func displayed(_ item: MediaItem) -> MediaItem {
+        chosenCopies[item.ref]?.copy.item ?? item
+    }
+
+    /// The page reads a chosen copy once, so every open names them all again:
+    /// the carousel can page to any of them.
+    private func nameChosenCopies() {
+        for chosen in chosenCopies.values { DetailCopySelection.pendingServer[chosen.guid] = chosen.copy.id }
+    }
 
     private func isShelfKind(_ kind: HomeSectionKind) -> Bool {
         switch kind {
@@ -4254,7 +4275,7 @@ final class PlexHomeViewController: UIViewController {
             let cell = innerCV.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath) as! PosterCell
             Perf.interval(.cellPrepare, key: perfKey) {
                 let item = section.items[indexPath.item]
-                cell.configure(item: item)
+                cell.configure(item: displayed(item))
                 if section.kind == .searchGrid {
                     cell.setSourceBadge(Self.sourceBadge(for: item.ref,
                                                          labelsServers: JellyfinDataStore.shared.labelsServers))
@@ -4279,9 +4300,6 @@ final class PlexHomeViewController: UIViewController {
         guard itemIndex < shelfRealCount(section) else { return }
         switch section.kind {
         case .continueWatching:
-            // The page reads a chosen copy once, so name every card's choice
-            // again on each open; the carousel can page to any of them.
-            for chosen in chosenCopies.values { DetailCopySelection.pendingServer[chosen.guid] = chosen.copy.id }
             // Instant Resume on: a CW tile resumes straight away. Off: it
             // behaves like every other shelf row and opens the preview carousel.
             // A card switched to another server opens on that copy instead:
@@ -5598,6 +5616,7 @@ final class PlexHomeViewController: UIViewController {
     /// (the same page a hero Info press opens). The SwiftUI detail stack is not
     /// used from the tile menu.
     private func selectMediaItem(_ item: MediaItem) {
+        nameChosenCopies()
         if item.kind == .episode || item.kind == .season {
             let page = MediaItemDetailPageViewController(
                 item: item,
@@ -5631,6 +5650,7 @@ final class PlexHomeViewController: UIViewController {
     /// Standalone expanded detail (mirror of PreviewCarouselViewController's
     /// presentStandaloneDetail, hoisted for the hero Info buttons).
     private func presentStandaloneExpandedDetail(_ item: MediaItem) {
+        nameChosenCopies()
         let detail = PreviewCarouselViewController(
             items: [item],
             selectedIndex: 0,
@@ -5738,6 +5758,7 @@ final class PlexHomeViewController: UIViewController {
     }
 
     private func presentPreview(forSection section: HomeSectionData, indexPath: IndexPath) {
+        nameChosenCopies()
         guard indexPath.item < section.items.count else { return }
         // Grid taps, every shelf row (handleShelfTap) and search
         // (handleSearchTap) all come through here. A collection never opens
@@ -6896,7 +6917,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             ]
             cwFirst += goToEntries(for: item)
             if item.kind == .movie || item.kind == .episode {
-                cwFirst.insert(TileMenuAction(title: "Ways to Watch…", systemImage: "square.stack") { [weak self] in
+                cwFirst.insert(TileMenuAction(title: "Ways to Watch…", systemImage: "server.rack") { [weak self] in
                     self?.presentServerChoices(for: item, from: tileFrame)
                 }, at: 1)
             }
@@ -6951,6 +6972,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }) {
             first.insert(version, at: 1)
         }
+        if item.kind == .movie || item.kind == .show || item.kind == .episode {
+            first.insert(TileMenuAction(title: "Ways to Watch…", systemImage: "server.rack") { [weak self] in
+                self?.presentServerChoices(for: item, from: tileFrame)
+            }, at: 1)
+        }
 
         // Mark as Watched / Unwatched — conditional on view state.
         // isWatched mirrors the old `viewCount > 0`; watchProgress != nil
@@ -6994,10 +7020,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         return TileMenuAction(title: "Play Version…", systemImage: "square.stack", handler: handler)
     }
 
-    /// Continue Watching's "Ways to Watch…": every server's copy with its
-    /// own resume time, the one the card shows checked. Picking one stays on
-    /// Home and switches the card to that copy (`chosenCopies`): its artwork,
-    /// resume time and quality. Opening the card then lands on that copy
+    /// A tile's "Ways to Watch…" (Continue Watching, Home rows, library
+    /// grids): every server's copy with its own resume time, the one the tile
+    /// shows checked. Picking one stays put and switches the tile to that copy
+    /// (`chosenCopies`): its poster or artwork, resume time and quality.
+    /// Opening the tile then lands on that copy
     /// (`DetailCopySelection.pendingServer`), where it can still be switched.
     /// Nothing plays from here.
     private func presentServerChoices(for item: MediaItem, from tileFrame: CGRect?) {
@@ -7028,7 +7055,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     } else if let guid {
                         self.chosenCopies[item.ref] = (guid: guid, copy: copy)
                     }
-                    self.refreshContinueWatchingRow()
+                    self.refreshTiles(showing: item.ref)
                 }
             }
             let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: tileFrame,
@@ -7037,13 +7064,83 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }
     }
 
-    /// Re-bind the visible Continue Watching row after a card changed copy;
-    /// the content token carries the choice, so only that change reloads it.
-    private func refreshContinueWatchingRow() {
-        guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.kind == .continueWatching }),
-              let row = collectionView.cellForItem(at: IndexPath(item: 0, section: sectionIndex)) as? ShelfRowCell
-        else { return }
-        configureShelfRow(row, sectionID: sectionsSnapshot[sectionIndex].id)
+    /// Redraw every tile of `ref` after it changed copy: a visible row is
+    /// re-bound (its content token carries the choice, so only that change
+    /// reloads it), a grid re-vends the slot.
+    private func refreshTiles(showing ref: MediaItemRef) {
+        for (sectionIndex, section) in sectionsSnapshot.enumerated() {
+            guard let slot = section.items.firstIndex(where: { $0.ref == ref }) else { continue }
+            if isShelfKind(section.kind) {
+                if let row = collectionView.cellForItem(at: IndexPath(item: 0, section: sectionIndex)) as? ShelfRowCell {
+                    configureShelfRow(row, sectionID: section.id)
+                }
+            } else if section.kind == .grid {
+                reconfigureGridSlots(slot..<(slot + 1))
+            }
+        }
+    }
+
+    /// The hero's Play, held: every server's copy of the slide's title, one
+    /// row per file ("Server · 4K DV · Resume 42:10"), or one per server for a
+    /// show (the episode Play would start there). Picking a row plays it
+    /// there; a plain press still plays the slide as before.
+    private func presentPlayChoices(for item: MediaItem) {
+        guard item.ref.isPlex, item.kind == .movie || item.kind == .show || item.kind == .episode,
+              let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
+        let sourceFrame = focusedViewFrame()
+        Task { @MainActor [weak self] in
+            guard let self, let detail = try? await provider.fullDetail(for: item.ref) else { return }
+            let (_, _, others) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
+            let main = DetailCopySelection.mainMachineId ?? "main"
+            let ownID = "\(main):\(item.ref.itemID)"
+            let own = DetailCopy(machineId: main, serverName: self.authManager.mainServerName ?? "This Server",
+                                 isMainServer: true, item: item, detail: detail, remote: nil)
+            let copies = DetailCopySelection.ordered([own] + others.filter { $0.id != ownID })
+            var actions: [TileMenuAction] = []
+            for copy in copies {
+                let sources = copy.sources
+                if sources.isEmpty || copy.isSeries {
+                    let label = ([copy.serverName] + DetailCopySelection.seriesSummary(copy)).joined(separator: " · ")
+                    actions.append(TileMenuAction(title: label, systemImage: "play.fill") { [weak self] in
+                        self?.play(copy, of: item, mediaID: nil)
+                    })
+                    continue
+                }
+                let resume = DetailCopySelection.resumeText(copy.item)
+                for (source, label) in zip(sources, VersionPicker.labels(for: sources)) {
+                    let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")
+                    actions.append(TileMenuAction(title: text, systemImage: "play.fill") { [weak self] in
+                        self?.play(copy, of: item, mediaID: source.id)
+                    })
+                }
+            }
+            guard !actions.isEmpty else { return }
+            let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: sourceFrame,
+                                                    header: TileMenuHeader(title: "Play From"))
+            self.topmostPresented.present(popup, animated: false)
+        }
+    }
+
+    /// Play `copy` of `item`: another server's through `RemoteCopyPlayer`
+    /// (its own resume point), this server's through the usual route.
+    private func play(_ copy: DetailCopy, of item: MediaItem, mediaID: String?) {
+        if let remote = copy.remote {
+            RemoteCopyPlayer.play(.remote(serverURL: remote.serverURL, token: remote.token,
+                                          ratingKey: copy.playTarget?.ref.itemID ?? remote.ratingKey,
+                                          mediaID: mediaID),
+                                  machineId: copy.machineId, from: self)
+        } else if item.kind == .show {
+            playResolvingEpisode(item)
+        } else {
+            playItem(item, sourceID: mediaID)
+        }
+    }
+
+    /// The focused view's frame in the window (the hero's Play button), for a
+    /// popup to rise from.
+    private func focusedViewFrame() -> CGRect? {
+        guard let view = UIFocusSystem.focusSystem(for: self.view)?.focusedItem as? UIView else { return nil }
+        return view.convert(view.bounds, to: nil)
     }
 
     /// Tile menu "Play Version…": fetch the versions, then play the pick.

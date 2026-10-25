@@ -86,6 +86,11 @@ final class HeroButtonRowView: UIView {
     // MARK: - Callbacks
 
     var onPlay: (() -> Void)?
+    /// Select held on Play: choose the server and file before playing. nil
+    /// leaves a hold to play like a press.
+    var onPlayHold: (() -> Void)?
+    /// The press that ends a hold must not also play.
+    private var holdConsumedPress = false
     var onWatchlist: (() -> Void)?
     var onInfo: (() -> Void)?
     var onNext: (() -> Void)?
@@ -108,6 +113,7 @@ final class HeroButtonRowView: UIView {
         nextButton.accessibilityLabel = "Next featured item"
 
         playButton.addTarget(self, action: #selector(playTapped), for: .primaryActionTriggered)
+        playButton.addGestureRecognizer(TileLongPress.makeRecognizer(target: self, action: #selector(playHeld(_:))))
         watchlistButton.addTarget(self, action: #selector(watchlistTapped), for: .primaryActionTriggered)
         infoButton.addTarget(self, action: #selector(infoTapped), for: .primaryActionTriggered)
         nextButton.addTarget(self, action: #selector(nextTapped), for: .primaryActionTriggered)
@@ -164,9 +170,29 @@ final class HeroButtonRowView: UIView {
     // MARK: - Targets
 
     @objc private func playTapped() {
+        if holdConsumedPress {
+            holdConsumedPress = false
+            return
+        }
         switch primaryAction {
         case .play: onPlay?()
         case .watchlist: onWatchlist?()
+        }
+    }
+    @objc private func playHeld(_ recognizer: UILongPressGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            guard primaryAction == .play, let onPlayHold else { return }
+            holdConsumedPress = true
+            onPlayHold()
+        case .ended, .cancelled, .failed:
+            // The release's action, when the system sends one, arrives with the
+            // press's end; past that, a stale flag would eat the next real press.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.holdConsumedPress = false
+            }
+        default:
+            break
         }
     }
     @objc private func watchlistTapped() { onWatchlist?() }
