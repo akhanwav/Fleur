@@ -427,7 +427,7 @@ final class QualityTagView: UIView {
         isUserInteractionEnabled = false
         layer.borderWidth = 1
         layer.cornerRadius = 6
-        backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        backgroundColor = UIColor.black.withAlphaComponent(0.65)
         layer.cornerCurve = .continuous
         label.translatesAutoresizingMaskIntoConstraints = false
         label.font = .systemFont(ofSize: 16, weight: .semibold)

@@ -65,15 +65,17 @@ enum EpisodePicker {
     }
 
     /// The Play button's title for `target` (what Play starts) on a page of
-    /// kind `page`. A show or season page names the episode; an item's own
-    /// page does not.
+    /// kind `page`. A show or season page names the episode; an episode's own
+    /// page names it only to Resume, the way its Continue Watching card does.
     static func playTitle(for target: MediaItem, on page: MediaKind) -> String {
-        let onParent = (page == .show || page == .season) && target.kind == .episode
+        let isEpisode = target.kind == .episode
+        let resumes = target.isInProgress
+        let named = isEpisode && (resumes || page == .show || page == .season)
         return playTitle(
-            resumes: target.isInProgress,
+            resumes: resumes,
             watched: target.isWatched,
-            season: onParent ? target.seasonNumber : nil,
-            episode: onParent ? target.episodeNumber : nil,
+            season: named ? target.seasonNumber : nil,
+            episode: named ? target.episodeNumber : nil,
             timeLeft: ResumeText.timeLeft(offsetSeconds: target.userState.viewOffset,
                                           runtimeSeconds: target.runtime))
     }

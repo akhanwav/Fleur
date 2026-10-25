@@ -148,12 +148,13 @@ final class EpisodePickerTests: XCTestCase {
         XCTAssertEqual(EpisodePicker.playTitle(for: started, on: .show), "Resume · 25 min left")
     }
 
-    /// An item's own page (movie or episode) never names the episode.
+    /// An episode's own page names it only to Resume.
     func testOwnPageWording() {
         XCTAssertEqual(EpisodePicker.playTitle(for: episode("e3", number: 3), on: .episode), "Play")
         XCTAssertEqual(EpisodePicker.playTitle(for: episode("e1", number: 1), on: .episode), "Play")
         XCTAssertEqual(
-            EpisodePicker.playTitle(for: episode("e3", number: 3, offset: 300), on: .episode), "Resume · 25 min left")
+            EpisodePicker.playTitle(for: episode("e3", number: 3, offset: 300), on: .episode),
+            "Resume · S1 · E3 · 25 min left")
         XCTAssertEqual(
             EpisodePicker.playTitle(for: episode("e3", number: 3, played: true), on: .episode), "Play Again")
     }
@@ -161,7 +162,7 @@ final class EpisodePickerTests: XCTestCase {
     /// A resume point outranks the watched flag (a rewatch in progress).
     func testRewatchInProgressResumes() {
         let ep = episode("e3", number: 3, played: true, offset: 300)
-        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .episode), "Resume · 25 min left")
+        XCTAssertEqual(EpisodePicker.playTitle(for: ep, on: .episode), "Resume · S1 · E3 · 25 min left")
     }
 
     /// Past the policy's completion ceiling there is nothing worth resuming:

@@ -703,15 +703,23 @@ final class MediaItemDetailPageViewController: UIViewController {
     private var resumeOffset: TimeInterval = 0
 
     private var playPillTitle: String {
+        // Resume names the episode ("Resume · S2 · E5 · 23 min left"); Play does not.
+        let isEpisode = item.kind == .episode
         if let copy = copySelection.selected, copy.remote != nil {
+            let resumes = copy.item.isInProgress
             return EpisodePicker.playTitle(
-                resumes: copy.item.isInProgress, watched: copy.item.isWatched,
+                resumes: resumes, watched: copy.item.isWatched,
+                season: resumes && isEpisode ? copy.item.seasonNumber : nil,
+                episode: resumes && isEpisode ? copy.item.episodeNumber : nil,
                 timeLeft: ResumeText.timeLeft(offsetSeconds: copy.item.userState.viewOffset,
                                               runtimeSeconds: copy.item.runtime))
         }
+        let resumes = WatchProgressPolicy.hasResumePoint(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime)
         return EpisodePicker.playTitle(
-            resumes: WatchProgressPolicy.hasResumePoint(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime),
+            resumes: resumes,
             watched: isWatched,
+            season: resumes && isEpisode ? item.seasonNumber : nil,
+            episode: resumes && isEpisode ? item.episodeNumber : nil,
             timeLeft: ResumeText.timeLeft(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime))
     }
 
