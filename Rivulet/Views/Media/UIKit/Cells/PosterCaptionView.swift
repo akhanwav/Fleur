@@ -45,9 +45,22 @@ final class PosterCaptionView: UIStackView {
 
     /// nil hides the caption (the setting is off, or a music tile).
     func configure(title: String?, year: Int?) {
+        configure(title: title, detail: year.map(String.init))
+    }
+
+    /// Any second line: a year, or an episode's "S1 · E3".
+    func configure(title: String?, detail: String?) {
         isHidden = title == nil || !MediaRowMetrics.showsPosterTitles
         titleLabel.text = title
-        detailLabel.text = year.map(String.init) ?? " "
+        detailLabel.text = detail ?? " "
+    }
+
+    /// Continue Watching's caption: a movie's title and year; an episode's
+    /// show and "S1 · E3".
+    static func continueWatchingText(title: String, year: Int?, show: String?, season: Int?, episode: Int?)
+        -> (title: String, detail: String?) {
+        if let show, let season, let episode { return (show, "S\(season) · E\(episode)") }
+        return (title, year.map(String.init))
     }
 
     /// Pin under `frameView` (the lockup frame), inset to its artwork.

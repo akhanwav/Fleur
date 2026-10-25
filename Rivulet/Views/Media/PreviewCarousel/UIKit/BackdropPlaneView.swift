@@ -91,6 +91,25 @@ final class BackdropPlaneView: UIView {
     /// not the main server's.
     private var artworkOverrides: [Int: MediaArtwork] = [:]
 
+    /// True while a full-screen page covers this one: the backdrops (a screen
+    /// of pixels each) are let go, and loaded again before it shows.
+    private(set) var imagesReleased = false
+
+    func releaseImages() {
+        guard !imagesReleased else { return }
+        imagesReleased = true
+        for panel in panels.values {
+            panel.loadToken &+= 1
+            panel.imageView.image = nil
+        }
+    }
+
+    func restoreImages() {
+        guard imagesReleased else { return }
+        imagesReleased = false
+        for panel in panels.values { loadArtwork(into: panel) }
+    }
+
     /// Show `artwork` behind card `index` (nil: the item's own), crossfading.
     func setArtwork(_ artwork: MediaArtwork?, for index: Int) {
         guard artworkOverrides[index]?.backdrop != artwork?.backdrop else { return }
@@ -177,7 +196,7 @@ final class BackdropPlaneView: UIView {
     }
 
     private func loadArtwork(into panel: Panel, crossfade: Bool = false) {
-        guard panel.index >= 0 && panel.index < items.count else { return }
+        guard !imagesReleased, panel.index >= 0 && panel.index < items.count else { return }
         let item = items[panel.index]
         let artwork = artworkOverrides[panel.index] ?? item.artwork
         panel.loadToken &+= 1

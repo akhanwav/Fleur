@@ -216,8 +216,9 @@ final class HeroBackdropView: UIView {
             self.boostScrim.alpha = boost
         } completion: { _ in
             self.fireFirstImageLoadedIfNeeded()
-            // Defer clearing the previous image slightly so the layer composition
-            // settles before we release the reference.
+            // The faded-out background is a whole screen of pixels (~33 MB at
+            // 4K): let it go once the crossfade is done.
+            if self.previousImageView.alpha == 0 { self.previousImageView.image = nil }
         }
 
         let totalNs = UInt64(crossfadeDuration * 1_000_000_000) + 50_000_000

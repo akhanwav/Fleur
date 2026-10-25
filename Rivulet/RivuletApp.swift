@@ -19,6 +19,8 @@ struct RivuletApp: App {
     init() {
         StartupTimer.arm()
         StartupTimer.mark("RivuletApp.init")
+        // Full-screen images decode to the display's own width, no larger.
+        ImageQuality.recordScreenSize()
         // Default the Home hero ON for fresh installs (and any user who hasn't
         // explicitly toggled it). The home reads this via UserDefaults.bool(),
         // which returns false for an unset key, so register the default here

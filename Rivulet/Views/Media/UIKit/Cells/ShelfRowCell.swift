@@ -44,7 +44,7 @@ final class ShelfRowCell: UICollectionViewCell {
         /// A poster cell also holds its title and year when they're shown.
         var tileHeight: CGFloat {
             (tile?.frame.height ?? MediaRowMetrics.liveHeight)
-                + (self == .poster ? MediaRowMetrics.posterCaptionHeight : 0)
+                + (self == .poster || self == .continueWatching ? MediaRowMetrics.posterCaptionHeight : 0)
         }
         /// The grid tile behind the kind; nil for Live TV, which has frame
         /// numbers of its own.

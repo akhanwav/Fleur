@@ -216,6 +216,12 @@ final class MediaItemDetailPageViewController: UIViewController {
         return super.preferredFocusEnvironments
     }
 
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        // The page under this one let go of its backdrops while covered.
+        if isBeingDismissed { (presentingViewController as? CoverablePage)?.coverWillDismiss() }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         setNeedsFocusUpdate()

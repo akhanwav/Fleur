@@ -152,6 +152,7 @@ final class PersonDetailViewController: UIViewController {
         super.viewWillDisappear(animated)
         loadTask?.cancel()
         loadTask = nil
+        if isBeingDismissed { (presentingViewController as? CoverablePage)?.coverWillDismiss() }
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {

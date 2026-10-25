@@ -18,7 +18,7 @@ struct VideoTrack: Hashable, Sendable, Identifiable {
     let width: Int?
     let height: Int?
     let frameRate: Double?
-    let bitrate: Int?
+    let bitrate: Int?              // bits per second, like MediaSource.bitrate
     let videoRange: VideoRange
     let isDefault: Bool
     let scanType: String?           // Plex "progressive" / "interlaced"; nil if unknown

@@ -157,7 +157,7 @@ enum PlexMediaMapper {
             width: stream.width,
             height: stream.height,
             frameRate: stream.frameRate,
-            bitrate: stream.bitrate,
+            bitrate: stream.bitrate.map { $0 * 1000 },     // Plex stream bitrate is kbps
             videoRange: range,
             isDefault: stream.default ?? false,
             scanType: stream.scanType

@@ -29,8 +29,20 @@ enum ImageQuality: Sendable {
     nonisolated var maxPixelSize: CGFloat {
         switch self {
         case .thumb: return 900
-        case .full:  return 3840
+        case .full:  return Self.screenPixelWidth
         }
+    }
+
+    /// The display's own width in pixels (3840 on a 4K TV, 1920 on 1080p),
+    /// read at launch by `recordScreenSize()`: a full-screen image is never
+    /// decoded larger than the screen can show. 3840 until then.
+    nonisolated(unsafe) private(set) static var screenPixelWidth: CGFloat = 3840
+
+    @MainActor
+    static func recordScreenSize() {
+        let native = UIScreen.main.nativeBounds.size
+        let width = max(native.width, native.height)
+        if width > 0 { screenPixelWidth = min(3840, width) }
     }
 
     nonisolated fileprivate var keySuffix: String {
@@ -65,7 +77,13 @@ actor ImageCacheManager: NSObject {
     // MARK: - Caches
 
     // NSCache is thread-safe, which is what lets `cachedImage` be nonisolated.
+    // Small images (posters, cards, stills) and full-screen ones live in
+    // separate caches: a single shared one let a dozen 33 MB 4K backgrounds
+    // crowd out every poster, and at 400 MB was a large share of an Apple
+    // TV's memory on its own.
     nonisolated(unsafe) private let memoryCache = NSCache<NSString, UIImage>()
+    /// Full-screen images: the current background and its neighbours only.
+    nonisolated(unsafe) private let fullCache = NSCache<NSString, UIImage>()
     nonisolated(unsafe) private let keyCache = NSCache<NSString, NSString>()
     private var cacheMetadata: [String: ImageCacheEntry] = [:]
     private var metadataLoaded = false
@@ -108,8 +126,20 @@ actor ImageCacheManager: NSObject {
     override private init() {
         super.init()
         memoryCache.countLimit = maxMemoryCacheCount
-        // By bytes too: 100 screen-sized bitmaps are several GB.
-        memoryCache.totalCostLimit = 400 * 1024 * 1024
+        // By bytes too: posters are ~2 MB decoded.
+        memoryCache.totalCostLimit = 160 * 1024 * 1024
+        // A 4K background is ~33 MB decoded: room for the one on screen, the
+        // ones either side, and the one fading out.
+        fullCache.countLimit = 4
+        fullCache.totalCostLimit = 140 * 1024 * 1024
+        // The system's own warning: drop every decoded bitmap (the originals
+        // stay on disk, so a reload is a decode, not a download).
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.memoryCache.removeAllObjects()
+            self?.fullCache.removeAllObjects()
+        }
         keyCache.countLimit = maxKeyCacheCount
         Task {
             await createCacheDirectoryIfNeeded()
@@ -127,7 +157,11 @@ actor ImageCacheManager: NSObject {
     /// Check memory cache only (for instant display without loading state).
     /// Synchronous from any thread.
     nonisolated func cachedImage(for url: URL, quality: ImageQuality = .thumb) -> UIImage? {
-        memoryCache.object(forKey: memoryKey(diskKey: cacheKey(for: url), quality: quality))
+        cache(for: quality).object(forKey: memoryKey(diskKey: cacheKey(for: url), quality: quality))
+    }
+
+    nonisolated private func cache(for quality: ImageQuality) -> NSCache<NSString, UIImage> {
+        quality == .full ? fullCache : memoryCache
     }
 
     /// Disk cache key (per URL). The on-disk file is the original downloaded bytes,
@@ -159,6 +193,7 @@ actor ImageCacheManager: NSObject {
         let memKey = memoryKey(diskKey: diskKey, quality: quality)
 
         // 1. Memory cache (already decoded at this quality)
+        let memoryCache = cache(for: quality)
         if !forceRefresh, let cached = memoryCache.object(forKey: memKey) {
             updateAccessTime(for: diskKey)
             scheduleStaleRefresh(url: url, key: diskKey)
@@ -221,6 +256,7 @@ actor ImageCacheManager: NSObject {
     /// Clear all cached images
     func clearAll() async {
         memoryCache.removeAllObjects()
+        fullCache.removeAllObjects()
         cacheMetadata.removeAll()
 
         guard let dir = cacheDirectory else { return }
@@ -296,7 +332,7 @@ actor ImageCacheManager: NSObject {
             if await fetchOriginalData(url: url, key: key) != nil {
                 // Drop decoded tiers so the next read re-decodes the fresh bytes.
                 memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .thumb))
-                memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .full))
+                fullCache.removeObject(forKey: memoryKey(diskKey: key, quality: .full))
             }
         }
     }
@@ -450,7 +486,7 @@ actor ImageCacheManager: NSObject {
                 cacheMetadata.removeValue(forKey: key)
                 // Drop any decoded tiers for this key
                 memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .thumb))
-                memoryCache.removeObject(forKey: memoryKey(diskKey: key, quality: .full))
+                fullCache.removeObject(forKey: memoryKey(diskKey: key, quality: .full))
             } catch {
                 // File might already be gone
             }

@@ -30,6 +30,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
     private let placeholderIcon = UIImageView()
     private let titleLogoView = ContinueWatchingTitleLogoView()
     private let infoBar = MediaProgressInfoBar()
+    /// Title and year (an episode: its show and "S1 · E3") under the card,
+    /// with Settings → Show Titles Under Posters.
+    private let caption = PosterCaptionView()
 
     private var artworkLoadTask: Task<Void, Never>?
     private var currentArtworkURL: URL?
@@ -60,6 +63,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
             card.widthAnchor.constraint(equalToConstant: MediaRowMetrics.cwWidth),
             card.heightAnchor.constraint(equalToConstant: MediaRowMetrics.cwHeight)
         ])
+        contentView.addSubview(caption)
+        caption.pin(below: card, artInset: (MediaRowMetrics.cwWidth - MediaRowMetrics.continueWatching.art.width) / 2)
+        caption.isHidden = true
 
         // No resting drop shadow (ATV+ reference: cards float clean over the
         // page background; see Docs/atv_ref/below_home_hero_ref.md).
@@ -154,6 +160,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
         // Info bar: play icon + (optional) progress capsule + info text.
         infoBar.configure(item: item)
+        let text = PosterCaptionView.continueWatchingText(
+            title: item.title ?? "", year: item.year,
+            show: item.type == "episode" ? item.grandparentTitle : nil,
+            season: item.parentIndex, episode: item.index)
+        caption.configure(title: text.title, detail: text.detail)
 
         loadArtwork(from: url, failureIcon: failurePlaceholderImage(for: item))
     }
@@ -170,6 +181,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
         titleLogoView.configure(logoURL: logoURL, fallbackTitle: item.title, artworkURL: url)
 
         infoBar.configure(item: item)
+        let text = PosterCaptionView.continueWatchingText(
+            title: item.title, year: item.year,
+            show: item.kind == .episode ? item.seriesTitle : nil,
+            season: item.seasonNumber, episode: item.episodeNumber)
+        caption.configure(title: text.title, detail: text.detail)
 
         loadArtwork(from: url, failureKind: item.kind)
     }
@@ -184,6 +200,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         placeholderIcon.isHidden = true
         titleLogoView.prepareForReuse()
         infoBar.reset()
+        caption.configure(title: nil, detail: nil)
     }
 
     // MARK: - Artwork

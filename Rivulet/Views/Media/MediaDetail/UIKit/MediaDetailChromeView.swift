@@ -721,7 +721,10 @@ final class MediaDetailChromeView: UIView {
         } else {
             setPlayTarget(copy.playTarget ?? copy.item)
         }
-        rebuildQualityRow(item: item, detail: copySelection.selectedDetail ?? detail)
+        let source = copy.isSeries
+            ? VersionRanking.ordered(copy.playTargetDetail?.mediaSources ?? []).first
+            : copySelection.selectedDetail?.primarySource
+        rebuildQualityRow(item: item, detail: copySelection.selectedDetail ?? detail, source: source)
         insertWaysToWatchButtonIfNeeded()
         // Another server's copy brings its own (possibly custom) artwork; an
         // unowned page's copy is the only server art it has.
@@ -1047,7 +1050,10 @@ final class MediaDetailChromeView: UIView {
     /// Apple dims the whole metadata row, text and badges alike.
     private static let qualityRowAlpha: CGFloat = 0.75
 
-    private func rebuildQualityRow(item: MediaItem, detail: MediaItemDetail?) {
+    /// `source` is the file the technical badges describe: the selected
+    /// copy's (a show's: the episode Play would start on that copy), else the
+    /// detail's own first file.
+    private func rebuildQualityRow(item: MediaItem, detail: MediaItemDetail?, source: MediaSource? = nil) {
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
 
         var parts: [String] = []
@@ -1086,10 +1092,16 @@ final class MediaDetailChromeView: UIView {
             qualityRow.addArrangedSubview(starStack)
         }
 
-        if let badges = detail?.primarySource?.qualityBadges(), !badges.isEmpty {
+        let technical = source ?? detail?.primarySource
+        if let badges = technical?.qualityBadges(), !badges.isEmpty {
             for badge in badges {
                 qualityRow.addArrangedSubview(Self.makeBadge(badge, alpha: Self.qualityRowAlpha))
             }
+        }
+        // The video stream's own bitrate, else the file's.
+        if let bitrate = technical.flatMap({ $0.videoTracks.first?.bitrate ?? $0.bitrate }), bitrate > 0 {
+            qualityRow.addArrangedSubview(
+                Self.makeCaptionLabel(PlayerInfoSheetStyle.bitrate(bitrate), alpha: Self.qualityRowAlpha))
         }
     }
 

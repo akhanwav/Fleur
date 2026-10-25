@@ -971,18 +971,19 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             snapshot.appendSections([kind]); snapshot.appendItems(items, toSection: kind); sectionKinds.append(kind)
         }
         // TV-show order, minus whatever's absent. The FIRST section (Episodes for
-        // shows, Trailers for movies) is the primary peek row (gets the big peek
-        // inset in makeLayout). Related is always a normal row below Trailers.
+        // shows, Cast & Crew for most movies) is the primary peek row (gets the
+        // big peek inset in makeLayout).
+        // Episodes, then Cast & Crew and On Your Servers, then Trailers &
+        // Extras and the rest. On Your Servers shows on every Plex title.
         if !cachedEpisodes.isEmpty { add(.episodes, cachedEpisodes) }
+        if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
+        if serverAvailability != nil { add(.servers, [.servers]) }
         if !cachedTrailers.isEmpty { add(.trailers, cachedTrailers) }
         if !cachedExtras.isEmpty { add(.extras, cachedExtras) }
         if let row = collectionRow, !row.members.isEmpty { add(.collection, [.collectionShelf]) }
         if !cachedRelated.isEmpty { add(.related, cachedRelated) }
-        if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
-        // Where to Watch and More Like This are TMDB's, for unowned titles
-        // only. On Your Servers shows on every Plex title too.
+        // Where to Watch and More Like This are TMDB's, for unowned titles only.
         if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
-        if serverAvailability != nil { add(.servers, [.servers]) }
         if !cachedMoreLikeThis.isEmpty { add(.moreLikeThis, cachedMoreLikeThis) }
         // About + Information/Languages/Accessibility — only when the full detail
         // is present (the episodes-only peek load has no detail).

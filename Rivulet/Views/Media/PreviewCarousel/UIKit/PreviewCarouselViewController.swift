@@ -862,6 +862,9 @@ final class PreviewCarouselViewController: UIViewController {
             peeks.forEach { $0.removeFromSuperview() }
             self.entryMorphWindows.removeAll()
             self.entrySnapshotContainer.isHidden = true
+            // The plane holds the backdrops now; the preloaded copies go.
+            self.entryBackdrops.removeAll()
+            self.entryBackdropTask = nil
             self.state.completeEntryMorph()
             self.updateCurrentCellChrome(animated: true)
         }
@@ -912,6 +915,29 @@ final class PreviewCarouselViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         previewCarouselLog.info("[Lifecycle] viewWillDisappear isExpanded=\(self.isExpanded) presentingVC=\(self.presentingViewController != nil)")
+        // A detail page opened from this one (a Related or filmography pick)
+        // closing: the page under it gets its backdrops back first.
+        if isBeingDismissed { (presentingViewController as? CoverablePage)?.coverWillDismiss() }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // Back from a full-screen cover (the player).
+        backdropPlane.restoreImages()
+    }
+
+    /// An actor page or another detail page covers this one completely:
+    /// drop the backdrops while it does. Browsing title → actor → title →
+    /// actor stacks these pages, and each held a few screens of pixels.
+    override func present(_ viewControllerToPresent: UIViewController, animated flag: Bool,
+                          completion: (() -> Void)? = nil) {
+        let covers = viewControllerToPresent is PersonDetailViewController
+            || viewControllerToPresent is PreviewCarouselViewController
+            || viewControllerToPresent is MediaItemDetailPageViewController
+        super.present(viewControllerToPresent, animated: flag) { [weak self] in
+            if covers { self?.backdropPlane.releaseImages() }
+            completion?()
+        }
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -2013,4 +2039,17 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
 /// never shows and never competes with visible content for focus.
 final class PreviewFocusAnchorView: UIView {
     override var canBecomeFocused: Bool { true }
+}
+
+// MARK: - Covered by another page
+
+/// A page that lets go of its heavy images while another full-screen page
+/// covers it, told when that cover is about to close.
+@MainActor
+protocol CoverablePage: AnyObject {
+    func coverWillDismiss()
+}
+
+extension PreviewCarouselViewController: CoverablePage {
+    func coverWillDismiss() { backdropPlane.restoreImages() }
 }

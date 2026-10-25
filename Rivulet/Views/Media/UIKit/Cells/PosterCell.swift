@@ -303,10 +303,17 @@ final class PosterCell: UICollectionViewCell {
             guard let url = await ArtworkFallback.shared.poster(for: query) else { return }
             await MainActor.run {
                 guard let self, self.currentURL == original, self.fallbackQuery == query else { return }
+                if let original { Self.replacedPosters[original] = url }
                 self.loadImage(from: url, failureIcon: failureIcon)
             }
         }
     }
+
+    /// Server posters already found wrong, each with the TMDB poster that
+    /// replaced it. A reconfigured or reused cell goes straight to the
+    /// replacement: before, it showed the server's frame again and swapped a
+    /// second later, which read as the poster jittering on return to a grid.
+    private static var replacedPosters: [URL: URL] = [:]
 
     /// Music tiles are 1:1 square; everything else keeps the 2:3 poster ratio.
     private func setSquare(_ square: Bool) {
@@ -367,6 +374,12 @@ final class PosterCell: UICollectionViewCell {
 
     private func loadImage(from url: URL?, failureIcon: UIImage?) {
         imageLoadTask?.cancel()
+        if let url, let replacement = Self.replacedPosters[url] {
+            triedFallback = true
+            if currentURL == replacement, hasArtwork { hidePlaceholder(); return }
+            loadImage(from: replacement, failureIcon: failureIcon)
+            return
+        }
         guard let url else {
             clearArtwork()
             currentURL = nil
