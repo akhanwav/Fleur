@@ -117,6 +117,9 @@ final class MediaDetailChromeView: UIView {
     /// Copies on other servers play through `RemoteCopyPlayer` directly.
     var onPlayVersion: ((MediaItem, String) -> Void)?
     var onToggleWatchlist: (() -> Void)?
+    /// The selected copy's artwork when it is another server's (nil: the
+    /// item's own), so the host shows that server's backdrop.
+    var onCopyArtwork: ((MediaArtwork?) -> Void)?
     var onShowFullDescription: ((MediaItemDetail) -> Void)?
 
     /// The Play pill (rebuilt per item). Exposed so the host cell can point the
@@ -720,6 +723,9 @@ final class MediaDetailChromeView: UIView {
         }
         rebuildQualityRow(item: item, detail: copySelection.selectedDetail ?? detail)
         insertWaysToWatchButtonIfNeeded()
+        // Another server's copy brings its own (possibly custom) artwork; an
+        // unowned page's copy is the only server art it has.
+        onCopyArtwork?(copy.isMainServer ? nil : copy.item.artwork)
     }
 
     /// Play the selected copy: another server's through `RemoteCopyPlayer`

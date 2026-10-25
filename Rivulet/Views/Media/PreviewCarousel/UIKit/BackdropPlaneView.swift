@@ -83,6 +83,20 @@ final class BackdropPlaneView: UIView {
 
     func configure(items: [MediaItem]) {
         self.items = items
+        artworkOverrides = [:]
+    }
+
+    /// The artwork of the server copy a card's page is on, when that is
+    /// another server's (Ways to Watch, On Your Servers): its own backdrop,
+    /// not the main server's.
+    private var artworkOverrides: [Int: MediaArtwork] = [:]
+
+    /// Show `artwork` behind card `index` (nil: the item's own), crossfading.
+    func setArtwork(_ artwork: MediaArtwork?, for index: Int) {
+        guard artworkOverrides[index]?.backdrop != artwork?.backdrop else { return }
+        artworkOverrides[index] = artwork
+        guard let panel = panels[index] else { return }
+        loadArtwork(into: panel, crossfade: true)
     }
 
     // MARK: - Carousel-mode sync
@@ -162,37 +176,55 @@ final class BackdropPlaneView: UIView {
         return panel
     }
 
-    private func loadArtwork(into panel: Panel) {
+    private func loadArtwork(into panel: Panel, crossfade: Bool = false) {
         guard panel.index >= 0 && panel.index < items.count else { return }
         let item = items[panel.index]
+        let artwork = artworkOverrides[panel.index] ?? item.artwork
         panel.loadToken &+= 1
         let token = panel.loadToken
-        // This plane fills most of the screen in both carousel and
-        // expanded-detail, so decode at full quality.
-        // A server item with no art, or art far below screen size (an item
-        // no agent matched), takes TMDB's backdrop instead.
-        let fallback = item.isMetadataOnly ? nil : ArtworkFallback.Query(item)
-        let serverURL = item.artwork.backdrop ?? (fallback == nil ? item.artwork.poster : nil)
-        guard serverURL != nil || fallback != nil else {
+        guard Self.hasBackdrop(item, artwork: artwork) else {
             panel.imageView.image = nil
             return
         }
         Task { [weak panel] in
-            var image: UIImage?
-            if let serverURL { image = await ImageCacheManager.shared.image(for: serverURL, quality: .full) }
-            if let fallback, (image.map { $0.size.width * $0.scale } ?? 0) < 1280,
-               let tmdbURL = await ArtworkFallback.shared.backdrop(for: fallback),
-               let tmdb = await ImageCacheManager.shared.image(for: tmdbURL, quality: .full) {
-                image = tmdb
-            }
-            if image == nil, let poster = item.artwork.poster {
-                image = await ImageCacheManager.shared.image(for: poster, quality: .full)
-            }
+            let image = await Self.backdropImage(for: item, artwork: artwork)
             await MainActor.run {
                 guard let panel, panel.loadToken == token else { return }
-                panel.imageView.image = image
+                guard crossfade, image != nil else { panel.imageView.image = image; return }
+                UIView.transition(with: panel.imageView, duration: 0.4, options: .transitionCrossDissolve) {
+                    panel.imageView.image = image
+                }
             }
         }
+    }
+
+    /// Whether `backdropImage` has anything to load for `item`.
+    static func hasBackdrop(_ item: MediaItem, artwork: MediaArtwork? = nil) -> Bool {
+        let artwork = artwork ?? item.artwork
+        return artwork.backdrop != nil || artwork.poster != nil
+            || (!item.isMetadataOnly && ArtworkFallback.Query(item) != nil)
+    }
+
+    /// The one rule for a card's backdrop, used by this plane AND by the
+    /// entry flight, so the two never show different art: the server's own
+    /// background at full size; TMDB's when the server has none or it is far
+    /// below screen size (an item no agent matched); else the poster.
+    static func backdropImage(for item: MediaItem, artwork: MediaArtwork? = nil) async -> UIImage? {
+        let artwork = artwork ?? item.artwork
+        let fallback = item.isMetadataOnly ? nil : ArtworkFallback.Query(item)
+        var image: UIImage?
+        if let url = artwork.backdrop ?? (fallback == nil ? artwork.poster : nil) {
+            image = await ImageCacheManager.shared.image(for: url, quality: .full)
+        }
+        if let fallback, (image.map { $0.size.width * $0.scale } ?? 0) < 1280,
+           let tmdbURL = await ArtworkFallback.shared.backdrop(for: fallback),
+           let tmdb = await ImageCacheManager.shared.image(for: tmdbURL, quality: .full) {
+            image = tmdb
+        }
+        if image == nil, let poster = artwork.poster {
+            image = await ImageCacheManager.shared.image(for: poster, quality: .full)
+        }
+        return image
     }
 
     /// The artwork already loaded for `index`, for the shelf flight's cards.

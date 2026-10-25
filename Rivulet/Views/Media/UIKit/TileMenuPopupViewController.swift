@@ -428,6 +428,11 @@ private final class MenuRowButton: UIView {
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         let focused = context.nextFocusedView === self
+        // A title too long for the row (a Ways to Watch line) scrolls while
+        // focused, the system marquee Music uses, and ends in "…" at rest.
+        // Turning the marquee off does not restore the mode, hence the order.
+        labelView.enablesMarqueeWhenAncestorFocused = focused
+        if !focused { labelView.lineBreakMode = .byTruncatingTail }
         coordinator.animateFocusChange(gained: focused) {
             if focused {
                 self.backgroundColor = self.destructive ? .systemRed : .white

@@ -345,6 +345,8 @@ final class PreviewCardView: UICollectionViewCell {
     var onPlayVersion: ((MediaItem, String) -> Void)?
     /// Info button → show the structured info popup (carries the loaded detail).
     var onShowInfo: ((MediaItemDetail) -> Void)?
+    /// The selected server copy's artwork (nil: the item's own).
+    var onCopyArtwork: ((MediaArtwork?) -> Void)?
 
     /// Switch the hero to another server's copy of this title.
     func selectCopy(copyID: String) {
@@ -382,6 +384,7 @@ final class PreviewCardView: UICollectionViewCell {
         chromeView.onShowFullDescription = { [weak self] detail in
             self?.onShowInfo?(detail)
         }
+        chromeView.onCopyArtwork = { [weak self] artwork in self?.onCopyArtwork?(artwork) }
     }
 
     // MARK: - Expand state

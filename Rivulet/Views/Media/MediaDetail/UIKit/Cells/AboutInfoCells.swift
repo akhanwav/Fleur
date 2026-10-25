@@ -575,8 +575,17 @@ final class AboutCardControl: UIControl {
         super.pressesEnded(presses, with: event)
     }
 
+    /// Labels that scroll (the system marquee) while this card is focused
+    /// when their text doesn't fit, and end in "…" at rest.
+    var marqueeLabels: [UILabel] = []
+
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         let focused = (context.nextFocusedView === self)
+        // Turning the marquee off does not restore the mode, hence the order.
+        for label in marqueeLabels {
+            label.enablesMarqueeWhenAncestorFocused = focused
+            if !focused { label.lineBreakMode = .byTruncatingTail }
+        }
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }
             self.backgroundColor = UIColor(white: 1, alpha: focused ? 0.14 : self.restAlpha)
@@ -895,6 +904,7 @@ final class ServerAvailabilityCollectionCell: UICollectionViewCell {
         summary.text = entry.summary
         summary.isHidden = entry.summary == nil
 
+        card.marqueeLabels = [name, summary]
         let text = UIStackView(arrangedSubviews: [name, summary])
         text.translatesAutoresizingMaskIntoConstraints = false
         text.axis = .vertical

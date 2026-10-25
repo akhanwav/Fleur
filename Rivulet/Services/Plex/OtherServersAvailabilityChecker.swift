@@ -198,11 +198,17 @@ actor OtherServersAvailabilityChecker {
             PlexAuthManager.shared.mainServer(in: devices)?.machineIdentifier
         }
         // Settings lists every server, main included, without a fetch of its own.
-        ServerPreferences.setMainMachineId(selectedMachineId)
-        ServerPreferences.remember(devices.compactMap { device in
+        // Written on the main actor: a UserDefaults write posts its change
+        // notification on the writing thread, and the app's defaults
+        // observers (Home, @AppStorage) expect the main thread.
+        let known: [ServerPreferences.KnownServer] = devices.compactMap { device in
             guard let id = device.machineIdentifier, device.provides.contains("server") else { return nil }
             return .init(machineId: id, name: device.sourceTitle ?? device.name)
-        })
+        }
+        await MainActor.run {
+            ServerPreferences.setMainMachineId(selectedMachineId)
+            ServerPreferences.remember(known)
+        }
         let others = devices.filter { $0.machineIdentifier != nil && $0.machineIdentifier != selectedMachineId }
         // The main server is searched too, on the connection the app already
         // uses: it can hold a title twice (a 4K library beside a 1080p one).

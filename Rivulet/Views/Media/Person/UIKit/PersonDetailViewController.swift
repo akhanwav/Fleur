@@ -538,9 +538,17 @@ final class PersonDetailViewController: UIViewController {
                 snapshot.appendItems(ids, toSection: section.rawValue)
             }
         }
-        // Identity is the title, so a badge or caption change needs a reconfigure.
-        snapshot.reconfigureItems(snapshot.itemIdentifiers)
+        // Identity is the title, so new data on a title already shown (the
+        // header after load, a caption) needs a reconfigure. Only for items
+        // that were already there: reconfiguring one this same apply inserts
+        // can raise inside the collection view's batch update.
+        let existing = Set(dataSource.snapshot().itemIdentifiers)
         dataSource.apply(snapshot, animatingDifferences: animated)
+        let kept = snapshot.itemIdentifiers.filter(existing.contains)
+        guard !kept.isEmpty else { return }
+        var refresh = dataSource.snapshot()
+        refresh.reconfigureItems(kept)
+        dataSource.apply(refresh, animatingDifferences: false)
     }
 
     // MARK: - Biography popup

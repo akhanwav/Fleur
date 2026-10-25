@@ -616,7 +616,8 @@ final class MediaItemDetailPageViewController: UIViewController {
     }()
 
     private func applySelectedCopy() {
-        guard copySelection.selected != nil else { return }
+        guard let copy = copySelection.selected else { return }
+        loadBackdrop(from: copy.isMainServer ? nil : copy.item, crossfade: true)
         playTitleLabel?.text = playPillTitle
         if let detail = copySelection.selectedDetail { renderBadges(detail) }
         insertWaysToWatchButtonIfNeeded()
@@ -757,19 +758,31 @@ final class MediaItemDetailPageViewController: UIViewController {
         item.kind == .season ? item.parentRef : item.grandparentRef
     }
 
-    private func loadBackdrop() {
+    /// `source` is the selected copy's own item when it is another server's,
+    /// so its backdrop (that server's still) follows the copy, crossfading.
+    private func loadBackdrop(from source: MediaItem? = nil, crossfade: Bool = false) {
+        let item = source ?? self.item
         // The EPISODE's own still (same art the episode list uses), NOT the show
         // hero. Fall back to the item's backdrop/poster, never the grandparent.
         // A season's thumbnail IS its poster, so it leads with the wide art.
         let url = item.kind == .season
             ? item.artwork.backdrop ?? item.parentArtwork?.backdrop ?? item.artwork.thumbnail
             : item.artwork.thumbnail ?? item.artwork.backdrop ?? item.artwork.poster
-        guard let url else { return }
+        guard let url, url != backdropURL else { return }
+        backdropURL = url
         Task { [weak self] in
             let image = await ImageCacheManager.shared.image(for: url, quality: .full)
-            await MainActor.run { self?.backdrop.image = image }
+            await MainActor.run {
+                guard let self, self.backdropURL == url, let image else { return }
+                guard crossfade else { self.backdrop.image = image; return }
+                UIView.transition(with: self.backdrop, duration: 0.4, options: .transitionCrossDissolve) {
+                    self.backdrop.image = image
+                }
+            }
         }
     }
+
+    private var backdropURL: URL?
 
     // MARK: - Helpers
 

@@ -244,6 +244,7 @@ final class PreviewCarouselViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
+        if !standaloneDetail { preloadEntryBackdrops() }
 
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         // Apple's surround grey; shows in the top strip and the gaps between cards.
@@ -637,7 +638,14 @@ final class PreviewCarouselViewController: UIViewController {
         hasRunEntryMorph = true
 
         if !entrySnapshots.isEmpty {
-            runRowEntryMorph()
+            // The flight fades the poster into the card's backdrop: start it
+            // once that backdrop is in hand (it began loading at viewDidLoad),
+            // so the card never holds on the poster and then jumps. Capped,
+            // so a slow server costs at most a beat before the flight.
+            Task { @MainActor [weak self] in
+                await self?.waitForEntryBackdrop(timeout: .milliseconds(450))
+                self?.runRowEntryMorph()
+            }
             return
         }
 
@@ -735,13 +743,18 @@ final class PreviewCarouselViewController: UIViewController {
     /// The card's artwork for a flying window, placed as the backdrop plane
     /// places it so the swap to the live carousel shows nothing.
     private func flightBackdrop(for index: Int) -> EntryMorphWindowView.Backdrop {
-        let imageView = UIImageView(image: backdropPlane.image(for: index))
+        let imageView = UIImageView(image: backdropPlane.image(for: index) ?? entryBackdrops[index])
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.backgroundColor = .black
-        if imageView.image == nil, let url = items[index].artwork.backdrop ?? items[index].artwork.poster {
+        if imageView.image == nil {
+            // Still loading: fade it in when it lands rather than popping.
+            let item = items[index]
             Task { [weak imageView] in
-                imageView?.image = await ImageCacheManager.shared.image(for: url, quality: .full)
+                guard let image = await BackdropPlaneView.backdropImage(for: item), let imageView else { return }
+                UIView.transition(with: imageView, duration: 0.3, options: .transitionCrossDissolve) {
+                    imageView.image = image
+                }
             }
         }
         let card = carouselFrameInView(for: index)
@@ -774,6 +787,35 @@ final class PreviewCarouselViewController: UIViewController {
                 entrySnapshotContainer.addSubview(window)
                 return window
             }
+    }
+
+    /// Backdrops preloaded for the cards the entry flight shows, by index.
+    private var entryBackdrops: [Int: UIImage] = [:]
+    private var entryBackdropTask: Task<Void, Never>?
+
+    /// Start loading the backdrops of the opening card and its neighbours,
+    /// with the same rule the plane uses.
+    private func preloadEntryBackdrops() {
+        let cards = self.items
+        let indices = [selectedIndex, selectedIndex - 1, selectedIndex + 1].filter { cards.indices.contains($0) }
+        entryBackdropTask = Task { @MainActor [weak self] in
+            await withTaskGroup(of: (Int, UIImage?).self) { group in
+                for index in indices {
+                    group.addTask { (index, await BackdropPlaneView.backdropImage(for: cards[index])) }
+                }
+                for await (index, image) in group {
+                    if let image { self?.entryBackdrops[index] = image }
+                }
+            }
+        }
+    }
+
+    /// Wait until the opening card's backdrop is loaded, at most `timeout`.
+    private func waitForEntryBackdrop(timeout: Duration) async {
+        let deadline = ContinuousClock.now + timeout
+        while entryBackdropTask != nil, entryBackdrops[selectedIndex] == nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
     }
 
     private func runRowEntryMorph() {
@@ -1929,6 +1971,8 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
         cell.onPlay = { [weak self] item in self?.playHeroItem(item) }
         cell.onPlayVersion = { [weak self] item, sourceID in self?.playMediaItem(item, sourceID: sourceID) }
         cell.onShowInfo = { [weak self] detail in self?.presentInfoPopup(detail) }
+        let cardIndex = indexPath.item
+        cell.onCopyArtwork = { [weak self] artwork in self?.backdropPlane.setArtwork(artwork, for: cardIndex) }
         // Default to non-current; if this dequeued cell happens to be
         // at selectedIndex (e.g. on first viewport population), the
         // entry-morph completion or paging completion will flip it via
