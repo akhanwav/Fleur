@@ -697,10 +697,10 @@ final class MediaDetailChromeView: UIView {
     /// can go back to it after another server's copy was selected.
     private var mainPlayTarget: MediaItem?
 
-    /// Switch the page to another server's copy (On Your Servers, a pending
-    /// pick). No-op when that server has no copy.
-    func selectCopy(machineId: String) {
-        copySelection.select(machineId: machineId)
+    /// Switch the page to another copy (On Your Servers), by
+    /// `DetailCopy.id`. No-op when the page has no such copy.
+    func selectCopy(copyID: String) {
+        copySelection.select(copyID: copyID)
     }
 
     /// Repaint everything tied to the selected copy.
@@ -748,7 +748,7 @@ final class MediaDetailChromeView: UIView {
     /// always be read) and any unowned one another server holds.
     private func insertWaysToWatchButtonIfNeeded() {
         guard !copySelection.copies.isEmpty, versionsButton == nil else { return }
-        let button = makeCircleButton(systemImage: "square.stack")
+        let button = makeCircleButton(systemImage: "square.stack", caption: "Ways to Watch")
         button.onPrimaryAction = { [weak self, weak button] in
             guard let self, let button, let host = self.hostViewController else { return }
             self.copySelection.present(from: host, sourceFrame: button.convert(button.bounds, to: nil))
@@ -767,7 +767,7 @@ final class MediaDetailChromeView: UIView {
     /// this device has nothing registered to open it.
     private func addTrailerButton(_ detail: MediaItemDetail) {
         guard let url = detail.externalTrailerURL, UIApplication.shared.canOpenURL(url) else { return }
-        let trailer = makeCircleButton(systemImage: "play.rectangle")
+        let trailer = makeCircleButton(systemImage: "play.rectangle", caption: "Trailer")
         trailer.onPrimaryAction = {
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
         }
@@ -799,13 +799,13 @@ final class MediaDetailChromeView: UIView {
         // the Play target resolves async in `resolvePlayTarget`.
         setPlayTarget(item)
 
-        let watched = makeCircleButton(systemImage: "checkmark")
+        let watched = makeCircleButton(systemImage: "checkmark", caption: "Watched")
         watchedButton = watched
         heroWatched = item.isWatched
         updateWatchedIcon()
         watched.onPrimaryAction = { [weak self] in self?.toggleWatched(item) }
 
-        let watchlist = makeCircleButton(systemImage: "plus")     // add to watchlist
+        let watchlist = makeCircleButton(systemImage: "plus", caption: "Watchlist")     // add to watchlist
         watchlistButton = watchlist
         heroOnWatchlist = false
         updateWatchlistIcon()
@@ -817,7 +817,7 @@ final class MediaDetailChromeView: UIView {
         }
         watchlist.onPrimaryAction = { [weak self] in self?.toggleWatchlist(item) }
 
-        let info = makeCircleButton(systemImage: "text.page")     // open details popup
+        let info = makeCircleButton(systemImage: "text.page", caption: "Info")     // open details popup
         infoButton = info
         info.onPrimaryAction = { [weak self] in
             guard let self, let detail = self.copySelection.selectedDetail ?? self.detail else { return }
@@ -835,7 +835,7 @@ final class MediaDetailChromeView: UIView {
         // An episode's Watched acts on the episode alone; the whole show is
         // marked from the show's own page, which this opens.
         if item.kind == .episode, let showRef = item.grandparentRef, !showRef.itemID.isEmpty {
-            let goToShow = makeCircleButton(systemImage: "tv")
+            let goToShow = makeCircleButton(systemImage: "tv", caption: "Go to Show")
             goToShow.onPrimaryAction = { [weak self] in
                 guard let self, let host = self.hostViewController else { return }
                 PreviewCarouselViewController.openShowDetail(showRef, from: host)
@@ -856,7 +856,7 @@ final class MediaDetailChromeView: UIView {
     private func rebuildMetadataOnlyActions(item: MediaItem) {
         let pill = makeWatchlistPill(item: item)
 
-        let info = makeCircleButton(systemImage: "text.page")
+        let info = makeCircleButton(systemImage: "text.page", caption: "Info")
         metadataInfoButton = info
         info.onPrimaryAction = { [weak self] in
             guard let self, let detail = self.copySelection.selectedDetail ?? self.detail else { return }
@@ -1175,9 +1175,10 @@ final class MediaDetailChromeView: UIView {
         playTitleLabel?.text = EpisodePicker.playTitle(for: target, on: item?.kind ?? target.kind)
     }
 
-    private func makeCircleButton(systemImage: String) -> FocusableActionButton {
+    private func makeCircleButton(systemImage: String, caption: String) -> FocusableActionButton {
         let circle = FocusableActionButton()
         circle.translatesAutoresizingMaskIntoConstraints = false
+        circle.focusCaption = caption
         circle.layer.cornerRadius = Self.actionButtonHeight / 2
 
         let icon = UIImageView(image: UIImage(systemName: systemImage))

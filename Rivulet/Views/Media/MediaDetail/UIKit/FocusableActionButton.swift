@@ -40,6 +40,32 @@ final class FocusableActionButton: UIControl {
     /// Invoked on Select (`.primaryActionTriggered`).
     var onPrimaryAction: (() -> Void)?
 
+    /// A name shown under the button while it is focused ("Watchlist",
+    /// "Ways to Watch"), as the Apple TV app labels its circle buttons. Hidden
+    /// at rest, so it never covers anything the focus engine could move to.
+    var focusCaption: String? {
+        didSet {
+            captionLabel.text = focusCaption
+            if focusCaption != nil, captionLabel.superview == nil { installCaption() }
+        }
+    }
+    private let captionLabel = UILabel()
+
+    private func installCaption() {
+        captionLabel.translatesAutoresizingMaskIntoConstraints = false
+        captionLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        captionLabel.textColor = UIColor.white.withAlphaComponent(0.9)
+        captionLabel.textAlignment = .center
+        captionLabel.isHidden = true
+        captionLabel.alpha = 0
+        captionLabel.isUserInteractionEnabled = false
+        addSubview(captionLabel)
+        NSLayoutConstraint.activate([
+            captionLabel.topAnchor.constraint(equalTo: bottomAnchor, constant: 14),
+            captionLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+        ])
+    }
+
     /// Focus appearance. `.pill` (default) inverts to a white fill with black
     /// content — the action-row look. `.glass` keeps the content white and uses
     /// the app's glass convention (subtle white fill + 1px border + gentle
@@ -126,6 +152,14 @@ final class FocusableActionButton: UIControl {
                     : UIColor.white.withAlphaComponent(0.08)).cgColor
             }
             return
+        }
+        if focusCaption != nil {
+            if focused { captionLabel.isHidden = false }
+            coordinator.addCoordinatedAnimations({ [weak self] in self?.captionLabel.alpha = focused ? 1 : 0 },
+                                                 completion: { [weak self] in
+                guard let self, !self.isFocused else { return }
+                self.captionLabel.isHidden = true
+            })
         }
         coordinator.addCoordinatedAnimations { [weak self] in
             guard let self else { return }

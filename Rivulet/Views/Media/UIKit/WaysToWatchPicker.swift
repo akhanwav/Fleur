@@ -35,8 +35,10 @@ struct DetailCopy {
         let ratingKey: String
     }
 
-    let machineId: String
+    var machineId: String
     let serverName: String
+    /// The page's own item (on the main server), which plays through the
+    /// page's own route. Another library's copy on the main server is not.
     let isMainServer: Bool
     /// That server's own view of the title: its watch state and resume point.
     var item: MediaItem
@@ -49,11 +51,14 @@ struct DetailCopy {
     var playTarget: MediaItem?
 
     var sources: [MediaSource] { VersionRanking.ordered(detail?.mediaSources ?? []) }
+    /// A server can hold the title in several libraries: a copy is a server
+    /// and an item.
+    var id: String { "\(machineId):\(remote?.ratingKey ?? item.ref.itemID)" }
 }
 
 @MainActor
 final class DetailCopySelection {
-    /// A server to open the next page for a title on, keyed by Plex guid or
+    /// A copy (`DetailCopy.id`) to open the next page for a title on, keyed by Plex guid or
     /// `"tmdb:<movie|tv>:<id>"`: set by a pick that opens a page (Continue
     /// Watching's menu), read once by that page.
     static var pendingServer: [String: String] = [:]
@@ -93,12 +98,9 @@ final class DetailCopySelection {
     func load(item: MediaItem, mainDetail: MediaItemDetail?) {
         reset()
         let current = token
-        let main = ServerPreferences.mainMachineId
-            ?? PlexAuthManager.shared.selectedServer?.machineIdentifier ?? "main"
+        let main = Self.mainMachineId ?? "main"
         if !item.isMetadataOnly {
-            let name = item.ref.isPlex
-                ? (PlexAuthManager.shared.selectedServer?.sourceTitle ?? PlexAuthManager.shared.selectedServer?.name)
-                : nil
+            let name = item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil
             copies = [DetailCopy(machineId: main, serverName: name ?? "This Server", isMainServer: true,
                                  item: item, detail: mainDetail, remote: nil)]
             selectedIndex = 0
@@ -109,16 +111,44 @@ final class DetailCopySelection {
         Task { @MainActor [weak self] in
             let (guid, tmdbKey, remote) = await Self.otherCopies(of: item, mainDetail: mainDetail)
             guard let guid, let self, self.token == current else { return }
-            let all = ServerPreferences.sorted(self.copies.filter(\.isMainServer) + remote, by: \.machineId)
+            var own = self.copies.filter(\.isMainServer)
+            // The lookup searches the main server too, so it finds the
+            // page's own item again: list that one once, as the page's.
+            if let mainId = Self.mainMachineId {
+                for index in own.indices { own[index].machineId = mainId }
+            }
+            let ownIDs = Set(own.map(\.id))
+            let all = Self.ordered(own + remote.filter { !ownIDs.contains($0.id) })
             let pending = Self.pendingServer.removeValue(forKey: guid)
                 ?? tmdbKey.flatMap { Self.pendingServer.removeValue(forKey: $0) }
             let preferred = [pending, ServerPreferences.lastWatchedServer(forGuid: guid)].compactMap { $0 }
-            let index = preferred.lazy.compactMap { id in all.firstIndex { $0.machineId == id } }.first
+            // A pending pick names a copy; last watched names a server.
+            let index = preferred.lazy.compactMap { id in
+                all.firstIndex { $0.id == id } ?? all.firstIndex { $0.machineId == id }
+            }.first
+            // No pending pick and never watched: the first server in the
+            // Settings order, its best copy first (`ordered`).
             self.copies = all
             self.selectedIndex = all.isEmpty ? nil : (index ?? 0)
             self.selectedMediaID = nil
             self.onChange?()
         }
+    }
+
+    /// The main server's machine id, also when `selectedServer` is nil
+    /// after a relaunch (the lookup stores it once it resolves servers).
+    static var mainMachineId: String? {
+        ServerPreferences.mainMachineId ?? PlexAuthManager.shared.selectedServer?.machineIdentifier
+    }
+
+    /// Server order from Settings, then best quality first within a server.
+    static func ordered(_ copies: [DetailCopy]) -> [DetailCopy] {
+        let ranking = VersionRanking.ordered(copies.flatMap(\.sources)).map(\.id)
+        func best(_ copy: DetailCopy) -> Int {
+            copy.sources.compactMap { ranking.firstIndex(of: $0.id) }.min() ?? Int.max
+        }
+        let byQuality = copies.sorted { best($0) < best($1) }
+        return ServerPreferences.sorted(byQuality, by: \.machineId)
     }
 
     /// Every OTHER server's copy of `item`, read from each server, with the
@@ -143,9 +173,11 @@ final class DetailCopySelection {
         return (guid, tmdbKey, copies)
     }
 
-    /// Point the page at another copy (and optionally one of its versions).
-    func select(machineId: String, mediaID: String? = nil) {
-        guard let index = copies.firstIndex(where: { $0.machineId == machineId }) else { return }
+    /// Point the page at a copy (by `DetailCopy.id`, or the best copy on a
+    /// server by its machine id), and optionally one of its versions.
+    func select(copyID: String, mediaID: String? = nil) {
+        guard let index = copies.firstIndex(where: { $0.id == copyID })
+                ?? copies.firstIndex(where: { $0.machineId == copyID }) else { return }
         selectedIndex = index
         selectedMediaID = mediaID
         onChange?()
@@ -163,14 +195,14 @@ final class DetailCopySelection {
                 // A show has no file of its own: one row per server.
                 let next = copy.playTarget.map { EpisodePicker.playTitle(for: $0, on: .show) }
                 let label = [copy.serverName, next ?? resume].compactMap { $0 }.joined(separator: " · ")
-                actions.append(row(label, selected: index == selectedIndex, machineId: copy.machineId, mediaID: nil))
+                actions.append(row(label, selected: index == selectedIndex, copyID: copy.id, mediaID: nil))
                 continue
             }
             for (sourceIndex, (source, label)) in zip(sources, VersionPicker.labels(for: sources)).enumerated() {
                 let isSelected = index == selectedIndex
                     && (selectedMediaID.map { $0 == source.id } ?? (sourceIndex == 0))
                 let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")
-                actions.append(row(text, selected: isSelected, machineId: copy.machineId, mediaID: source.id))
+                actions.append(row(text, selected: isSelected, copyID: copy.id, mediaID: source.id))
             }
         }
         guard !actions.isEmpty else { return }
@@ -179,9 +211,9 @@ final class DetailCopySelection {
         host.topmostPresented.present(popup, animated: false)
     }
 
-    private func row(_ title: String, selected: Bool, machineId: String, mediaID: String?) -> TileMenuAction {
+    private func row(_ title: String, selected: Bool, copyID: String, mediaID: String?) -> TileMenuAction {
         TileMenuAction(title: title, systemImage: selected ? "checkmark.circle.fill" : "circle") { [weak self] in
-            self?.select(machineId: machineId, mediaID: mediaID)
+            self?.select(copyID: copyID, mediaID: mediaID)
         }
     }
 

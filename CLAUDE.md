@@ -624,14 +624,15 @@ different thresholds. Do not add a fourth: extend the policy.
 
 Two rules that look wrong until you know them:
 - **A resume point outranks the watched flag.** `PlexMetadata.isWatched` reports
-  false while a rewatch is in progress, and the poster/episode cells draw the
-  progress bar *instead of* the watched glyph. A label keyed on
+  false while a rewatch is in progress, and the episode cells draw the
+  progress bar *instead of* the watched glyph. Posters draw neither (only a
+  show's unwatched-count pill); progress lives on the detail page. A label keyed on
   `viewOffset > 0 && !isWatched` mislabels a resumable rewatch (issue #270).
   `MediaUserState.isInProgress` adds `!isPlayed` for exactly one reason: On Deck
   must advance past a finished episode.
 - **Drawing a partial progress bar is a different rule** (`0 < fraction < 1`) and
   lives at the render sites on purpose. Folding it into the 90% ceiling changes
-  every tile.
+  every card.
 
 **Changing watch state must repaint.** `.plexDataNeedsRefresh` is the live
 channel; all three UIKit surfaces observe it. Post it after the server call.

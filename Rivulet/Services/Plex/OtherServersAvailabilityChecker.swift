@@ -5,9 +5,9 @@
 //  OtherServersAvailabilityChecker.swift
 //  Rivulet
 //
-//  Which Plex servers this account can reach, OWNED or SHARED, other than the
-//  selected one, hold a given title — "On Your Servers" on an unowned detail
-//  page and the other-server rows of Ways to Watch.
+//  Which Plex servers this account can reach, OWNED or SHARED, hold a given
+//  title, and as which items (one server can hold it in several libraries,
+//  a 4K one beside a 1080p one): "On Your Servers" and Ways to Watch.
 //
 //  One title at a time: each server is asked for the title's Plex guid
 //  (`/library/all?guid=plex://…`), all servers in parallel, each with a short
@@ -38,6 +38,9 @@ actor OtherServersAvailabilityChecker {
         let token: String
         let ratingKey: String
         let machineId: String
+        /// One server can hold a title more than once (a 1080p library and
+        /// a 4K one), so a copy is a server AND an item.
+        var id: String { "\(machineId):\(ratingKey)" }
     }
 
     private struct Server: Sendable {
@@ -60,13 +63,13 @@ actor OtherServersAvailabilityChecker {
     private var copiesCache: [String: [ServerCopy]] = [:]
     private var tmdbGuidCache: [String: String] = [:]
 
-    /// Every other reachable server holding `tmdbId` as a `type`.
+    /// Every copy of `tmdbId` as a `type` on a reachable server, main included.
     func copies(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> [ServerCopy] {
         guard let plexGuid = await plexGuid(forTmdbId: tmdbId, type: type) else { return [] }
         return await copies(plexGuid: plexGuid)
     }
 
-    /// Every other reachable server holding the title with this Plex guid
+    /// Every copy, on every reachable server (main included), of the title with this Plex guid
     /// ("plex://movie/…", "plex://show/…", "plex://episode/…"), limited to
     /// the servers turned on in Settings and in the user's order. Cached per
     /// guid for the session's server list; the settings apply on every call.
@@ -79,13 +82,13 @@ actor OtherServersAvailabilityChecker {
         let servers = await reachableServers()
         if let cached = copiesCache[plexGuid] { return cached }
         let start = ContinuousClock.now
-        let found = await withTaskGroup(of: ServerCopy?.self) { group in
+        let found = await withTaskGroup(of: [ServerCopy].self) { group in
             for server in servers {
                 group.addTask { await Self.lookup(plexGuid, on: server) }
             }
             var found: [ServerCopy] = []
-            for await copy in group { if let copy { found.append(copy) } }
-            return found.sorted { $0.serverName < $1.serverName }
+            for await copies in group { found += copies }
+            return found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
         }
         copiesCache[plexGuid] = found
         otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
@@ -94,26 +97,30 @@ actor OtherServersAvailabilityChecker {
 
     // MARK: - Lookup
 
-    private static func lookup(_ plexGuid: String, on server: Server) async -> ServerCopy? {
+    /// Every item on `server` with this guid, across all of its libraries.
+    private static func lookup(_ plexGuid: String, on server: Server) async -> [ServerCopy] {
         let start = ContinuousClock.now
-        guard var components = URLComponents(string: "\(server.serverURL)/library/all") else { return nil }
+        guard var components = URLComponents(string: "\(server.serverURL)/library/all") else { return [] }
         var query = [URLQueryItem(name: "guid", value: plexGuid),
                      // Container-Size is ignored without Start (CLAUDE.md).
                      URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
-                     URLQueryItem(name: "X-Plex-Container-Size", value: "5")]
+                     URLQueryItem(name: "X-Plex-Container-Size", value: "20")]
         if let type = plexType(of: plexGuid) { query.append(URLQueryItem(name: "type", value: type)) }
         components.queryItems = query
-        guard let url = components.url else { return nil }
+        guard let url = components.url else { return [] }
         let headers = await PlexNetworkManager.shared.plexHeaders(authToken: server.token)
         let container: PlexMediaContainerWrapper? = try? await PlexNetworkManager.shared.request(
             url, headers: headers, timeout: lookupTimeout)
         // Checked, not trusted: a server that ignored the filter must not
-        // pass its first item off as this title.
-        let match = container?.MediaContainer.Metadata?.first { $0.guid == plexGuid }
-        otherServersLog.debug("[OtherServers] \(server.name, privacy: .public): \(match == nil ? "no" : "yes", privacy: .public) in \(ms(since: start), privacy: .public)ms\(container == nil ? " (failed or timed out)" : "", privacy: .public)")
-        guard let ratingKey = match?.ratingKey else { return nil }
-        return ServerCopy(serverName: server.name, serverURL: server.serverURL, token: server.token,
-                          ratingKey: ratingKey, machineId: server.machineId)
+        // pass its other items off as this title.
+        let matches = (container?.MediaContainer.Metadata ?? []).filter { $0.guid == plexGuid }
+        otherServersLog.debug("[OtherServers] \(server.name, privacy: .public): \(matches.count, privacy: .public) copies in \(ms(since: start), privacy: .public)ms\(container == nil ? " (failed or timed out)" : "", privacy: .public)")
+        return matches.compactMap { match in
+            match.ratingKey.map { ratingKey in
+                ServerCopy(serverName: server.name, serverURL: server.serverURL, token: server.token,
+                           ratingKey: ratingKey, machineId: server.machineId)
+            }
+        }
     }
 
     /// Plex's search type for a guid's kind: movie 1, show 2, episode 4.
@@ -157,7 +164,7 @@ actor OtherServersAvailabilityChecker {
         _ = await reachableServers()
     }
 
-    /// The other servers that answered a probe, resolved once per
+    /// The servers that answered a probe (main included), resolved once per
     /// `serversTTL`. Unreachable servers are left out until the next resolve.
     private func reachableServers() async -> [Server] {
         if let resolvedAt = serversResolvedAt, Date().timeIntervalSince(resolvedAt) > Self.serversTTL {
@@ -174,13 +181,16 @@ actor OtherServersAvailabilityChecker {
 
     private static func resolveServers() async -> [Server] {
         let start = ContinuousClock.now
-        let (authToken, selectedMachineId): (String?, String?) = await MainActor.run {
-            (PlexAuthManager.shared.authToken, PlexAuthManager.shared.selectedServer?.machineIdentifier)
-        }
+        let authToken = await MainActor.run { PlexAuthManager.shared.authToken }
         guard let authToken,
               let devices = try? await PlexNetworkManager.shared.getServers(authToken: authToken) else {
             otherServersLog.error("[OtherServers] getServers failed; no cross-server lookups until the next resolve")
             return []
+        }
+        // Not `selectedServer` alone: it is nil after a relaunch, which made
+        // the main server count as "another" one and list its copy twice.
+        let selectedMachineId = await MainActor.run {
+            PlexAuthManager.shared.mainServer(in: devices)?.machineIdentifier
         }
         // Settings lists every server, main included, without a fetch of its own.
         ServerPreferences.setMainMachineId(selectedMachineId)
@@ -189,7 +199,16 @@ actor OtherServersAvailabilityChecker {
             return .init(machineId: id, name: device.sourceTitle ?? device.name)
         })
         let others = devices.filter { $0.machineIdentifier != nil && $0.machineIdentifier != selectedMachineId }
-        let servers = await withTaskGroup(of: Server?.self) { group in
+        // The main server is searched too, on the connection the app already
+        // uses: it can hold a title twice (a 4K library beside a 1080p one).
+        // Callers drop the copy their page already shows.
+        let main: Server? = await MainActor.run {
+            let auth = PlexAuthManager.shared
+            guard let id = selectedMachineId, let url = auth.selectedServerURL,
+                  let token = auth.selectedServerToken else { return nil }
+            return Server(machineId: id, name: auth.mainServerName ?? "Main Server", serverURL: url, token: token)
+        }
+        var servers = await withTaskGroup(of: Server?.self) { group in
             for device in others {
                 group.addTask {
                     guard let machineId = device.machineIdentifier, let token = device.accessToken,
@@ -202,7 +221,8 @@ actor OtherServersAvailabilityChecker {
             for await server in group { if let server { servers.append(server) } }
             return servers
         }
-        otherServersLog.info("[OtherServers] \(servers.count, privacy: .public) of \(others.count, privacy: .public) other server(s) reachable, resolved in \(ms(since: start), privacy: .public)ms")
+        if let main { servers.append(main) }
+        otherServersLog.info("[OtherServers] \(servers.count, privacy: .public) of \(others.count + 1, privacy: .public) server(s) reachable, resolved in \(ms(since: start), privacy: .public)ms")
         return servers
     }
 

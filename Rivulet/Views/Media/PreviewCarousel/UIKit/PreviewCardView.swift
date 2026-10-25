@@ -347,8 +347,8 @@ final class PreviewCardView: UICollectionViewCell {
     var onShowInfo: ((MediaItemDetail) -> Void)?
 
     /// Switch the hero to another server's copy of this title.
-    func selectCopy(machineId: String) {
-        chromeView.selectCopy(machineId: machineId)
+    func selectCopy(copyID: String) {
+        chromeView.selectCopy(copyID: copyID)
     }
 
     /// Repaint the hero chrome's watch-derived bits from a re-fetched copy of

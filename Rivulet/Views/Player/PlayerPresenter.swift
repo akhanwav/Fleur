@@ -65,7 +65,7 @@ enum PlayerPresenter {
         // "Last watched on" for the copy a detail page opens on. Another
         // server's plays are recorded by `RemoteCopyPlayer`, which knows it.
         if viewModel.serverURL == PlexAuthManager.shared.selectedServerURL,
-           let main = PlexAuthManager.shared.selectedServer?.machineIdentifier {
+           let main = DetailCopySelection.mainMachineId {
             ServerPreferences.recordWatched(
                 guids: [viewModel.metadata.guid, viewModel.metadata.grandparentGuid], machineId: main)
         }

@@ -6961,18 +6961,18 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         Task { @MainActor [weak self] in
             guard let self, let detail = try? await provider.fullDetail(for: item.ref) else { return }
             let (guid, _, others) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
-            let mainName = self.authManager.selectedServer?.sourceTitle ?? self.authManager.selectedServer?.name ?? "This Server"
-            let main = self.authManager.selectedServer?.machineIdentifier ?? "main"
-            var rows: [(id: String, label: String, isCurrent: Bool)] = [
-                (main, [mainName, DetailCopySelection.resumeText(item), "Current"].compactMap { $0 }
-                    .joined(separator: " · "), true)
-            ]
-            rows += others.map { copy in
-                (copy.machineId, [copy.serverName, copy.sources.first.map(VersionPicker.rowLabel),
-                                  DetailCopySelection.resumeText(copy.item)].compactMap { $0 }
-                    .joined(separator: " · "), false)
+            let main = DetailCopySelection.mainMachineId ?? "main"
+            let ownID = "\(main):\(item.ref.itemID)"
+            let own = DetailCopy(machineId: main, serverName: self.authManager.mainServerName ?? "This Server",
+                                 isMainServer: true, item: item, detail: detail, remote: nil)
+            // The lookup searches the main server too: this tile's own item
+            // comes back from it, and is listed once, as the current copy.
+            let copies = DetailCopySelection.ordered([own] + others.filter { $0.id != ownID })
+            let rows = copies.map { copy in
+                (id: copy.id, isCurrent: copy.id == ownID,
+                 label: [copy.serverName, copy.sources.first.map(VersionPicker.rowLabel),
+                         DetailCopySelection.resumeText(copy.item)].compactMap { $0 }.joined(separator: " · "))
             }
-            rows = ServerPreferences.sorted(rows, by: \.id)
             let actions = rows.map { row in
                 TileMenuAction(title: row.label,
                                systemImage: row.isCurrent ? "checkmark.circle.fill" : "circle") { [weak self] in

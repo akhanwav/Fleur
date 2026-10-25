@@ -15,7 +15,7 @@
 //  doesn't render a caption either; the title surfaces in the preview
 //  overlay / detail view instead.
 //
-//  Overlay subviews (watched badge, in-progress info bar, failure icon)
+//  Overlay subviews (unwatched-count badge, server badge, failure icon)
 //  live in a sibling `overlayContainer` view that:
 //    * matches the poster's image surface
 //    * applies its own 20pt corner mask so the watched corner-tag clips
@@ -30,12 +30,9 @@
 //  inherit clipping correctly. The sibling-with-matching-transform
 //  approach is reliable on both counts.
 //
-//  In-progress composition matches Continue Watching exactly (per user
-//  direction): a MediaProgressInfoBar (play.fill icon + 44pt capsule
-//  progress + "S1, E2 . 35m" info text) directly over the art — no dark
-//  gradient/scrim behind it (removed 2026-06-10; it read as a bad shadow).
-//  Only renders when `0 < item.watchProgress < 1`. Watched and
-//  unwatched items show no bottom bar.
+//  No watch-progress bar and no watched glyph on a poster: progress shows
+//  on the title's detail page (and on Continue Watching's own cards). A
+//  show with unwatched episodes keeps its count pill.
 //
 
 import UIKit
@@ -56,43 +53,15 @@ final class PosterCell: UICollectionViewCell {
     private let watchedBadge = PosterWatchedBadge()
     private let sourceBadge = SourceBadgeView(style: .onArtwork)
     private let failureIcon = UIImageView()
-    private let progressInfoBar = MediaProgressInfoBar()
-
-    /// Apple-style "watched" indicator, bottom-left (same slot as the play
-    /// icon + progress bar). Replaces the old top-trailing corner checkmark.
-    private let watchedGlyph = WatchedGlyphView()
 
     /// Glass card shown in place of the bare `TVPosterView` gray while the
     /// artwork loads (and on a genuine load failure, with the faint type icon
     /// on top). Plain view, not a blur — a UIVisualEffectView per cell is a
-    /// measured perf cost (see `bottomInfoBlur`).
+    /// measured perf cost.
     private let placeholderPanel = UIView()
     private let loadingSpinner = UIActivityIndicatorView(style: .large)
     /// Delays the spinner so a fast cache hit doesn't flash it on scroll.
     private var spinnerDelayTask: Task<Void, Never>?
-    /// ATV+ legibility band: bottom-quarter blur under the info bar.
-    /// Toggled together with `progressInfoBar` (in-progress items only).
-    /// LAZY: a UIVisualEffectView per cell was a measured chunk of the
-    /// 5s launch dataSource.apply (40-60 instances realized per apply);
-    /// most posters are not in-progress and never need one.
-    private var bottomInfoBlur: BottomInfoBlurView?
-
-    @discardableResult
-    private func ensureBottomInfoBlur() -> BottomInfoBlurView {
-        if let existing = bottomInfoBlur { return existing }
-        let blur = BottomInfoBlurView()
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        // Under the info bar in z-order.
-        overlayContainer.insertSubview(blur, belowSubview: progressInfoBar)
-        NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor),
-            blur.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor),
-            blur.heightAnchor.constraint(equalTo: overlayContainer.heightAnchor, multiplier: 0.25)
-        ])
-        bottomInfoBlur = blur
-        return blur
-    }
 
     private var imageLoadTask: Task<Void, Never>?
     private var currentURL: URL?
@@ -163,11 +132,6 @@ final class PosterCell: UICollectionViewCell {
         loadingSpinner.hidesWhenStopped = true
         overlayContainer.addSubview(loadingSpinner)
 
-        // (The blur band is created lazily — see ensureBottomInfoBlur.)
-        progressInfoBar.translatesAutoresizingMaskIntoConstraints = false
-        progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
-        overlayContainer.addSubview(progressInfoBar)
-
         // Watched badge: top-trailing, 10pt inset (mirrors SwiftUI `.padding(10)`).
         watchedBadge.translatesAutoresizingMaskIntoConstraints = false
         watchedBadge.isHidden = true
@@ -185,10 +149,6 @@ final class PosterCell: UICollectionViewCell {
         failureIcon.isHidden = true
         overlayContainer.addSubview(failureIcon)
 
-        // Watched glyph: bottom-left, same slot as the progress bar / play icon.
-        watchedGlyph.isHidden = true
-        overlayContainer.addSubview(watchedGlyph)
-
         posterWidthConstraint = posterView.widthAnchor.constraint(equalToConstant: posterWidth)
         posterHeightConstraint = posterView.heightAnchor.constraint(equalToConstant: posterHeight)
         NSLayoutConstraint.activate([
@@ -204,14 +164,6 @@ final class PosterCell: UICollectionViewCell {
             overlayContainer.bottomAnchor.constraint(equalTo: posterView.imageView.bottomAnchor),
             overlayContainer.leadingAnchor.constraint(equalTo: posterView.imageView.leadingAnchor),
             overlayContainer.trailingAnchor.constraint(equalTo: posterView.imageView.trailingAnchor),
-
-            // Info bar pinned to the bottom of the overlay container
-            // (= bottom of the poster). Insets match ContinueWatchingCell
-            // (16 leading / 15 bottom) so the two read identically. The blur
-            // band's constraints live in ensureBottomInfoBlur (lazy).
-            progressInfoBar.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 16),
-            progressInfoBar.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -16),
-            progressInfoBar.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor, constant: -15),
 
             watchedBadge.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: 10),
             watchedBadge.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -10),
@@ -230,10 +182,6 @@ final class PosterCell: UICollectionViewCell {
             placeholderPanel.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor),
             loadingSpinner.centerXAnchor.constraint(equalTo: overlayContainer.centerXAnchor),
             loadingSpinner.centerYAnchor.constraint(equalTo: overlayContainer.centerYAnchor),
-
-            // Watched glyph shares the progress bar's bottom-left anchor.
-            watchedGlyph.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 16),
-            watchedGlyph.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor, constant: -15)
         ])
     }
 
@@ -250,7 +198,6 @@ final class PosterCell: UICollectionViewCell {
         let longSide = max(artSize.width, artSize.height)
         let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1
         coordinator.addCoordinatedAnimations({
-            self.progressInfoBar.setFocused(nowFocused)
             self.overlayContainer.transform = nowFocused
                 ? CGAffineTransform(scaleX: scale, y: scale)
                 : .identity
@@ -294,7 +241,6 @@ final class PosterCell: UICollectionViewCell {
         setSquare(["artist", "album", "track"].contains(item.type ?? ""))
         let url = posterURL(for: item)
         loadImage(from: url, item: item)
-        configureProgressBar(item: item)
         configureWatchedBadge(item: item)
     }
 
@@ -306,7 +252,6 @@ final class PosterCell: UICollectionViewCell {
         // show art instead of letterboxed episode stills, matching the Plex path.
         let url = item.grandparentArtwork?.poster ?? item.artwork.poster
         loadImage(from: url, failureKind: item.kind)
-        configureProgressBar(item: item)
         configureWatchedBadge(item: item)
     }
 
@@ -347,11 +292,8 @@ final class PosterCell: UICollectionViewCell {
         placeholderPanel.isHidden = true
         currentURL = nil
         clearArtwork()
-        progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
-        progressInfoBar.reset()
         watchedBadge.isHidden = true
         sourceBadge.text = nil
-        watchedGlyph.isHidden = true
         failureIcon.isHidden = true
         failureIcon.image = nil
         // A recycled cell must not inherit a prior occupant's stranded focus
@@ -507,25 +449,7 @@ final class PosterCell: UICollectionViewCell {
         return URL(string: "\(serverURL)\(path)?X-Plex-Token=\(token)")
     }
 
-    // MARK: - In-progress bar (CW-style)
-
-    private func configureProgressBar(item: PlexMetadata) {
-        // Show the CW-style info bar only when an item is in progress
-        // (0 < watchProgress < 1). Audio items (album / artist / track)
-        // suppress progress entirely.
-        if isAudioItem(item) {
-            progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
-            progressInfoBar.reset()
-            return
-        }
-        if let progress = item.watchProgress, progress > 0, progress < 1 {
-            progressInfoBar.isHidden = false; ensureBottomInfoBlur().isHidden = false
-            progressInfoBar.configure(item: item)
-        } else {
-            progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
-            progressInfoBar.reset()
-        }
-    }
+    // MARK: - Unwatched-count badge
 
     private func isAudioItem(_ item: PlexMetadata) -> Bool {
         switch item.type {
@@ -534,139 +458,27 @@ final class PosterCell: UICollectionViewCell {
         }
     }
 
-    // MARK: - Watched badge
-
+    /// A show with unwatched episodes gets the blue count pill (top-right);
+    /// nothing else gets a watch indicator on its poster.
     private func configureWatchedBadge(item: PlexMetadata) {
-        // Ladder:
-        //  1. Audio items: nothing.
-        //  2. TV show with leafCount > 0 and unwatched > 0: blue count pill (top-right).
-        //  3. Fully watched (show / movie / episode): rewatch glyph (bottom-left).
-        if isAudioItem(item) {
-            hideWatchedIndicators()
-            return
+        if !isAudioItem(item), item.type == "show", let leafCount = item.leafCount, leafCount > 0 {
+            let unwatched = leafCount - (item.viewedLeafCount ?? 0)
+            if unwatched > 0 { showUnwatchedCount(unwatched); return }
         }
-        if item.type == "show", let leafCount = item.leafCount, leafCount > 0 {
-            let viewed = item.viewedLeafCount ?? 0
-            let unwatched = leafCount - viewed
-            if unwatched > 0 {
-                showUnwatchedCount(unwatched)
-                return
-            }
-            if viewed >= leafCount {
-                showWatchedGlyph()
-                return
-            }
-        }
-        if isFullyWatched(item) {
-            showWatchedGlyph()
-            return
-        }
-        hideWatchedIndicators()
-    }
-
-    /// Mirror of SwiftUI `MediaPosterCard.isFullyWatched`.
-    private func isFullyWatched(_ item: PlexMetadata) -> Bool {
-        guard let viewCount = item.viewCount, viewCount > 0 else { return false }
-        if let progress = item.watchProgress, progress > 0, progress < 1 {
-            return false
-        }
-        if let viewOffset = item.viewOffset, let duration = item.duration {
-            let remaining = duration - viewOffset
-            if remaining > 60_000 { return false }   // >1 minute left
-        }
-        return true
-    }
-
-    // MARK: - MediaItem progress bar
-
-    private func configureProgressBar(item: MediaItem) {
-        // MediaItem has no audio kind equivalent; only person/collection are
-        // "no progress" -- treat anything without a runtime as suppressed.
-        guard item.kind != .person, item.kind != .collection else {
-            progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
-            progressInfoBar.reset()
-            return
-        }
-        let offset = item.userState.viewOffset
-        let fraction: Double
-        if let rt = item.runtime, rt > 0 {
-            fraction = offset / rt
-        } else {
-            fraction = 0
-        }
-        if fraction > 0 && fraction < 1 {
-            progressInfoBar.isHidden = false; ensureBottomInfoBlur().isHidden = false
-            progressInfoBar.configure(item: item)
-        } else {
-            progressInfoBar.isHidden = true; bottomInfoBlur?.isHidden = true
-            progressInfoBar.reset()
-        }
-    }
-
-    // MARK: - MediaItem watched badge
-
-    private func configureWatchedBadge(item: MediaItem) {
-        // Watched is a video concept only. Music (artist/album/track map to
-        // .unknown), people, and collections never get a watched indicator.
-        switch item.kind {
-        case .movie, .show, .season, .episode: break
-        default:
-            hideWatchedIndicators()
-            return
-        }
-        // Shows: unwatched count pill (top-right), or fully-watched glyph.
-        if item.kind == .show, let cp = item.childProgress, cp.total > 0 {
-            let unwatched = cp.total - cp.played
-            if unwatched > 0 {
-                showUnwatchedCount(unwatched)
-                return
-            }
-            showWatchedGlyph()   // all episodes played
-            return
-        }
-        // Movies/episodes: the glyph shows only when watched AND not in progress.
-        // An item with an active resume point shows the progress bar instead —
-        // Plex shows one or the other, never both.
-        if isFullyWatched(item) {
-            showWatchedGlyph()
-            return
-        }
-        hideWatchedIndicators()
-    }
-
-    /// MediaItem twin of the PlexMetadata `isFullyWatched`. Uses the same
-    /// `0 < fraction < 1` in-progress test as `configureProgressBar(item:)`, so
-    /// the watched glyph and the progress bar are mutually exclusive.
-    private func isFullyWatched(_ item: MediaItem) -> Bool {
-        guard item.userState.isPlayed else { return false }
-        if let rt = item.runtime, rt > 0 {
-            let fraction = item.userState.viewOffset / rt
-            if fraction > 0, fraction < 1 { return false }   // in progress → bar wins
-        }
-        return true
-    }
-
-    // MARK: - Watched indicators
-
-    /// Fully watched → Apple-style rewatch glyph, bottom-left (same slot as the
-    /// play icon + progress bar). The top-right pill is for *unwatched* shows
-    /// only, so it's hidden here. No legibility band — the glyph relies on its
-    /// own soft shadow.
-    private func showWatchedGlyph() {
-        watchedGlyph.isHidden = false
         watchedBadge.isHidden = true
     }
 
-    /// Unwatched TV show → blue count pill, top-right.
+    private func configureWatchedBadge(item: MediaItem) {
+        if item.kind == .show, let cp = item.childProgress, cp.total > 0, cp.total > cp.played {
+            showUnwatchedCount(cp.total - cp.played)
+            return
+        }
+        watchedBadge.isHidden = true
+    }
+
     private func showUnwatchedCount(_ count: Int) {
         watchedBadge.setStyle(.unwatchedCount(count))
         watchedBadge.isHidden = false
-        watchedGlyph.isHidden = true
-    }
-
-    private func hideWatchedIndicators() {
-        watchedBadge.isHidden = true
-        watchedGlyph.isHidden = true
     }
 }
 

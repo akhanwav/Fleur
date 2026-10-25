@@ -394,11 +394,11 @@ final class MediaItemDetailPageViewController: UIViewController {
         playTitleLabel = title
 
         // Match the carousel chrome: Watched = checkmark, Watchlist = plus.
-        let watched = circleButton(systemImage: isWatched ? "checkmark.circle.fill" : "checkmark")
+        let watched = circleButton(systemImage: isWatched ? "checkmark.circle.fill" : "checkmark", caption: "Watched")
         watchedButton = watched
         watched.onPrimaryAction = { [weak self] in self?.toggleWatched() }
 
-        let watchlist = circleButton(systemImage: "plus")
+        let watchlist = circleButton(systemImage: "plus", caption: "Watchlist")
         watchlistButton = watchlist
         watchlist.onPrimaryAction = { [weak self] in self?.toggleWatchlist() }
         let ref = item.ref
@@ -413,7 +413,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         // An episode's Watched acts on the episode alone; the whole show is
         // marked from the show's own page, which this opens.
         if item.kind == .episode, let showRef, !showRef.itemID.isEmpty {
-            let goToShow = circleButton(systemImage: "tv")
+            let goToShow = circleButton(systemImage: "tv", caption: "Go to Show")
             goToShow.onPrimaryAction = { [weak self] in
                 guard let self else { return }
                 PreviewCarouselViewController.openShowDetail(showRef, show: self.show, from: self)
@@ -496,9 +496,10 @@ final class MediaItemDetailPageViewController: UIViewController {
         return row
     }
 
-    private func circleButton(systemImage: String) -> FocusableActionButton {
+    private func circleButton(systemImage: String, caption: String) -> FocusableActionButton {
         let b = FocusableActionButton()
         b.translatesAutoresizingMaskIntoConstraints = false
+        b.focusCaption = caption
         b.layer.cornerRadius = HeroPillButton.buttonHeight / 2
         let icon = UIImageView(image: UIImage(systemName: systemImage))
         icon.translatesAutoresizingMaskIntoConstraints = false
@@ -636,7 +637,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private func insertWaysToWatchButtonIfNeeded() {
         guard !copySelection.copies.isEmpty, versionsButton == nil, let row = actionRow,
               let watchlist = watchlistButton, let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
-        let button = circleButton(systemImage: "square.stack")
+        let button = circleButton(systemImage: "square.stack", caption: "Ways to Watch")
         button.onPrimaryAction = { [weak self, weak button] in
             guard let self, let button else { return }
             self.copySelection.present(from: self, sourceFrame: button.convert(button.bounds, to: nil))

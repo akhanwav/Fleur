@@ -466,6 +466,23 @@ class PlexAuthManager: ObservableObject {
     /// Whether a persisted URL plausibly belongs to `server`: its host:port
     /// matches one of the server's advertised connections (http or https), or
     /// the URL embeds the server's machineIdentifier (plex.direct form).
+    /// The selected (main) server among `servers`. `selectedServer` is often
+    /// nil after a relaunch (the app resumes on the saved URL alone), so match
+    /// it by object, then by the saved URL, then by the saved name.
+    func mainServer(in servers: [PlexDevice]) -> PlexDevice? {
+        if let id = selectedServer?.machineIdentifier,
+           let match = servers.first(where: { $0.machineIdentifier == id }) { return match }
+        if let url = selectedServerURL, let match = servers.first(where: { urlBelongs(url, to: $0) }) {
+            return match
+        }
+        return savedServerName.flatMap { name in servers.first(where: { $0.name == name }) }
+    }
+
+    /// The main server's display name, also when `selectedServer` is nil.
+    var mainServerName: String? {
+        selectedServer?.sourceTitle ?? selectedServer?.name ?? savedServerName
+    }
+
     private func urlBelongs(_ urlString: String, to server: PlexDevice) -> Bool {
         if let machineId = server.machineIdentifier, urlString.contains(machineId) {
             return true

@@ -50,10 +50,11 @@ struct BelowFoldContent: Sendable {
     var moreLikeThis: [MediaItem] = []
     /// TMDB watch/providers — metadata-only items only.
     var watchAvailability: MediaWatchAvailability?
-    /// Cross-server check ("On Your Servers") — metadata-only items only.
+    /// Cross-server check ("On Your Servers"): every Plex title and every
+    /// unowned one.
     /// `.checking` on first render; the host patches in the real answer once
     /// `OtherServersAvailabilityChecker` (slow on its first call this session)
-    /// resolves. nil means "not applicable" (an owned item never shows this).
+    /// resolves. nil means "not applicable" (Jellyfin, or an unmatched item).
     var serverAvailability: ServerAvailability?
 
     var hasEpisodes: Bool { !episodes.isEmpty }
@@ -71,6 +72,9 @@ nonisolated enum ServerAvailability: Hashable, Sendable {
 /// entry that switches the page to that copy.
 nonisolated struct ServerCopyEntry: Hashable, Sendable {
     let machineId: String
+    /// `DetailCopy.id`: one server can hold the title in several libraries.
+    var copyID: String { "\(machineId):\(ratingKey)" }
+    let ratingKey: String
     let serverName: String
     /// Best version's quality ("4K · Dolby Vision · …") for a movie, the
     /// episode count for a show, led by "Resume" when that server holds a
@@ -183,6 +187,10 @@ final class BelowFoldContentLoader {
             content.collection = related.collection
         }
 
+        // On Your Servers on every Plex title: every copy on every server,
+        // filled in by `loadServerAvailability` once the lookup answers.
+        if item.ref.isPlex, content.detail?.plexGuid != nil { content.serverAvailability = .checking }
+
         return content
     }
 
@@ -218,9 +226,16 @@ final class BelowFoldContentLoader {
     /// slow on its first call this session (pages every other server's
     /// library once, then caches for the rest of the session). Each match is
     /// then read on its own server for the entry's quality and resume line.
-    func loadServerAvailability(for item: MediaItem) async -> ServerAvailability? {
-        guard let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) else { return nil }
-        let copies = await OtherServersAvailabilityChecker.shared.copies(forTmdbId: tmdbId, type: type)
+    func loadServerAvailability(for item: MediaItem, detail: MediaItemDetail?) async -> ServerAvailability? {
+        let checker = OtherServersAvailabilityChecker.shared
+        let copies: [OtherServersAvailabilityChecker.ServerCopy]
+        if let guid = detail?.plexGuid {
+            copies = await checker.copies(plexGuid: guid)
+        } else if let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) {
+            copies = await checker.copies(forTmdbId: tmdbId, type: type)
+        } else {
+            return nil
+        }
         guard !copies.isEmpty else { return .notFound }
         let entries = await withTaskGroup(of: ServerCopyEntry.self) { group in
             for copy in copies {
@@ -231,8 +246,8 @@ final class BelowFoldContentLoader {
             return entries
         }
         // `copies` is already in the user's server order.
-        let order = copies.map(\.machineId)
-        return .found(entries.sorted { (order.firstIndex(of: $0.machineId) ?? 0) < (order.firstIndex(of: $1.machineId) ?? 0) })
+        let order = copies.map(\.id)
+        return .found(entries.sorted { (order.firstIndex(of: $0.copyID) ?? 0) < (order.firstIndex(of: $1.copyID) ?? 0) })
     }
 
     /// A copy's entry. A failed metadata read still yields a playable entry,
@@ -242,8 +257,8 @@ final class BelowFoldContentLoader {
                                               ratingKey: copy.ratingKey, mediaID: nil)
         guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
             serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey
-        ) else { return ServerCopyEntry(machineId: copy.machineId, serverName: copy.serverName,
-                                        summary: nil, target: target) }
+        ) else { return ServerCopyEntry(machineId: copy.machineId, ratingKey: copy.ratingKey,
+                                        serverName: copy.serverName, summary: nil, target: target) }
         var parts: [String] = []
         if meta.type == "show" {
             if let count = meta.leafCount { parts.append(count == 1 ? "1 episode" : "\(count) episodes") }
@@ -255,7 +270,7 @@ final class BelowFoldContentLoader {
                 parts.append(VersionPicker.rowLabel(best))
             }
         }
-        return ServerCopyEntry(machineId: copy.machineId, serverName: copy.serverName,
+        return ServerCopyEntry(machineId: copy.machineId, ratingKey: copy.ratingKey, serverName: copy.serverName,
                                summary: parts.isEmpty ? nil : parts.joined(separator: " · "),
                                target: target)
     }

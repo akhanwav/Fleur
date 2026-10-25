@@ -53,7 +53,7 @@ nonisolated enum BelowFoldItem: Hashable, Sendable {
     case cast(String)
     /// TMDB watch/providers block (metadata-only items only).
     case whereToWatch
-    /// Cross-server availability block (metadata-only items only).
+    /// Cross-server availability block (every Plex and unowned title).
     case servers
     /// TMDB recommendations, hosted exactly like `.relatedShelf` (metadata-only
     /// items only — distinct from Plex's `.relatedShelf`).
@@ -98,7 +98,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     var onShowRelatedDetails: ((MediaItem) -> Void)?
     /// Episode description Select → open the episode detail page.
     var onShowEpisodeDetails: ((MediaItem) -> Void)?
-    /// On Your Servers card Select → switch the page to that server's copy.
+    /// On Your Servers card Select → switch the page to that copy (`DetailCopy.id`).
     var onSelectServerCopy: ((String) -> Void)?
     /// Cast / crew cell Select → open the person detail page.
     var onSelectPerson: ((MediaPerson) -> Void)?
@@ -519,7 +519,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .servers:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: ServerAvailabilityCollectionCell.reuseID, for: indexPath) as! ServerAvailabilityCollectionCell
                 cell.configure(availability: self.serverAvailability ?? .checking)
-                cell.onSelectCopy = { [weak self] entry in self?.onSelectServerCopy?(entry.machineId) }
+                cell.onSelectCopy = { [weak self] entry in self?.onSelectServerCopy?(entry.copyID) }
                 return cell
             case .moreLikeThisShelf:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
@@ -616,6 +616,19 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.ingest(content)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
+            // Cross-server check: its own task, patching the Servers cell in
+            // place when it answers, so neither the render above nor the
+            // advisory below waits on it. An owned title is found by the Plex
+            // guid in its detail, an unowned one by its TMDB id.
+            if content.serverAvailability != nil {
+                let detail = content.detail
+                Task { [weak self] in
+                    guard let self else { return }
+                    let availability = await self.loader.loadServerAvailability(for: item, detail: detail)
+                    guard self.loadToken == token else { return }
+                    self.applyServerAvailability(availability ?? .notFound)
+                }
+            }
             // CHAINED (not a racing Task): the full content advisory is fetched
             // AFTER ingest, so it can't be clobbered by `ingest` overwriting
             // `self.detail` with the partial. Render already happened at
@@ -629,14 +642,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // fetch and patches the Servers cell in place — never blocking the
         // initial render above. Gated on `isMetadataOnly` directly (not on
         // `self.serverAvailability`, which this races against `ingest` to set).
-        if item.isMetadataOnly {
-            Task { [weak self] in
-                guard let self else { return }
-                let availability = await self.loader.loadServerAvailability(for: item)
-                guard self.loadToken == token, let availability else { return }
-                self.applyServerAvailability(availability)
-            }
-        }
+
     }
 
     /// Patch the Servers cell with the real cross-server answer once it
@@ -972,9 +978,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         if let row = collectionRow, !row.members.isEmpty { add(.collection, [.collectionShelf]) }
         if !cachedRelated.isEmpty { add(.related, cachedRelated) }
         if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
-        // Metadata-only sections (Where to Watch / On Your Servers / More
-        // Like This) — nil/empty for an owned item, so these never appear
-        // there.
+        // Where to Watch and More Like This are TMDB's, for unowned titles
+        // only. On Your Servers shows on every Plex title too.
         if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
         if serverAvailability != nil { add(.servers, [.servers]) }
         if !cachedMoreLikeThis.isEmpty { add(.moreLikeThis, cachedMoreLikeThis) }

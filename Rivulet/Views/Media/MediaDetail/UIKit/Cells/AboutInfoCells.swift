@@ -784,10 +784,10 @@ private final class WatchProviderChip: UIView {
 
 // MARK: - On Your Servers (metadata-only items)
 
-/// Cross-server check result for a title with no playback-capable provider:
-/// one focusable card per other server this account can reach (owned or
-/// shared) that holds it, each playing that server's copy, or a static
-/// status line while checking and when none does.
+/// Every copy of the title on a server this account can reach (owned or
+/// shared, the main server included, a server's 1080p and 4K copies apart):
+/// one focusable card each, which switches the page to that copy, or a
+/// static status line while checking and when none does.
 final class ServerAvailabilityCollectionCell: UICollectionViewCell {
     static let reuseID = "ServerAvailabilityCollectionCell"
 
@@ -796,16 +796,19 @@ final class ServerAvailabilityCollectionCell: UICollectionViewCell {
         static let cardWidth: CGFloat = 380
         static let cardHeight: CGFloat = 104
         static let cardGap: CGFloat = MediaRowMetrics.tileGap
-        /// Four cards fill the row's width.
-        static let maxCards = 4
+        /// Room for the focused card's scale inside the row's scroller.
+        static let focusRoom: CGFloat = 12
     }
     /// The cell's height in every state (the cards are the tallest).
     static let height: CGFloat = ceil(UIFont.systemFont(ofSize: 30, weight: .semibold).lineHeight)
-        + Metrics.headerGap + Metrics.cardHeight
+        + Metrics.headerGap + Metrics.cardHeight + Metrics.focusRoom * 2
 
     private let header = sectionHeaderLabel("On Your Servers")
     private let statusLabel = UILabel()
     private let cardsStack = UIStackView()
+    /// Every copy gets a card (a server can hold a 1080p and a 4K one), so
+    /// the row scrolls sideways as focus moves along it.
+    private let cardsScroller = UIScrollView()
 
     /// Select on a card: play that server's copy.
     var onSelectCopy: ((ServerCopyEntry) -> Void)?
@@ -822,10 +825,14 @@ final class ServerAvailabilityCollectionCell: UICollectionViewCell {
         statusLabel.numberOfLines = 1
         contentView.addSubview(statusLabel)
 
+        cardsScroller.translatesAutoresizingMaskIntoConstraints = false
+        cardsScroller.clipsToBounds = false
+        cardsScroller.showsHorizontalScrollIndicator = false
+        contentView.addSubview(cardsScroller)
         cardsStack.translatesAutoresizingMaskIntoConstraints = false
         cardsStack.axis = .horizontal
         cardsStack.spacing = Metrics.cardGap
-        contentView.addSubview(cardsStack)
+        cardsScroller.addSubview(cardsStack)
 
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: contentView.topAnchor),
@@ -835,9 +842,15 @@ final class ServerAvailabilityCollectionCell: UICollectionViewCell {
             statusLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
 
-            cardsStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.headerGap),
-            cardsStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            cardsStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
+            cardsScroller.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.headerGap - Metrics.focusRoom),
+            cardsScroller.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            cardsScroller.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            cardsScroller.heightAnchor.constraint(equalToConstant: Metrics.cardHeight + Metrics.focusRoom * 2),
+
+            cardsStack.topAnchor.constraint(equalTo: cardsScroller.contentLayoutGuide.topAnchor, constant: Metrics.focusRoom),
+            cardsStack.leadingAnchor.constraint(equalTo: cardsScroller.contentLayoutGuide.leadingAnchor),
+            cardsStack.trailingAnchor.constraint(equalTo: cardsScroller.contentLayoutGuide.trailingAnchor),
+            cardsStack.bottomAnchor.constraint(equalTo: cardsScroller.contentLayoutGuide.bottomAnchor, constant: -Metrics.focusRoom),
         ])
     }
     @available(*, unavailable)
@@ -852,11 +865,12 @@ final class ServerAvailabilityCollectionCell: UICollectionViewCell {
             statusLabel.text = "Not on your servers"
         case .found(let entries):
             statusLabel.text = nil
-            for entry in entries.prefix(Metrics.maxCards) {
+            for entry in entries {
                 cardsStack.addArrangedSubview(makeCard(entry))
             }
         }
         statusLabel.isHidden = statusLabel.text == nil
+        cardsScroller.contentOffset = .zero
     }
 
     private func makeCard(_ entry: ServerCopyEntry) -> UIView {
