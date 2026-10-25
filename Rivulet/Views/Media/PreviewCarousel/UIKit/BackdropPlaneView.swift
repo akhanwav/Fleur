@@ -226,8 +226,9 @@ final class BackdropPlaneView: UIView {
 
     /// The one rule for a card's backdrop, used by this plane AND by the
     /// entry flight, so the two never show different art: the server's own
-    /// background at full size; TMDB's when the server has none or it is far
-    /// below screen size (an item no agent matched); else the poster.
+    /// background at full size; TMDB's when the server has none, it is far
+    /// below screen size (an item no agent matched), or it is a frame of the
+    /// video (`ArtworkFallback.looksLikeVideoFrame`); else the poster.
     static func backdropImage(for item: MediaItem, artwork: MediaArtwork? = nil) async -> UIImage? {
         let artwork = artwork ?? item.artwork
         let fallback = item.isMetadataOnly ? nil : ArtworkFallback.Query(item)
@@ -235,7 +236,7 @@ final class BackdropPlaneView: UIView {
         if let url = artwork.backdrop ?? (fallback == nil ? artwork.poster : nil) {
             image = await ImageCacheManager.shared.image(for: url, quality: .full)
         }
-        if let fallback, (image.map { $0.size.width * $0.scale } ?? 0) < 1280,
+        if let fallback, ArtworkFallback.backdropNeedsFallback(image),
            let tmdbURL = await ArtworkFallback.shared.backdrop(for: fallback),
            let tmdb = await ImageCacheManager.shared.image(for: tmdbURL, quality: .full) {
             image = tmdb

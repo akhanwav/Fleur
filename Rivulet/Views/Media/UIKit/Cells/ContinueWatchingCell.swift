@@ -166,7 +166,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
             season: item.parentIndex, episode: item.index)
         caption.configure(title: text.title, detail: text.detail)
 
-        loadArtwork(from: url, failureIcon: failurePlaceholderImage(for: item))
+        // No show or episode background leaves the episode's own still.
+        let isEpisodeStill = item.type == "episode" && item.grandparentArt == nil && item.art == nil
+        loadArtwork(from: url, fallback: ArtworkFallback.Query(item), isEpisodeStill: isEpisodeStill,
+                    failureIcon: failurePlaceholderImage(for: item))
     }
 
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
@@ -187,7 +190,14 @@ final class ContinueWatchingCell: UICollectionViewCell {
             season: item.seasonNumber, episode: item.episodeNumber)
         caption.configure(title: text.title, detail: text.detail)
 
-        loadArtwork(from: url, failureKind: item.kind)
+        let isEpisode = item.kind == .episode
+        let isEpisodeStill = isEpisode && item.grandparentArtwork?.backdrop == nil && item.artwork.backdrop == nil
+        // An episode's fallback is its show's; the shared query covers movies and shows only.
+        let fallback: ArtworkFallback.Query? = isEpisode
+            ? item.seriesTitle.map { ArtworkFallback.Query(tmdbId: nil, isMovie: false, title: $0, year: nil) }
+            : (item.isMetadataOnly ? nil : ArtworkFallback.Query(item))
+        loadArtwork(from: url, fallback: fallback, isEpisodeStill: isEpisodeStill,
+                    failureIcon: failurePlaceholderImage(for: item.kind))
     }
 
     override func prepareForReuse() {
@@ -205,12 +215,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
     // MARK: - Artwork
 
-    /// MediaItem path: resolves failure icon via MediaKind then delegates.
-    private func loadArtwork(from url: URL?, failureKind: MediaKind) {
-        loadArtwork(from: url, failureIcon: failurePlaceholderImage(for: failureKind))
-    }
-
-    private func loadArtwork(from url: URL?, failureIcon: UIImage?) {
+    /// `fallback` names the title on TMDB for a card whose server image is a
+    /// video frame or a bare episode still (`ContinueWatchingArtwork`).
+    private func loadArtwork(from url: URL?, fallback: ArtworkFallback.Query?, isEpisodeStill: Bool,
+                             failureIcon: UIImage?) {
         artworkLoadTask?.cancel()
         guard let url else {
             artworkImageView.image = nil
@@ -226,7 +234,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
         }
         currentArtworkURL = url
         let geometry = Self.geometry, scale = traitCollection.displayScale
-        if let built = ContinueWatchingCardCompositor.cached(.card, for: url, geometry: geometry, scale: scale) {
+        let knownSource = ContinueWatchingArtwork.knownSource(for: url)
+        if let knownSource,
+           let built = ContinueWatchingCardCompositor.cached(.card, for: knownSource, geometry: geometry, scale: scale) {
             artworkImageView.image = built
             placeholderView.isHidden = true
             return
@@ -236,8 +246,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
         placeholderIcon.isHidden = true  // hidden during loading
         let key = url.absoluteString as AnyHashable
         artworkLoadTask = Task { [weak self] in
+            let source = await ContinueWatchingArtwork.source(for: url, fallback: fallback,
+                                                              isEpisodeStill: isEpisodeStill)
             let image: UIImage? = await Perf.interval(.imageDecode, key: key) {
-                await ContinueWatchingCardCompositor.image(.card, for: url, geometry: geometry, scale: scale)
+                await ContinueWatchingCardCompositor.image(.card, for: source, geometry: geometry, scale: scale)
             }
             await MainActor.run {
                 guard let self, self.currentArtworkURL == url else { return }
@@ -497,4 +509,36 @@ extension ContinueWatchingCell: PreviewSourceTile {
     var previewArtworkView: UIView { card.contentView }
     var previewCornerRadius: CGFloat { cornerRadius }
     var previewArtworkLoaded: Bool { artworkImageView.image != nil }
+}
+
+/// The image a Continue Watching card is built from, when the server's would
+/// be a raw picture of the video: a background Plex cut from the file (it keeps
+/// the letterbox, `ArtworkFallback.looksLikeVideoFrame`), or an episode whose
+/// show has no background, which leaves the episode's still. Both take the
+/// title's TMDB backdrop (the show's, for an episode), the way the Apple TV
+/// app shows show art there; with none on TMDB the server's image stays.
+///
+/// Decided once per server URL and remembered, so a reused cell finds the
+/// replacement card in the compositor's cache instead of rebuilding from the
+/// screenshot first.
+@MainActor
+enum ContinueWatchingArtwork {
+    private static var sources: [URL: URL] = [:]
+
+    /// The decided source for `url`, or nil before the first decision.
+    static func knownSource(for url: URL) -> URL? { sources[url] }
+
+    static func source(for url: URL, fallback: ArtworkFallback.Query?, isEpisodeStill: Bool) async -> URL {
+        if let known = sources[url] { return known }
+        guard let fallback else { return url }
+        var replace = isEpisodeStill
+        if !replace, let image = await ImageCacheManager.shared.image(for: url) {
+            replace = await Task.detached(priority: .utility) {
+                ArtworkFallback.looksLikeVideoFrame(image)
+            }.value
+        }
+        let source = replace ? (await ArtworkFallback.shared.backdrop(for: fallback) ?? url) : url
+        sources[url] = source
+        return source
+    }
 }

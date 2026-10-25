@@ -133,9 +133,6 @@ final class HeroBackdropView: UIView {
     /// Load the backdrop for the supplied URL. Cancels any in-flight load.
     /// Crossfades over 0.22s when replacing an existing image. Setting nil
     /// shows the placeholder gradient.
-    /// Below this width a backdrop is a stretched thumbnail on a 1920 pt
-    /// (3840 px) screen: the server's art is replaced by TMDB's.
-    private static let minimumBackdropPixels: CGFloat = 1280
     /// Bumped per `setBackdrop`, so a late TMDB answer for an earlier slide is dropped.
     private var backdropRequest: UInt64 = 0
 
@@ -175,7 +172,7 @@ final class HeroBackdropView: UIView {
 
         loadTask = Task { [weak self] in
             var image = await ImageCacheManager.shared.imageFullSize(for: url)
-            if let fallback, (image.map { $0.size.width * $0.scale } ?? 0) < Self.minimumBackdropPixels,
+            if let fallback, ArtworkFallback.backdropNeedsFallback(image),
                let tmdbURL = await ArtworkFallback.shared.backdrop(for: fallback),
                let tmdb = await ImageCacheManager.shared.imageFullSize(for: tmdbURL) {
                 image = tmdb
