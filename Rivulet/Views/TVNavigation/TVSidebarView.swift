@@ -9,11 +9,6 @@
 //
 
 import SwiftUI
-import os.log
-import Sentry
-
-// Temporary diagnostic logger for intermittent sidebar focus loss.
-nonisolated private let libraryIndexLog = Logger(subsystem: "com.rivulet.app", category: "LibraryIndex")
 
 // MARK: - TVSidebarView
 
@@ -386,112 +381,35 @@ struct TVSidebarView: View {
             await dataStore.loadLibraryHubsIfNeeded()
             dataStore.startBackgroundPrefetch(libraries: dataStore.visibleMediaLibraries)
 
-            // Rebuild the library GUID index in the background. Used by Discover and
-            // Watchlist surfaces to answer "do I own this?" in O(1). The index
-            // matches by external GUID, so the fetch must include them
-            // (Plex omits them from the default summary response).
+            // Bring the library GUID index up to date in the background. Used by
+            // Discover and Watchlist surfaces to answer "do I own this?" in O(1).
+            // hydrateFromDisk() above serves the saved sections in ms; the
+            // builder asks the server which sections changed and reads only
+            // those (see LibraryGUIDIndexBuilder). DEFERRED 5s past launch: a
+            // section that did change is read in pages of up to 5,000 titles
+            // with GUIDs, which must stay clear of the home's first paint.
             //
-            // DEFERRED 5s past launch: this fetches ~5MB per page
-            // (5000 items + includeGuids, paginated) — so it must stay
-            // clear of the home's first-paint window. It no longer gates the
-            // trending hero or "in your library" badges: hydrateFromDisk()
-            // above serves last launch's snapshot in ms. This fetch refreshes
-            // that snapshot from the server, and replace(with:) re-posts
-            // .libraryGUIDIndexDidUpdate so the hero picks up any new data.
+            // No standalone Sentry event for a library that fails: the cause is
+            // the user's own server, and PlexNetworkManager already captures
+            // each transport failure. The builder leaves a breadcrumb.
             Task.detached(priority: .background) {
                 try? await Task.sleep(for: .seconds(5))
-                let (serverURL, token) = await MainActor.run {
-                    (PlexAuthManager.shared.selectedServerURL, PlexAuthManager.shared.selectedServerToken)
+                let (serverURL, token, serverID) = await MainActor.run {
+                    (PlexAuthManager.shared.selectedServerURL,
+                     PlexAuthManager.shared.selectedServerToken,
+                     PlexAuthManager.shared.selectedServer?.machineIdentifier)
                 }
                 guard let serverURL, let token else { return }
-
-                let visible = await MainActor.run { PlexDataStore.shared.visibleVideoLibraries }
-
-                // Entries, not items: a page's full metadata is dropped as soon
-                // as it is reduced, so a 166,000-title server costs the index's
-                // footprint rather than 2 GB of listings (see
-                // LibraryGUIDIndex.Entry).
-                var entries: [LibraryGUIDIndex.Entry] = []
-                // Completeness is tracked per section, not as a single global
-                // flag, because the two ways a build goes wrong look identical
-                // in aggregate: a section that threw on its very first page
-                // contributes nothing, and a section that threw at offset 5000
-                // of 12000 contributes a plausible-looking 5000 items. Both are
-                // incomplete, and the second one is the dangerous case, since
-                // the totals alone give no hint that anything is missing.
-                var incompleteSections = 0
-                let pageSize = 5000
-                for library in visible {
-                    // Page through the whole section — libraries larger than one
-                    // page used to be truncated, silently dropping ownership
-                    // matches for everything past the first 5000 titles (#202).
-                    var start = 0
-                    var sectionComplete = false
-                    while true {
-                        do {
-                            let result = try await PlexNetworkManager.shared.getLibraryItemsWithTotal(
-                                serverURL: serverURL,
-                                authToken: token,
-                                sectionId: library.key,
-                                start: start,
-                                size: pageSize,
-                                includeGuids: true
-                            )
-                            entries.append(contentsOf: result.items.compactMap(LibraryGUIDIndex.Entry.init))
-                            start += result.items.count
-                            // An empty page or reaching the reported total is the
-                            // only way out that means we actually saw the section
-                            // in full. Anything else leaves sectionComplete false.
-                            if result.items.isEmpty || start >= (result.totalSize ?? 0) {
-                                sectionComplete = true
-                                break
-                            }
-                        } catch {
-                            // The break abandons every remaining page of this
-                            // section, so the section is partial from here on.
-                            libraryIndexLog.error("[GUIDIndex] fetch failed for section \(library.key, privacy: .public) at offset \(start): \(error.localizedDescription, privacy: .public)")
-                            let crumb = Breadcrumb(level: .error, category: "guid_index")
-                            crumb.message = "Library GUID fetch failed"
-                            crumb.data = ["section": library.key, "offset": start, "error": error.localizedDescription]
-                            SentryBridge.addBreadcrumb(crumb)
-                            break
-                        }
+                let libraries = await MainActor.run {
+                    PlexDataStore.shared.visibleVideoLibraries.map {
+                        LibraryGUIDIndexBuilder.Library(key: $0.key, type: $0.type)
                     }
-                    if !sectionComplete { incompleteSections += 1 }
                 }
-
-                // Only a build where every visible section ran to completion may
-                // overwrite the disk cache. See LibraryGUIDIndex.Completeness.
-                let completeness: LibraryGUIDIndex.Completeness =
-                    incompleteSections == 0 ? .complete : .partial
-
-                let sample = entries.first?.externalGuids.first ?? "(none)"
-                libraryIndexLog.info("[GUIDIndex] populated: \(entries.count) titles with external GUIDs, \(incompleteSections) incomplete sections, sample=\(sample, privacy: .public)")
-
-                let crumb = Breadcrumb(level: .info, category: "guid_index")
-                crumb.message = "Library GUID index rebuilt"
-                crumb.data = [
-                    "libraries": visible.count,
-                    "failed_sections": incompleteSections,
-                    "items": entries.count
-                ]
-                SentryBridge.addBreadcrumb(crumb)
-
-                // No standalone Sentry event for an incomplete build. The
-                // underlying cause is the user's own Plex server going
-                // unreachable, and PlexNetworkManager already captures each
-                // transport failure with its endpoint, elapsed time and error
-                // code. An event here only duplicated that, once per launch, for
-                // users whose whole server was down. The breadcrumb above keeps
-                // the context on any real downstream error at no cost.
-
-                // An empty result with at least one section incomplete means we
-                // learned nothing from the server, so keep whatever the disk
-                // hydrate gave us rather than blanking a working index.
-                if entries.isEmpty && completeness == .partial { return }
-                // The token changed hands while this ran: not that profile's library.
-                guard await MainActor.run(body: { PlexAuthManager.shared.selectedServerToken }) == token else { return }
-                await LibraryGUIDIndex.shared.replace(with: entries, completeness: completeness)
+                await LibraryGUIDIndexBuilder.plex(serverURL: serverURL, token: token, serverID: serverID)
+                    .run(libraries: libraries, into: .shared) {
+                        // The token changed hands while this ran: not that profile's library.
+                        await MainActor.run { PlexAuthManager.shared.selectedServerToken } == token
+                    }
             }
         }
     }

@@ -10,6 +10,27 @@ import XCTest
 
 final class LibraryGUIDIndexTests: XCTestCase {
 
+    private var directory: URL!
+
+    override func setUp() {
+        super.setUp()
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LibraryGUIDIndexTests-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: directory)
+        super.tearDown()
+    }
+
+    private func makeIndex() -> LibraryGUIDIndex { LibraryGUIDIndex(cacheDirectory: directory) }
+
+    private func section(_ key: String, _ items: [PlexMetadata], signature: String? = "sig",
+                         fetchedAt: Date = Date()) -> LibraryGUIDIndex.Section {
+        LibraryGUIDIndex.Section(key: key, serverID: "server", signature: signature, fetchedAt: fetchedAt,
+                                 entries: items.compactMap(LibraryGUIDIndex.Entry.init))
+    }
+
     func testParsesTMDBImdbTvdbGUIDs() async {
         var item = PlexMetadata(
             ratingKey: "1",
@@ -23,8 +44,8 @@ final class LibraryGUIDIndexTests: XCTestCase {
             PlexGuid(id: "tvdb://999")
         ]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [item])], changed: ["1"])
 
         let byTmdb = await index.lookup(tmdbId: 12345, type: .movie)
         XCTAssertEqual(byTmdb?.ratingKey, "1")
@@ -41,8 +62,8 @@ final class LibraryGUIDIndexTests: XCTestCase {
 
     func testIgnoresItemsWithoutExternalGUIDs() async {
         let item = PlexMetadata(ratingKey: "1", guid: "plex://movie/abc", type: "movie", title: "Foo")
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [item])], changed: ["1"])
 
         let result = await index.lookup(tmdbId: 1, type: .movie)
         XCTAssertNil(result)
@@ -55,8 +76,8 @@ final class LibraryGUIDIndexTests: XCTestCase {
         var show = PlexMetadata(ratingKey: "2", type: "show", title: "Bar")
         show.Guid = [PlexGuid(id: "tmdb://100")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [movie, show].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [movie, show])], changed: ["1"])
 
         let movieMatch = await index.lookup(tmdbId: 100, type: .movie)
         XCTAssertEqual(movieMatch?.ratingKey, "1")
@@ -72,9 +93,9 @@ final class LibraryGUIDIndexTests: XCTestCase {
         var item2 = PlexMetadata(ratingKey: "2", type: "movie", title: "B")
         item2.Guid = [PlexGuid(id: "tmdb://2")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [item1].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
-        await index.replace(with: [item2].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [item1])], changed: ["1"])
+        await index.replace(with: [section("1", [item2])], changed: ["1"])
 
         let stale = await index.lookup(tmdbId: 1, type: .movie)
         XCTAssertNil(stale)
@@ -83,29 +104,25 @@ final class LibraryGUIDIndexTests: XCTestCase {
         XCTAssertEqual(fresh?.ratingKey, "2")
     }
 
-    func testPartialBuildStillPopulatesTheInMemoryIndex() async {
-        // A partial build is barred from writing the disk cache, but it must
-        // still serve lookups for this launch: half the library is a better
-        // answer than none while the server is flaky.
+    func testReplacePopulatesTheInMemoryIndex() async {
         var item = PlexMetadata(ratingKey: "1", type: "movie", title: "Foo")
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [item])], changed: ["1"])
 
         let match = await index.lookup(tmdbId: 42, type: .movie)
         XCTAssertEqual(match?.ratingKey, "1")
     }
 
-    func testPartialBuildStillBlocksALateDiskHydrate() async {
-        // hasFreshData has to be set for partial builds too. If it were not, a
-        // hydrateFromDisk() that finished after the network build would replace
-        // current-but-partial server data with last launch's disk snapshot.
+    func testLiveDataBlocksALateDiskHydrate() async {
+        // A hydrateFromDisk() that finished after the network build must not
+        // replace current server data with last launch's snapshot.
         var item = PlexMetadata(ratingKey: "1", type: "movie", title: "Foo")
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [item])], changed: ["1"])
 
         let hydrated = await index.hydrateFromDisk()
         XCTAssertEqual(hydrated, 0, "a late hydrate must be a no-op after any live build")
@@ -114,31 +131,30 @@ final class LibraryGUIDIndexTests: XCTestCase {
         XCTAssertEqual(match?.ratingKey, "1")
     }
 
-    func testEveryReplaceBumpsGenerationRegardlessOfCompleteness() async {
+    func testEveryReplaceBumpsGeneration() async {
         // Consumers such as the trending hero skip recomputation when the
-        // generation hasn't moved, so a partial build must still advertise
-        // itself as a change.
+        // generation hasn't moved.
         var item = PlexMetadata(ratingKey: "1", type: "movie", title: "Foo")
         item.Guid = [PlexGuid(id: "tmdb://42")]
 
-        let index = LibraryGUIDIndex()
+        let index = makeIndex()
         let start = await index.generation
 
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
-        let afterComplete = await index.generation
-        XCTAssertEqual(afterComplete, start + 1)
+        await index.replace(with: [section("1", [item])], changed: ["1"])
+        let afterFirst = await index.generation
+        XCTAssertEqual(afterFirst, start + 1)
 
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
-        let afterPartial = await index.generation
-        XCTAssertEqual(afterPartial, start + 2)
+        await index.replace(with: [section("1", [item])], changed: ["1"])
+        let afterSecond = await index.generation
+        XCTAssertEqual(afterSecond, start + 2)
     }
 
     func testIgnoresNonMovieNonShowItems() async {
         var episode = PlexMetadata(ratingKey: "1", type: "episode", title: "Ep1")
         episode.Guid = [PlexGuid(id: "tmdb://500")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [episode].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [episode])], changed: ["1"])
 
         // Episodes shouldn't be indexed by tmdbId — that index is movie/show only.
         let asMovie = await index.lookup(tmdbId: 500, type: .movie)
@@ -166,8 +182,8 @@ final class LibraryGUIDIndexTests: XCTestCase {
         item.Guid = [PlexGuid(id: "tmdb://3"), PlexGuid(id: "imdb://tt3")]
         item.Role = [PlexRole(tag: "Someone")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [item].compactMap(LibraryGUIDIndex.Entry.init), completeness: .partial)
+        let index = makeIndex()
+        await index.replace(with: [section("1", [item])], changed: ["1"])
 
         let match = await index.lookup(guid: "imdb://tt3")
         XCTAssertEqual(match?.title, "Foo")
@@ -179,5 +195,70 @@ final class LibraryGUIDIndexTests: XCTestCase {
         XCTAssertEqual(match?.tmdbId, 3)
         XCTAssertEqual(match?.Media.map { Set($0.map(\.id)).count }, 2)
         XCTAssertNil(match?.Role, "cast is not part of an entry")
+    }
+
+    func testSavedSectionsLoadIntoAFreshIndex() async {
+        var movie = PlexMetadata(ratingKey: "1", type: "movie", title: "Foo")
+        movie.Guid = [PlexGuid(id: "tmdb://42")]
+        var show = PlexMetadata(ratingKey: "2", type: "show", title: "Bar")
+        show.Guid = [PlexGuid(id: "tvdb://7")]
+        let fetchedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let writer = makeIndex()
+        await writer.replace(with: [section("9", [movie], signature: "a", fetchedAt: fetchedAt),
+                                    section("15", [show], signature: "b", fetchedAt: fetchedAt)],
+                             changed: ["9", "15"])
+        await writer.waitForPendingWrites()
+
+        let reader = makeIndex()
+        let hydrated = await reader.hydrateFromDisk()
+        XCTAssertEqual(hydrated, 2)
+        let movieMatch = await reader.lookup(tmdbId: 42, type: .movie)
+        XCTAssertEqual(movieMatch?.title, "Foo")
+        let showMatch = await reader.lookup(guid: "tvdb://7")
+        XCTAssertEqual(showMatch?.ratingKey, "2")
+        let stored = await reader.storedSections()
+        XCTAssertEqual(stored["15"]?.signature, "b")
+        XCTAssertEqual(stored["15"]?.serverID, "server")
+        XCTAssertEqual(stored["9"]?.fetchedAt, fetchedAt)
+    }
+
+    func testOnlyChangedSectionsAreWrittenAndDroppedOnesDeleted() async throws {
+        var a = PlexMetadata(ratingKey: "1", type: "movie", title: "A")
+        a.Guid = [PlexGuid(id: "tmdb://1")]
+        var b = PlexMetadata(ratingKey: "2", type: "movie", title: "B")
+        b.Guid = [PlexGuid(id: "tmdb://2")]
+
+        let index = makeIndex()
+        await index.replace(with: [section("1", [a]), section("2", [b])], changed: ["1", "2"])
+        await index.waitForPendingWrites()
+        // Section 2 is gone (library hidden); section 1 is unchanged.
+        await index.replace(with: [section("1", [a])], changed: [])
+        await index.waitForPendingWrites()
+
+        let files = try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+        XCTAssertEqual(files, ["section-1.ndjson"])
+    }
+
+    func testATruncatedSectionFileIsIgnored() async throws {
+        var items: [PlexMetadata] = []
+        for i in 0..<4500 {
+            var item = PlexMetadata(ratingKey: "\(i)", type: "movie", title: "T\(i)")
+            item.Guid = [PlexGuid(id: "tmdb://\(i)")]
+            items.append(item)
+        }
+        let writer = makeIndex()
+        await writer.replace(with: [section("1", items)], changed: ["1"])
+        await writer.waitForPendingWrites()
+
+        // Cut the last chunk off, as an interrupted write would.
+        let file = directory.appendingPathComponent("section-1.ndjson")
+        let data = try Data(contentsOf: file)
+        let lines = data.split(separator: 0x0A)
+        try Data(lines.dropLast().joined(separator: [0x0A])).write(to: file)
+
+        let reader = makeIndex()
+        let hydrated = await reader.hydrateFromDisk()
+        XCTAssertEqual(hydrated, 0, "a section with fewer entries than its header must be read again")
     }
 }

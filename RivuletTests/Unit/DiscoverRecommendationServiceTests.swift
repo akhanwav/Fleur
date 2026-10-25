@@ -16,8 +16,11 @@ final class DiscoverRecommendationServiceTests: XCTestCase {
         var owned = PlexMetadata(ratingKey: "1", type: "movie", title: "Owned")
         owned.Guid = [PlexGuid(id: "tmdb://100")]
 
-        let index = LibraryGUIDIndex()
-        await index.replace(with: [owned].compactMap(LibraryGUIDIndex.Entry.init), completeness: .complete)
+        let index = LibraryGUIDIndex(cacheDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiscoverRecommendationServiceTests-\(UUID().uuidString)"))
+        let section = LibraryGUIDIndex.Section(key: "1", serverID: nil, signature: nil, fetchedAt: Date(),
+                                               entries: [owned].compactMap(LibraryGUIDIndex.Entry.init))
+        await index.replace(with: [section], changed: [])
 
         let stub = StubDiscoverFetcher()
         stub.movies = [

@@ -15,7 +15,7 @@ import os.log
 private let guidIndexLog = Logger(subsystem: "com.rivulet.app", category: "LibraryGUIDIndex")
 
 extension Notification.Name {
-    /// Posted on the main thread after `LibraryGUIDIndex.shared.replace(with:completeness:)`
+    /// Posted on the main thread after `LibraryGUIDIndex.shared.replace(with:changed:)`
     /// completes. Views observing this can re-run library-match queries.
     static let libraryGUIDIndexDidUpdate = Notification.Name("LibraryGUIDIndexDidUpdate")
 }
@@ -153,106 +153,110 @@ actor LibraryGUIDIndex {
         }
     }
 
-    private var entries: [Entry] = []
+    /// One library section's entries, read from the server whole. The index and
+    /// its snapshot are a set of these, so a section that failed to load costs
+    /// that section and nothing else: the others stay current and saved, and a
+    /// half-read section never exists to be mistaken for a complete one.
+    struct Section: Sendable {
+        let key: String
+        /// The server the section was read from. Section keys are per server, so
+        /// a saved section is never reused against another one.
+        let serverID: String?
+        /// What the section looked like when it was read
+        /// (`LibraryGUIDIndexBuilder.signature`). A launch compares it with the
+        /// server's current one to decide whether the section needs reading again.
+        let signature: String?
+        let fetchedAt: Date
+        let entries: [Entry]
+    }
+
+    /// Visible-library order. Positions in the lookup tables are
+    /// `section << 32 | entry`, so no entry is ever stored twice.
+    private var sections: [Section] = []
     private var byTypedTmdbId: [TypedKey: Int] = [:]
     private var byGuid: [String: Int] = [:]
 
     /// Live network data always supersedes a disk-hydrated snapshot. Once a real
-    /// `replace(with:completeness:)` has run this launch, a late `hydrateFromDisk()`
-    /// is a no-op so stale disk contents can't clobber fresh server data. This is
-    /// set for partial builds too, since a partial live snapshot is still more
-    /// current than the disk copy.
+    /// `replace(with:changed:)` has run this launch, a late `hydrateFromDisk()`
+    /// is a no-op so stale disk contents can't clobber fresh server data.
     private var hasFreshData = false
+    /// The snapshot is read once per profile; later calls answer from memory.
+    private var hydrated = false
 
     /// Bumped on every rebuild. Consumers (e.g. the trending hero) read this to
     /// skip recomputation when the index hasn't actually changed since their last
     /// run, so overlapping triggers don't repeat identical work.
     private(set) var generation = 0
 
-    /// Whether a network rebuild saw every library section, every page, all the
-    /// way through. Only a complete build is allowed to overwrite the disk cache.
-    ///
-    /// This exists because a truncated snapshot is indistinguishable from a good
-    /// one once it has been written: `DiskCache` stores only a version, a date and
-    /// the items, so the next launch's `hydrateFromDisk()` will load a half-built
-    /// index and treat it as authoritative. The failure is completely silent. The
-    /// user just sees fewer "in your library" badges, a thinner TMDB hero, and
-    /// Discover items that will not resolve to something playable, with no error
-    /// anywhere. Worse, the damage outlives the network blip that caused it: every
-    /// subsequent launch starts from the degraded snapshot until a fully successful
-    /// rebuild happens to land. A single timed-out page at offset 5000 of a 12,000
-    /// item library is enough to do this.
-    ///
-    /// So the rule is: a partial build may update the in-memory index, because
-    /// partial data still beats nothing for the current launch, but it must never
-    /// touch disk. Do not collapse this into a defaulted parameter. Every caller
-    /// has to say which it has, precisely so a new call site cannot quietly inherit
-    /// "complete" and reintroduce the silent corruption.
-    enum Completeness: Sendable {
-        /// Every visible section returned every page without error. Safe to persist.
-        case complete
-        /// At least one section failed or was cut short. In-memory only.
-        case partial
+    /// Where the snapshot lives. nil is the app's Caches directory; tests pass
+    /// their own so they never touch the real snapshot.
+    private let cacheDirectoryOverride: URL?
+
+    init(cacheDirectory: URL? = nil) {
+        cacheDirectoryOverride = cacheDirectory
     }
 
-    /// Rebuild the index from a freshly-fetched library snapshot and notify
-    /// observers. This is the authoritative path — it always wins over
-    /// `hydrateFromDisk()`, complete or not, because even a partial live snapshot
-    /// is more current than last launch's disk contents.
+    /// Replace the index with `sections`, the whole set for the visible
+    /// libraries, and notify observers. This is the authoritative path: it always
+    /// wins over `hydrateFromDisk()`.
     ///
-    /// Persists to disk only when `completeness` is `.complete`. See the
-    /// `Completeness` doc comment for why a partial build must not be written.
-    func replace(with items: [Entry], completeness: Completeness) {
-        rebuild(from: items, source: "replace")
-
-        // Set regardless of completeness. `hasFreshData` guards against a late
-        // `hydrateFromDisk()` overwriting live server data with the older disk
-        // snapshot, and that ordering hazard is identical whether this build was
-        // complete or not. Leaving it false on a partial build would let a
-        // straggling hydrate replace a partial-but-current index with a
-        // possibly-worse one from disk.
+    /// Writes the sections named in `changed` and deletes the saved file of any
+    /// section that is no longer in the set (a library hidden or removed).
+    func replace(with sections: [Section], changed: Set<String>) {
+        rebuild(from: sections, source: "replace")
         hasFreshData = true
-
-        // Deliberately no log line on the partial branch: the caller already
-        // reports the incomplete-section count when it finishes the build, and
-        // guidIndexLog carries pre-existing actor-isolation warnings we are not
-        // adding to.
-        if case .complete = completeness {
-            persist(items)
-        }
+        persist(sections.filter { changed.contains($0.key) }, keeping: Set(sections.map(\.key)))
     }
 
-    /// Populate the index from the last persisted snapshot. Cheap (local decode),
-    /// so it runs at launch to make "do I own this?" answers available before the
-    /// ~20MB network refresh lands. Skips if fresh network data already arrived.
-    /// Returns the number of items hydrated (0 = miss / skipped / decode failure).
+    /// The sections in memory, by section key, for the builder to compare with
+    /// the server.
+    func storedSections() -> [String: Section] {
+        Dictionary(sections.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// Populate the index from the saved snapshot. Local decode, so it runs at
+    /// launch to make "do I own this?" answers available before the network
+    /// check. Reads disk once; skips if fresh network data already arrived.
+    /// Returns the number of entries in the index (0 = miss / skipped).
+    @discardableResult
     func hydrateFromDisk() -> Int {
         guard !hasFreshData else {
             guidIndexLog.info("[GUIDIndex] hydrateFromDisk skipped: fresh network data already present")
             return 0
         }
-        guard let items = Self.loadFromDisk() else {
+        guard !hydrated else { return entryCount }
+        hydrated = true
+        Self.removeLegacySnapshots()
+        let loaded = Self.loadFromDisk(in: cacheDirectory)
+        guard !loaded.isEmpty else {
             guidIndexLog.info("[GUIDIndex] hydrateFromDisk miss: no valid cache on disk")
             return 0
         }
-        rebuild(from: items, source: "hydrateFromDisk")
-        return items.count
+        rebuild(from: loaded, source: "hydrateFromDisk")
+        return entryCount
+    }
+
+    private var entryCount: Int {
+        sections.reduce(0) { $0 + $1.entries.count }
     }
 
     /// Shared ingest + notify used by both `replace` and `hydrateFromDisk`.
-    private func rebuild(from items: [Entry], source: String) {
-        entries = items
+    private func rebuild(from sections: [Section], source: String) {
+        self.sections = sections
         byTypedTmdbId.removeAll(keepingCapacity: true)
         byGuid.removeAll(keepingCapacity: true)
 
-        for (position, item) in items.enumerated() {
-            ingest(item, at: position)
+        for (sectionIndex, section) in sections.enumerated() {
+            for (entryIndex, entry) in section.entries.enumerated() {
+                ingest(entry, at: sectionIndex << 32 | entryIndex)
+            }
         }
         generation += 1
 
         let typedCount = byTypedTmdbId.count
         let guidCount = byGuid.count
-        guidIndexLog.info("[Hero] LibraryGUIDIndex.\(source, privacy: .public): ingested \(items.count, privacy: .public) items -> typedTmdbCount=\(typedCount, privacy: .public), guidCount=\(guidCount, privacy: .public)")
+        let count = entryCount
+        guidIndexLog.info("[Hero] LibraryGUIDIndex.\(source, privacy: .public): ingested \(count, privacy: .public) items -> typedTmdbCount=\(typedCount, privacy: .public), guidCount=\(guidCount, privacy: .public)")
         Task { @MainActor in
             NotificationCenter.default.post(
                 name: .libraryGUIDIndexDidUpdate,
@@ -268,15 +272,19 @@ actor LibraryGUIDIndex {
 
     func lookup(tmdbId: Int, type: TMDBMediaType) -> PlexMetadata? {
         let plexType: PlexItemType = (type == .movie) ? .movie : .show
-        return byTypedTmdbId[TypedKey(type: plexType, tmdbId: tmdbId)].map { entries[$0].metadata }
+        return byTypedTmdbId[TypedKey(type: plexType, tmdbId: tmdbId)].map(metadata(at:))
     }
 
     func lookup(guid: String) -> PlexMetadata? {
-        byGuid[guid].map { entries[$0].metadata }
+        byGuid[guid].map(metadata(at:))
     }
 
     func contains(guid: String) -> Bool {
         byGuid[guid] != nil
+    }
+
+    private func metadata(at position: Int) -> PlexMetadata {
+        sections[position >> 32].entries[position & 0xFFFF_FFFF].metadata
     }
 
     // MARK: - Ingestion
@@ -308,63 +316,153 @@ actor LibraryGUIDIndex {
 
     /// Bump when the persisted shape changes so old caches are ignored, not
     /// mis-decoded, on the next launch after an app update.
-    /// 2: entries replaced whole `PlexMetadata` items.
-    private static let cacheVersion = 2
+    /// 3: one file per section, written in chunks.
+    private static let cacheVersion = 3
 
-    private struct DiskCache: Codable {
+    /// Entries per line of a section file. Encoding a 100,000-title section in
+    /// one `JSONEncoder` call holds the whole JSON tree at once; a chunk at a
+    /// time holds one chunk.
+    private static let chunkSize = 2000
+
+    /// A section file is this header as its first line, then one JSON array of
+    /// up to `chunkSize` entries per line. JSONEncoder never writes a raw
+    /// newline inside a value, so lines split cleanly.
+    private struct DiskHeader: Codable {
         let version: Int
-        let savedAt: Date
-        let items: [Entry]
+        let key: String
+        let serverID: String?
+        let signature: String?
+        let fetchedAt: Date
+        let count: Int
     }
 
-    private static var cacheURL: URL? {
-        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+    private var cacheDirectory: URL? {
+        if let cacheDirectoryOverride { return cacheDirectoryOverride }
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             return nil
         }
         // One snapshot per Home profile: what is "in your library" depends on who looks.
         let owner = UserDefaults.standard.integer(forKey: PlexProfileSession.contentUserIDKey)
-        return dir.appendingPathComponent(owner == 0 ? "library-guid-index.json" : "library-guid-index-\(owner).json")
+        return caches.appendingPathComponent("LibraryGUIDIndex", isDirectory: true)
+            .appendingPathComponent(owner == 0 ? "default" : "\(owner)", isDirectory: true)
     }
 
     /// Another profile owns the content now: drop the previous one's answers
     /// and take this profile's last snapshot.
     func profileChanged() {
         hasFreshData = false
-        rebuild(from: Self.loadFromDisk() ?? [], source: "profileChanged")
+        hydrated = true
+        rebuild(from: Self.loadFromDisk(in: cacheDirectory), source: "profileChanged")
     }
 
-    /// Persist the ingested snapshot for the next launch. Fire-and-forget on a
-    /// background task so the encode + write never serializes behind other
-    /// actor work or the caller's critical path.
-    private func persist(_ items: [Entry]) {
-        guard let url = Self.cacheURL else { return }
-        Task.detached(priority: .utility) {
-            let cache = DiskCache(version: Self.cacheVersion, savedAt: Date(), items: items)
+    /// Write `sections` and delete the files of sections not in `keeping`.
+    /// Fire-and-forget on a background task so the encode + write never
+    /// serializes behind other actor work or the caller's critical path.
+    private func persist(_ sections: [Section], keeping: Set<String>) {
+        guard let directory = cacheDirectory else { return }
+        // Chained, so two passes' writes and deletions land in the order made.
+        let previous = pendingWrite
+        pendingWrite = Task.detached(priority: .utility) {
+            await previous?.value
+            let fm = FileManager.default
             do {
-                let data = try JSONEncoder().encode(cache)
-                try data.write(to: url, options: .atomic)
-                guidIndexLog.info("[GUIDIndex] persisted \(items.count, privacy: .public) items (\(data.count / 1024, privacy: .public) KB) to disk")
+                try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+                for section in sections {
+                    try Self.write(section, to: Self.fileURL(for: section.key, in: directory))
+                    guidIndexLog.info("[GUIDIndex] persisted section \(section.key, privacy: .public): \(section.entries.count, privacy: .public) entries")
+                }
+                let files = (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+                for file in files where file.pathExtension == "ndjson" {
+                    let key = String(file.deletingPathExtension().lastPathComponent.dropFirst("section-".count))
+                    if !keeping.contains(key) { try? fm.removeItem(at: file) }
+                }
             } catch {
                 guidIndexLog.error("[GUIDIndex] persist failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
 
-    /// Load and validate the persisted snapshot. Returns nil on miss, version
-    /// mismatch, or decode failure (caller falls back to the network build).
-    private static func loadFromDisk() -> [Entry]? {
-        guard let url = cacheURL,
-              let data = try? Data(contentsOf: url) else {
-            return nil
+    private var pendingWrite: Task<Void, Never>?
+
+    /// Waits for every write `replace` has started.
+    func waitForPendingWrites() async {
+        await pendingWrite?.value
+    }
+
+    private static func fileURL(for key: String, in directory: URL) -> URL {
+        directory.appendingPathComponent("section-\(key).ndjson")
+    }
+
+    private static func write(_ section: Section, to url: URL) throws {
+        let encoder = JSONEncoder()
+        let newline = Data([0x0A])
+        let temporary = url.appendingPathExtension("tmp")
+        let fm = FileManager.default
+        fm.createFile(atPath: temporary.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: temporary)
+        do {
+            let header = DiskHeader(version: cacheVersion, key: section.key, serverID: section.serverID,
+                                    signature: section.signature, fetchedAt: section.fetchedAt,
+                                    count: section.entries.count)
+            try handle.write(contentsOf: encoder.encode(header) + newline)
+            var start = 0
+            while start < section.entries.count {
+                let end = min(start + chunkSize, section.entries.count)
+                try handle.write(contentsOf: encoder.encode(Array(section.entries[start..<end])) + newline)
+                start = end
+            }
+            try handle.close()
+        } catch {
+            try? handle.close()
+            try? fm.removeItem(at: temporary)
+            throw error
         }
-        guard let cache = try? JSONDecoder().decode(DiskCache.self, from: data) else {
-            guidIndexLog.error("[GUIDIndex] disk cache decode failed; ignoring")
-            return nil
+        _ = try fm.replaceItemAt(url, withItemAt: temporary)
+    }
+
+    /// Every valid section file in `directory`. A file of another version, a
+    /// different key, or fewer entries than its header promises (a write cut
+    /// short) is skipped, so its section is read from the server again.
+    private static func loadFromDisk(in directory: URL?) -> [Section] {
+        guard let directory,
+              let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        else { return [] }
+        let decoder = JSONDecoder()
+        var sections: [Section] = []
+        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+        where file.pathExtension == "ndjson" {
+            guard let data = try? Data(contentsOf: file, options: .alwaysMapped) else { continue }
+            let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+            guard let first = lines.first,
+                  let header = try? decoder.decode(DiskHeader.self, from: first),
+                  header.version == cacheVersion,
+                  file.lastPathComponent == fileURL(for: header.key, in: directory).lastPathComponent
+            else { continue }
+            var entries: [Entry] = []
+            entries.reserveCapacity(header.count)
+            var valid = true
+            for line in lines.dropFirst() {
+                guard let chunk = try? decoder.decode([Entry].self, from: line) else { valid = false; break }
+                entries.append(contentsOf: chunk)
+            }
+            guard valid, entries.count == header.count else {
+                guidIndexLog.error("[GUIDIndex] section \(header.key, privacy: .public) on disk is incomplete; ignoring")
+                continue
+            }
+            sections.append(Section(key: header.key, serverID: header.serverID, signature: header.signature,
+                                    fetchedAt: header.fetchedAt, entries: entries))
         }
-        guard cache.version == cacheVersion else {
-            guidIndexLog.info("[GUIDIndex] disk cache version \(cache.version, privacy: .public) != \(cacheVersion, privacy: .public); ignoring")
-            return nil
+        return sections
+    }
+
+    /// The one-file snapshots of versions 1 and 2, superseded by the section
+    /// directory.
+    private static func removeLegacySnapshots() {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first,
+              let files = try? FileManager.default.contentsOfDirectory(at: caches, includingPropertiesForKeys: nil)
+        else { return }
+        for file in files where file.lastPathComponent.hasPrefix("library-guid-index") && file.pathExtension == "json" {
+            try? FileManager.default.removeItem(at: file)
         }
-        return cache.items
     }
 }
