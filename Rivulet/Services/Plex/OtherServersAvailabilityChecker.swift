@@ -67,9 +67,15 @@ actor OtherServersAvailabilityChecker {
     }
 
     /// Every other reachable server holding the title with this Plex guid
-    /// ("plex://movie/…", "plex://show/…", "plex://episode/…"). Cached per
-    /// guid for the session's server list.
+    /// ("plex://movie/…", "plex://show/…", "plex://episode/…"), limited to
+    /// the servers turned on in Settings and in the user's order. Cached per
+    /// guid for the session's server list; the settings apply on every call.
     func copies(plexGuid: String) async -> [ServerCopy] {
+        let all = await allCopies(plexGuid: plexGuid)
+        return ServerPreferences.sorted(all.filter { ServerPreferences.isEnabled($0.machineId) }, by: \.machineId)
+    }
+
+    private func allCopies(plexGuid: String) async -> [ServerCopy] {
         let servers = await reachableServers()
         if let cached = copiesCache[plexGuid] { return cached }
         let start = ContinuousClock.now
@@ -120,7 +126,7 @@ actor OtherServersAvailabilityChecker {
 
     /// A TMDB title's Plex guid. Discover's matches endpoint answers with the
     /// title's Discover ratingKey, which is the id in its plex:// guid.
-    private func plexGuid(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> String? {
+    func plexGuid(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> String? {
         let key = "\(type.rawValue):\(tmdbId)"
         if let cached = tmdbGuidCache[key] { return cached }
         guard let token = await MainActor.run(body: { PlexAuthManager.shared.authToken }),
@@ -145,6 +151,11 @@ actor OtherServersAvailabilityChecker {
     }
 
     // MARK: - Servers
+
+    /// Resolve the server list now (Settings → Plex Servers lists it).
+    func refreshServers() async {
+        _ = await reachableServers()
+    }
 
     /// The other servers that answered a probe, resolved once per
     /// `serversTTL`. Unreachable servers are left out until the next resolve.
@@ -171,6 +182,12 @@ actor OtherServersAvailabilityChecker {
             otherServersLog.error("[OtherServers] getServers failed; no cross-server lookups until the next resolve")
             return []
         }
+        // Settings lists every server, main included, without a fetch of its own.
+        ServerPreferences.setMainMachineId(selectedMachineId)
+        ServerPreferences.remember(devices.compactMap { device in
+            guard let id = device.machineIdentifier, device.provides.contains("server") else { return nil }
+            return .init(machineId: id, name: device.sourceTitle ?? device.name)
+        })
         let others = devices.filter { $0.machineIdentifier != nil && $0.machineIdentifier != selectedMachineId }
         let servers = await withTaskGroup(of: Server?.self) { group in
             for device in others {

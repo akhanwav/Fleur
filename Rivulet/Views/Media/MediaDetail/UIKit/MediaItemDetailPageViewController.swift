@@ -389,7 +389,7 @@ final class MediaItemDetailPageViewController: UIViewController {
             title.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
         ])
         pill.invertOnFocus = [icon, title]
-        pill.onPrimaryAction = { [weak self] in guard let self else { return }; self.onPlay(self.item, nil) }
+        pill.onPrimaryAction = { [weak self] in self?.playSelectedCopy() }
         playButton = pill
         playTitleLabel = title
 
@@ -583,8 +583,14 @@ final class MediaItemDetailPageViewController: UIViewController {
         applyWatchState(from: detail.item)
         setGenres(detail.genres.isEmpty ? fallbackGenres : detail.genres)
         infoColumns.configure(detail: detail)
-        // Capability badges: file quality (4K/DV/Atmos/…) + SDH/AD. Strip any
-        // parenthetical channel-layout noise ("5.1(side)" → "5.1").
+        renderBadges(detail)
+        copySelection.load(item: item, mainDetail: detail)
+    }
+
+    /// Capability badges: file quality (4K/DV/Atmos/…) + SDH/AD, for the
+    /// file that will play. Strip any parenthetical channel-layout noise
+    /// ("5.1(side)" → "5.1").
+    private func renderBadges(_ detail: MediaItemDetail) {
         let source = detail.primarySource
         var badges = source?.qualityBadges() ?? []
         if source?.subtitleTracks.contains(where: { $0.isHearingImpaired }) ?? false { badges.append("SDH") }
@@ -597,45 +603,43 @@ final class MediaItemDetailPageViewController: UIViewController {
                 .trimmingCharacters(in: .whitespaces)
             if !text.isEmpty { badgeRow.addArrangedSubview(Self.badge(text)) }
         }
-        addVersionsButton(detail)
     }
 
-    /// Ways to Watch button after Watchlist, whenever the episode has a copy
-    /// to list, one included (see `MediaDetailChromeView`'s twin for the
-    /// movie/show route; this is the episode route, which every host opens,
-    /// Continue Watching's tile menu and deep links included). It appears
-    /// with this server's versions; other servers' copies join when their
-    /// lookup answers.
-    private func addVersionsButton(_ detail: MediaItemDetail) {
-        guard versionsButton == nil else { return }
-        waysToWatchRows = WaysToWatchPicker.localRows(for: detail)
-        insertVersionsButtonIfNeeded()
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let remote = await WaysToWatchPicker.otherServerRows(for: self.item, detail: detail)
-            guard !remote.isEmpty else { return }
-            self.waysToWatchRows += remote
-            self.insertVersionsButtonIfNeeded()
+    /// The server copies of this episode and which one the page is on (see
+    /// `DetailCopySelection`). Play, the pill's title and the badges follow
+    /// the selected copy; another server's copy carries its own resume point.
+    private lazy var copySelection: DetailCopySelection = {
+        let selection = DetailCopySelection()
+        selection.onChange = { [weak self] in self?.applySelectedCopy() }
+        return selection
+    }()
+
+    private func applySelectedCopy() {
+        guard copySelection.selected != nil else { return }
+        playTitleLabel?.text = playPillTitle
+        if let detail = copySelection.selectedDetail { renderBadges(detail) }
+        insertWaysToWatchButtonIfNeeded()
+    }
+
+    private func playSelectedCopy() {
+        if copySelection.isRemoteSelected {
+            copySelection.playRemote(from: self)
+        } else {
+            onPlay(item, copySelection.selectedMediaID)
         }
     }
 
-    /// The rows the Ways to Watch button opens, read when it's pressed.
-    private var waysToWatchRows: [WaysToWatchPicker.Row] = []
-
-    private func insertVersionsButtonIfNeeded() {
-        guard !waysToWatchRows.isEmpty, versionsButton == nil, let row = actionRow, let watchlist = watchlistButton,
-              let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
+    /// Ways to Watch button after Watchlist once the episode has a copy to
+    /// list, one included (see `MediaDetailChromeView`'s twin for the
+    /// movie/show route; this is the episode route, which every host opens,
+    /// Continue Watching's tile menu and deep links included).
+    private func insertWaysToWatchButtonIfNeeded() {
+        guard !copySelection.copies.isEmpty, versionsButton == nil, let row = actionRow,
+              let watchlist = watchlistButton, let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
         let button = circleButton(systemImage: "square.stack")
         button.onPrimaryAction = { [weak self, weak button] in
             guard let self, let button else { return }
-            WaysToWatchPicker.present(self.waysToWatchRows, from: self,
-                                      sourceFrame: button.convert(button.bounds, to: nil)) { [weak self] target in
-                guard let self else { return }
-                switch target {
-                case .local(let id): self.onPlay(self.item, id)
-                case .remote: RemoteCopyPlayer.play(target, from: self)
-                }
-            }
+            self.copySelection.present(from: self, sourceFrame: button.convert(button.bounds, to: nil))
         }
         row.insertArrangedSubview(button, at: index + 1)
         versionsButton = button
@@ -668,6 +672,10 @@ final class MediaItemDetailPageViewController: UIViewController {
     private func applyWatchState(from refreshed: MediaItem) {
         guard refreshed.ref == item.ref else { return }
         item = refreshed
+        // Another server's copy was played: re-read its resume point.
+        if copySelection.isRemoteSelected, let detail = copySelection.copies.first(where: \.isMainServer)?.detail {
+            copySelection.load(item: refreshed, mainDetail: detail)
+        }
         isWatched = refreshed.isWatched
         resumeOffset = refreshed.userState.viewOffset
         setCircleIcon(watchedButton, isWatched ? "checkmark.circle.fill" : "checkmark")
@@ -687,7 +695,10 @@ final class MediaItemDetailPageViewController: UIViewController {
     private var resumeOffset: TimeInterval = 0
 
     private var playPillTitle: String {
-        EpisodePicker.playTitle(
+        if let copy = copySelection.selected, copy.remote != nil {
+            return EpisodePicker.playTitle(resumes: copy.item.isInProgress, watched: copy.item.isWatched)
+        }
+        return EpisodePicker.playTitle(
             resumes: WatchProgressPolicy.hasResumePoint(offsetSeconds: resumeOffset, runtimeSeconds: item.runtime),
             watched: isWatched)
     }

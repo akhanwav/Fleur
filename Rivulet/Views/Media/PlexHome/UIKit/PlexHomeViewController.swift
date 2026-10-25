@@ -4245,7 +4245,7 @@ final class PlexHomeViewController: UIViewController {
         case .continueWatching:
             // Instant Resume on: a CW tile resumes straight away. Off: it
             // behaves like every other shelf row and opens the preview carousel.
-            if SettingsStore.bool("continueWatchingInstantResume", default: true) {
+            if SettingsStore.bool("continueWatchingInstantResume", default: false) {
                 playItem(section.items[itemIndex])
             } else {
                 presentPreview(forSection: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
@@ -6853,10 +6853,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 },
             ]
             cwFirst += goToEntries(for: item)
-            if let version = Self.playVersionAction(for: item, handler: { [weak self] in
-                self?.presentVersionPicker(for: item, from: tileFrame)
-            }) {
-                cwFirst.insert(version, at: 1)
+            if item.kind == .movie || item.kind == .episode {
+                cwFirst.insert(TileMenuAction(title: "Ways to Watch…", systemImage: "square.stack") { [weak self] in
+                    self?.presentServerChoices(for: item, from: tileFrame)
+                }, at: 1)
             }
 
             let cwMiddle = [
@@ -6950,6 +6950,40 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             return nil
         }
         return TileMenuAction(title: "Play Version…", systemImage: "square.stack", handler: handler)
+    }
+
+    /// Continue Watching's "Ways to Watch…": every server's copy with its
+    /// own resume time, the one this tile is from checked. Picking one opens
+    /// the title's page on that copy (`DetailCopySelection.pendingServer`);
+    /// nothing plays from here.
+    private func presentServerChoices(for item: MediaItem, from tileFrame: CGRect?) {
+        guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
+        Task { @MainActor [weak self] in
+            guard let self, let detail = try? await provider.fullDetail(for: item.ref) else { return }
+            let (guid, _, others) = await DetailCopySelection.otherCopies(of: item, mainDetail: detail)
+            let mainName = self.authManager.selectedServer?.sourceTitle ?? self.authManager.selectedServer?.name ?? "This Server"
+            let main = self.authManager.selectedServer?.machineIdentifier ?? "main"
+            var rows: [(id: String, label: String, isCurrent: Bool)] = [
+                (main, [mainName, DetailCopySelection.resumeText(item), "Current"].compactMap { $0 }
+                    .joined(separator: " · "), true)
+            ]
+            rows += others.map { copy in
+                (copy.machineId, [copy.serverName, copy.sources.first.map(VersionPicker.rowLabel),
+                                  DetailCopySelection.resumeText(copy.item)].compactMap { $0 }
+                    .joined(separator: " · "), false)
+            }
+            rows = ServerPreferences.sorted(rows, by: \.id)
+            let actions = rows.map { row in
+                TileMenuAction(title: row.label,
+                               systemImage: row.isCurrent ? "checkmark.circle.fill" : "circle") { [weak self] in
+                    if let guid { DetailCopySelection.pendingServer[guid] = row.id }
+                    self?.selectMediaItem(item)
+                }
+            }
+            let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: tileFrame,
+                                                    header: TileMenuHeader(title: "Ways to Watch"))
+            self.topmostPresented.present(popup, animated: false)
+        }
     }
 
     /// Tile menu "Play Version…": fetch the versions, then play the pick.

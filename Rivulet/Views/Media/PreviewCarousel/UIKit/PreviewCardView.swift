@@ -346,6 +346,11 @@ final class PreviewCardView: UICollectionViewCell {
     /// Info button → show the structured info popup (carries the loaded detail).
     var onShowInfo: ((MediaItemDetail) -> Void)?
 
+    /// Switch the hero to another server's copy of this title.
+    func selectCopy(machineId: String) {
+        chromeView.selectCopy(machineId: machineId)
+    }
+
     /// Repaint the hero chrome's watch-derived bits from a re-fetched copy of
     /// the same item, without rebuilding the card (issue #228). Also updates
     /// this card's own stored item so `onPlay` resumes from the new offset.

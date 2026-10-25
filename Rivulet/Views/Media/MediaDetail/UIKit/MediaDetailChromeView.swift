@@ -300,6 +300,7 @@ final class MediaDetailChromeView: UIView {
     }
 
     private func commonInit() {
+        copySelection.onChange = { [weak self] in self?.applySelectedCopy() }
         backgroundColor = .clear
         isUserInteractionEnabled = false  // host flips this on for .expandedDetail
 
@@ -493,6 +494,12 @@ final class MediaDetailChromeView: UIView {
 
         heroWatched = refreshed.isWatched
         updateWatchedIcon()
+        // Another server's copy was played: re-read every copy (each has its
+        // own resume point) and stay on that server (it is now last watched).
+        if copySelection.isRemoteSelected {
+            copySelection.load(item: refreshed, mainDetail: detail)
+            return
+        }
         setPlayTarget(refreshed)
         // Shows/seasons: the pill moves to the next unwatched episode.
         resolvePlayTarget(for: refreshed, token: loadToken)
@@ -520,8 +527,13 @@ final class MediaDetailChromeView: UIView {
             ? Self.episodeDescriptionMaxWidth : Self.descriptionMaxWidth
         rebuildGenreRow(item: item, detail: nil)
         rebuildQualityRow(item: item, detail: nil)
+        mainPlayTarget = nil
         rebuildActionButtons(item: item)
         resolvePlayTarget(for: item, token: token)
+        // An owned title starts its copies once its detail lands (it names the
+        // Plex guid); an unowned one has only other servers' copies.
+        copySelection.reset()
+        if item.isMetadataOnly { copySelection.load(item: item, mainDetail: nil) }
 
         // Clear any aspect constraint from the previous item — a stale
         // ratio would size the new image wrong while it's loading.
@@ -621,8 +633,10 @@ final class MediaDetailChromeView: UIView {
                   let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider),
                   self.loadToken == token
             else { return }
-            self.setPlayTarget(episode)
-            self.addVersionsButton(item: episode, detail: nil, token: token)
+            self.mainPlayTarget = episode
+            // The pill names the selected copy's episode: another server's
+            // copy has its own next episode.
+            if !self.copySelection.isRemoteSelected { self.setPlayTarget(episode) }
         }
     }
 
@@ -671,55 +685,80 @@ final class MediaDetailChromeView: UIView {
         } else {
             castLabel.attributedText = nil
         }
-        if item.kind == .movie || item.kind == .episode {
-            addVersionsButton(item: item, detail: detail, token: loadToken)
-        }
+        copySelection.load(item: item, mainDetail: detail)
         addTrailerButton(detail)
     }
 
-    /// Ways to Watch button after Info, on every owned title: this server's
-    /// own versions plus every copy on another accessible server, even when
-    /// that is one copy, so its server and quality can always be read. A
-    /// show or season lists its Play target's copies (`detail` nil: fetched
-    /// here). The button appears with this server's versions; other servers'
-    /// copies join the list when their lookup answers, so nothing waits on it.
-    private func addVersionsButton(item: MediaItem, detail: MediaItemDetail?, token: UInt64) {
-        guard versionsButton == nil, infoButton != nil else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            var resolved = detail
-            if resolved == nil { resolved = await Self.fetchDetail(item.ref) }
-            guard let resolved, self.loadToken == token else { return }
-            self.waysToWatchRows = WaysToWatchPicker.localRows(for: resolved)
-            self.insertVersionsButtonIfNeeded(item: item)
-            let remote = await WaysToWatchPicker.otherServerRows(for: item, detail: resolved)
-            guard self.loadToken == token, !remote.isEmpty else { return }
-            self.waysToWatchRows += remote
-            self.insertVersionsButtonIfNeeded(item: item)
+    /// The server copies of this title and which one the page is on (see
+    /// `DetailCopySelection`). Play, the resume bar, the quality badges and
+    /// the Info popup all follow the selected copy.
+    private let copySelection = DetailCopySelection()
+    /// A show's or season's Play target on the main server, kept so the pill
+    /// can go back to it after another server's copy was selected.
+    private var mainPlayTarget: MediaItem?
+
+    /// Switch the page to another server's copy (On Your Servers, a pending
+    /// pick). No-op when that server has no copy.
+    func selectCopy(machineId: String) {
+        copySelection.select(machineId: machineId)
+    }
+
+    /// Repaint everything tied to the selected copy.
+    private func applySelectedCopy() {
+        guard let item, let copy = copySelection.selected else { return }
+        if item.isMetadataOnly { insertPlayPillIfNeeded(item: item) }
+        if copy.isMainServer {
+            setPlayTarget(mainPlayTarget ?? copy.item)
+        } else {
+            setPlayTarget(copy.playTarget ?? copy.item)
+        }
+        rebuildQualityRow(item: item, detail: copySelection.selectedDetail ?? detail)
+        insertWaysToWatchButtonIfNeeded()
+    }
+
+    /// Play the selected copy: another server's through `RemoteCopyPlayer`
+    /// (its own resume prompt), the main server's through the host, with the
+    /// picked version when there is one.
+    private func playSelectedCopy() {
+        guard let item else { return }
+        if copySelection.isRemoteSelected {
+            guard let host = hostViewController else { return }
+            copySelection.playRemote(from: host)
+        } else if let mediaID = copySelection.selectedMediaID, item.kind == .movie || item.kind == .episode {
+            onPlayVersion?(item, mediaID)
+        } else {
+            onPlay?()
         }
     }
 
-    /// The rows the Ways to Watch button opens, read when it's pressed.
-    private var waysToWatchRows: [WaysToWatchPicker.Row] = []
+    /// An unowned title another server holds gains a Play pill in front.
+    private func insertPlayPillIfNeeded(item: MediaItem) {
+        guard !actionButtonsStack.arrangedSubviews.contains(where: { $0 === playPill }) else { return }
+        let play = makePlayPill(item: item)
+        play.onPrimaryAction = { [weak self] in self?.playSelectedCopy() }
+        actionButtonsStack.insertArrangedSubview(play, at: 0)
+        playPill = play
+        playButton = play
+    }
 
-    private func insertVersionsButtonIfNeeded(item: MediaItem) {
-        guard !waysToWatchRows.isEmpty, versionsButton == nil, let info = infoButton,
-              let index = actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
+    private weak var playPill: FocusableActionButton?
+
+    /// Ways to Watch button after Info, once the title has a copy to list:
+    /// every owned title (one copy included, so its server and quality can
+    /// always be read) and any unowned one another server holds.
+    private func insertWaysToWatchButtonIfNeeded() {
+        guard !copySelection.copies.isEmpty, versionsButton == nil else { return }
         let button = makeCircleButton(systemImage: "square.stack")
         button.onPrimaryAction = { [weak self, weak button] in
             guard let self, let button, let host = self.hostViewController else { return }
-            WaysToWatchPicker.present(self.waysToWatchRows, from: host,
-                                      sourceFrame: button.convert(button.bounds, to: nil)) { [weak self] target in
-                guard let self else { return }
-                switch target {
-                case .local(let id): self.onPlayVersion?(item, id)
-                case .remote:
-                    guard let host = self.hostViewController else { return }
-                    RemoteCopyPlayer.play(target, from: host)
-                }
-            }
+            self.copySelection.present(from: host, sourceFrame: button.convert(button.bounds, to: nil))
         }
-        actionButtonsStack.insertArrangedSubview(button, at: index + 1)
+        if let info = infoButton ?? metadataInfoButton,
+           let index = actionButtonsStack.arrangedSubviews.firstIndex(of: info) {
+            actionButtonsStack.insertArrangedSubview(button, at: index + 1)
+        } else {
+            actionButtonsStack.addArrangedSubview(button)
+        }
         versionsButton = button
     }
 
@@ -754,7 +793,8 @@ final class MediaDetailChromeView: UIView {
         // source has a wider set (Trailer, Audio, Subs) that's gated by
         // detail content — we don't surface those in the carousel.
         let play = makePlayPill(item: item)
-        play.onPrimaryAction = { [weak self] in self?.onPlay?() }
+        play.onPrimaryAction = { [weak self] in self?.playSelectedCopy() }
+        playPill = play
         // Movie/episode: the item's own state. Show/season: reads "Play" until
         // the Play target resolves async in `resolvePlayTarget`.
         setPlayTarget(item)
@@ -780,7 +820,7 @@ final class MediaDetailChromeView: UIView {
         let info = makeCircleButton(systemImage: "text.page")     // open details popup
         infoButton = info
         info.onPrimaryAction = { [weak self] in
-            guard let self, let detail = self.detail else { return }
+            guard let self, let detail = self.copySelection.selectedDetail ?? self.detail else { return }
             self.onShowFullDescription?(detail)
         }
 
@@ -817,8 +857,9 @@ final class MediaDetailChromeView: UIView {
         let pill = makeWatchlistPill(item: item)
 
         let info = makeCircleButton(systemImage: "text.page")
+        metadataInfoButton = info
         info.onPrimaryAction = { [weak self] in
-            guard let self, let detail = self.detail else { return }
+            guard let self, let detail = self.copySelection.selectedDetail ?? self.detail else { return }
             self.onShowFullDescription?(detail)
         }
 
@@ -903,6 +944,7 @@ final class MediaDetailChromeView: UIView {
     private weak var watchlistButton: FocusableActionButton?
     private weak var infoButton: FocusableActionButton?
     private weak var versionsButton: FocusableActionButton?
+    private weak var metadataInfoButton: FocusableActionButton?
     private var heroWatched = false
     private var heroOnWatchlist = false
 

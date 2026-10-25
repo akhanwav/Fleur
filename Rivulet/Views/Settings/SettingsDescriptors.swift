@@ -29,6 +29,7 @@ enum SettingsDescriptorStore {
         if id.hasPrefix("pinnedCollection_") { return descriptors["pinnedCollection"] }
         if id.hasPrefix("fav_") { return descriptors["liveTVFavoriteRow"] }
         if id.hasPrefix("sq_") { return descriptors["streamingQualityOption"] }
+        if id.hasPrefix("plexServer_") { return descriptors["plexServerRow"] }
         return nil
     }
 
@@ -142,9 +143,21 @@ enum SettingsDescriptorStore {
             icon: "questionmark.circle",
             description: "What happens when you play an in-progress movie or episode: ask every time with a Resume / Start from Beginning prompt, always resume, or always start over. Applies everywhere Play starts directly — detail pages, episode lists, Continue Watching, and tile menus."
         ),
+        "plexServers": SettingDescriptor(
+            icon: "square.stack.3d.up",
+            description: "Choose which of your Plex servers, yours and shared ones, appear in Ways to Watch, On Your Servers and filmographies, and their order. A title's page opens on the server you last watched it on, otherwise the first server here that has it. Home and Library stay on your main server."
+        ),
+        "plexServerRow": SettingDescriptor(
+            icon: "server.rack",
+            description: "Click to turn this server on or off for Ways to Watch, On Your Servers and filmographies. Press and hold to move it up or down. Your main server is always on. Each server keeps its own resume points."
+        ),
+        "noPlexServers": SettingDescriptor(
+            icon: "server.rack",
+            description: "Your servers appear here once Rivulet has looked for them. Open any title's page, then come back."
+        ),
         "instantResume": SettingDescriptor(
             icon: "play.rectangle.on.rectangle",
-            description: "Selecting a Continue Watching tile resumes it immediately. Turn this off to open the preview instead, the same as every other Home row."
+            description: "Off: selecting a Continue Watching tile opens its page, where you can pick the server and version before playing. On: it resumes immediately."
         ),
         "homeStreamingQuality": SettingDescriptor(
             icon: "house.fill",
@@ -434,6 +447,7 @@ enum SettingsDescriptorStore {
         case .servers: return ("server.rack", .systemOrange)
         case .about: return ("info.circle.fill", .systemGray)
         case .plex: return ("server.rack", .systemOrange)
+        case .plexServers: return ("square.stack.3d.up", .systemOrange)
         case .jellyfin: return ("server.rack", .systemPurple)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)

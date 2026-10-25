@@ -394,6 +394,14 @@ final class PreviewCarouselViewController: UIViewController {
                 onPlay: { [weak self] season, _ in self?.playHeroItem(season) })
             self.present(page, animated: true)
         }
+        // On Your Servers card Select → the page switches to that server's
+        // copy and focus goes back up to its Play button. Nothing plays yet.
+        expandedDetail.onSelectServerCopy = { [weak self] machineId in
+            guard let self else { return }
+            (self.collectionView.cellForItem(at: IndexPath(item: self.selectedIndex, section: 0)) as? PreviewCardView)?
+                .selectCopy(machineId: machineId)
+            self.returnToHeroFromBelowFold()
+        }
         // Cast / crew cell Select → person detail page (full-screen).
         expandedDetail.onSelectPerson = { [weak self] person in
             guard let self else { return }

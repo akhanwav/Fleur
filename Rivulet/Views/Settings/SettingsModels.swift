@@ -47,7 +47,7 @@ enum CrossfadeOption: String, CaseIterable, Hashable, CustomStringConvertible {
 enum SettingsPage: Hashable, CaseIterable {
     case root
     case appearance, playback, music, liveTV, servers, about
-    case plex, jellyfin, iptv, libraries, cache
+    case plex, plexServers, jellyfin, iptv, libraries, cache
     case homeRows
     case liveTVSourceDetail, liveTVFavorites
     case addLiveTVSource, addOwnServer, addPlaylistURL
@@ -66,6 +66,7 @@ enum SettingsPage: Hashable, CaseIterable {
         case .servers: return "Servers"
         case .about: return "About"
         case .plex: return "Plex Server"
+        case .plexServers: return "Plex Servers"
         case .jellyfin: return "Jellyfin Server"
         case .iptv: return "Live TV Sources"
         case .liveTVSourceDetail: return "Source Details"

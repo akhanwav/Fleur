@@ -351,7 +351,9 @@ final class PersonDetailViewController: UIViewController {
             if let entry = visibleEntries[safe: indexPath.item] {
                 cell.configure(
                     item: entry.item,
-                    badge: entry.isOnServer ? "On Server" : nil,
+                    // No badge: the On My Servers filter answers "where is it",
+                    // and a badge read as "on Diamond" for titles only on others.
+                    badge: nil,
                     caption: .init(title: entry.item.title,
                                    detail: entry.item.year.map(String.init),
                                    credit: entry.credit))

@@ -68,8 +68,9 @@ nonisolated enum ServerAvailability: Hashable, Sendable {
 }
 
 /// One copy of an unowned title on another accessible server: a focusable
-/// entry that plays it.
+/// entry that switches the page to that copy.
 nonisolated struct ServerCopyEntry: Hashable, Sendable {
+    let machineId: String
     let serverName: String
     /// Best version's quality ("4K · Dolby Vision · …") for a movie, the
     /// episode count for a show, led by "Resume" when that server holds a
@@ -229,7 +230,9 @@ final class BelowFoldContentLoader {
             for await entry in group { entries.append(entry) }
             return entries
         }
-        return .found(entries.sorted { $0.serverName.localizedCaseInsensitiveCompare($1.serverName) == .orderedAscending })
+        // `copies` is already in the user's server order.
+        let order = copies.map(\.machineId)
+        return .found(entries.sorted { (order.firstIndex(of: $0.machineId) ?? 0) < (order.firstIndex(of: $1.machineId) ?? 0) })
     }
 
     /// A copy's entry. A failed metadata read still yields a playable entry,
@@ -239,7 +242,8 @@ final class BelowFoldContentLoader {
                                               ratingKey: copy.ratingKey, mediaID: nil)
         guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
             serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey
-        ) else { return ServerCopyEntry(serverName: copy.serverName, summary: nil, target: target) }
+        ) else { return ServerCopyEntry(machineId: copy.machineId, serverName: copy.serverName,
+                                        summary: nil, target: target) }
         var parts: [String] = []
         if meta.type == "show" {
             if let count = meta.leafCount { parts.append(count == 1 ? "1 episode" : "\(count) episodes") }
@@ -251,7 +255,7 @@ final class BelowFoldContentLoader {
                 parts.append(VersionPicker.rowLabel(best))
             }
         }
-        return ServerCopyEntry(serverName: copy.serverName,
+        return ServerCopyEntry(machineId: copy.machineId, serverName: copy.serverName,
                                summary: parts.isEmpty ? nil : parts.joined(separator: " · "),
                                target: target)
     }

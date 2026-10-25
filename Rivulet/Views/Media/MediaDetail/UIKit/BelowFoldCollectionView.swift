@@ -98,6 +98,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     var onShowRelatedDetails: ((MediaItem) -> Void)?
     /// Episode description Select → open the episode detail page.
     var onShowEpisodeDetails: ((MediaItem) -> Void)?
+    /// On Your Servers card Select → switch the page to that server's copy.
+    var onSelectServerCopy: ((String) -> Void)?
     /// Cast / crew cell Select → open the person detail page.
     var onSelectPerson: ((MediaPerson) -> Void)?
     /// Selecting the About cards opens the matching popup (synopsis / advisory).
@@ -517,10 +519,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .servers:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: ServerAvailabilityCollectionCell.reuseID, for: indexPath) as! ServerAvailabilityCollectionCell
                 cell.configure(availability: self.serverAvailability ?? .checking)
-                cell.onSelectCopy = { [weak self] entry in
-                    guard let self, let host = self.hostViewController else { return }
-                    RemoteCopyPlayer.play(entry.target, from: host)
-                }
+                cell.onSelectCopy = { [weak self] entry in self?.onSelectServerCopy?(entry.machineId) }
                 return cell
             case .moreLikeThisShelf:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
@@ -670,9 +669,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         collectionView.staticSections = statics
     }
 
-    private var hostViewController: UIViewController? {
-        sequence(first: self as UIResponder, next: \.next).first { $0 is UIViewController } as? UIViewController
-    }
+
 
     /// Patch the About cell with the rich advisory after it arrives, without a
     /// full snapshot rebuild (focus-preserving). No-op if About isn't present.

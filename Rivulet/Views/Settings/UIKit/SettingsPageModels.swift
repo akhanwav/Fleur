@@ -182,6 +182,7 @@ enum SettingsContent {
         case .music:       return music
         case .servers:     return servers
         case .plex:        return plex
+        case .plexServers: return plexServers
         case .jellyfin:    return jellyfin
         case .libraries:   return libraries
         case .homeRows:    return homeRows
@@ -342,7 +343,7 @@ enum SettingsContent {
             toggle("autoSkipAds", "Auto-Skip Ads", key: "autoSkipAds", default: false),
             toggle("autoSkipRecap", "Auto-Skip Recap", key: "autoSkipRecap", default: false),
             toggle("useIntroDB", "Community Marker Database", key: "useIntroDB", default: false),
-            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: true),
+            toggle("instantResume", "Instant Resume", key: "continueWatchingInstantResume", default: false),
             SettingsRowItem(id: "resumeBehavior", title: "When Resuming",
                             kind: .navigationValue(.resumeBehaviorPicker, value: {
                                 ResumeBehavior.current.description
@@ -559,14 +560,47 @@ enum SettingsContent {
     // MARK: Servers
 
     private static var servers: [SettingsRowItem] {
-        [
-            SettingsRowItem(id: "plexServer", title: "Plex Server", kind: .navigation(.plex)),
+        var rows = [SettingsRowItem(id: "plexServer", title: "Plex Server", kind: .navigation(.plex))]
+        if PlexAuthManager.shared.isAuthenticated {
+            // Look the servers up now, so the page is filled when it opens.
+            Task { await OtherServersAvailabilityChecker.shared.refreshServers() }
+            rows.append(SettingsRowItem(id: "plexServers", title: "Plex Servers", kind: .navigation(.plexServers)))
+        }
+        return rows + [
             SettingsRowItem(
                 id: "jellyfinServer", title: "Jellyfin Server",
                 kind: .navigationAction(.jellyfin,
                                         value: { JellyfinSession.account?.serverName ?? "" },
                                         prepare: { addSourceDraft = AddSourceDraft() }))
         ]
+    }
+
+    // MARK: Plex servers (on/off + order for cross-server features)
+
+    private static var plexServers: [SettingsRowItem] {
+        var servers = ServerPreferences.knownServers
+        if let main = PlexAuthManager.shared.selectedServer, let id = main.machineIdentifier,
+           !servers.contains(where: { $0.machineId == id }) {
+            servers = ServerPreferences.sorted(
+                servers + [.init(machineId: id, name: main.sourceTitle ?? main.name)], by: \.machineId)
+        }
+        guard !servers.isEmpty else {
+            return [SettingsRowItem(id: "noPlexServers", title: "No servers found yet", kind: .info(value: { "" }))]
+        }
+        let mainId = PlexAuthManager.shared.selectedServer?.machineIdentifier
+        let ids = servers.map(\.machineId)
+        return servers.map { server in
+            let isMain = server.machineId == mainId
+            return SettingsRowItem(
+                id: "plexServer_\(server.machineId)",
+                title: isMain ? "\(server.name) (Main)" : server.name,
+                kind: .toggle(
+                    get: { ServerPreferences.isEnabled(server.machineId) },
+                    // The main server is the one Home and Library show: always on.
+                    set: { on in if !isMain { ServerPreferences.setEnabled(server.machineId, on) } }),
+                onReorder: { up in ServerPreferences.move(server.machineId, up: up, among: ids) },
+                reorderGroup: "plexServers")
+        }
     }
 
     // MARK: Plex (sign-in / sign-out)

@@ -194,6 +194,10 @@ final class ExpandedDetailContainerView: UIView {
         get { belowFoldCollection.onShowEpisodeDetails }
         set { belowFoldCollection.onShowEpisodeDetails = newValue }
     }
+    var onSelectServerCopy: ((String) -> Void)? {
+        get { belowFoldCollection.onSelectServerCopy }
+        set { belowFoldCollection.onSelectServerCopy = newValue }
+    }
     var onSelectPerson: ((MediaPerson) -> Void)? {
         get { belowFoldCollection.onSelectPerson }
         set { belowFoldCollection.onSelectPerson = newValue }

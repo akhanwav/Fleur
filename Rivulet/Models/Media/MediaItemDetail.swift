@@ -22,7 +22,7 @@ struct MediaItemDetail: Sendable {
     let directors: [MediaPerson]
     let writers: [MediaPerson]
     let chapters: [MediaChapter]
-    let mediaSources: [MediaSource]
+    var mediaSources: [MediaSource]
     let trailerURL: URL?
     /// A trailer that plays OUTSIDE this app (TMDB's YouTube video, opened in
     /// the YouTube app) — distinct from `trailerURL`, which is an in-app

@@ -62,6 +62,13 @@ enum PlayerPresenter {
             }
             guard allowed else { return false }
         }
+        // "Last watched on" for the copy a detail page opens on. Another
+        // server's plays are recorded by `RemoteCopyPlayer`, which knows it.
+        if viewModel.serverURL == PlexAuthManager.shared.selectedServerURL,
+           let main = PlexAuthManager.shared.selectedServer?.machineIdentifier {
+            ServerPreferences.recordWatched(
+                guids: [viewModel.metadata.guid, viewModel.metadata.grandparentGuid], machineId: main)
+        }
         let vc = makeViewController(viewModel: viewModel, onDismiss: onDismiss)
         presenter.topmostPresented.present(vc, animated: animated)
         return true
