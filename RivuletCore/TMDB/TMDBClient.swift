@@ -108,6 +108,28 @@ private nonisolated struct TMDBPersonCreditsResponse: Codable, Sendable {
     }
 }
 
+private nonisolated struct TMDBPersonSearchResponse: Codable, Sendable {
+    let results: [Person]?
+    struct Person: Codable, Sendable {
+        let id: Int
+        let name: String?
+        let popularity: Double?
+        let knownFor: [KnownFor]?
+        enum CodingKeys: String, CodingKey {
+            case id, name, popularity
+            case knownFor = "known_for"
+        }
+    }
+    struct KnownFor: Codable, Sendable {
+        let id: Int
+        let mediaType: String?
+        enum CodingKeys: String, CodingKey {
+            case id
+            case mediaType = "media_type"
+        }
+    }
+}
+
 private nonisolated struct TMDBKeywordsResponse: Codable, Sendable {
     let keywords: [TMDBKeyword]?
     let results: [TMDBKeyword]?
@@ -260,22 +282,46 @@ final class TMDBClient: @unchecked Sendable {
     /// source for the person page. The PORTRAIT is intentionally NOT taken from
     /// TMDB — the page renders the Plex role thumb from first paint, and swapping
     /// in a different TMDB image seconds later is jarring. Returns nil if unresolved.
-    func actorBiography(titleTmdbId: Int, type: TMDBMediaType, actorName: String) async -> String? {
+    func actorBiography(titleTmdbId: Int?, type: TMDBMediaType, actorName: String) async -> String? {
         guard let personId = await personId(titleTmdbId: titleTmdbId, type: type, name: actorName) else { return nil }
         let person: TMDBPersonDetails? = try? await request(path: "person/\(personId)")
         return person?.biography.flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// The TMDB person behind a credit on `titleTmdbId`, matched by name
-    /// (cast first, then crew, so a director resolves too).
-    func personId(titleTmdbId: Int, type: TMDBMediaType, name: String) async -> Int? {
-        guard let credits: TMDBCreditsResponse = try? await request(path: "\(type.rawValue)/\(titleTmdbId)/credits") else {
-            return nil
+    /// The TMDB person behind a credit. First by name in the originating
+    /// title's credits (cast, then crew, so a director resolves too; a show's
+    /// `aggregate_credits`, every season's cast, not just the latest), then by
+    /// a TMDB person search on the name, preferring the person known for that
+    /// title, else the most popular exact-name match. nil only when TMDB has
+    /// no one by that name.
+    func personId(titleTmdbId: Int?, type: TMDBMediaType, name: String) async -> Int? {
+        let target = Self.normalizedName(name)
+        guard !target.isEmpty else { return nil }
+        if let titleTmdbId {
+            let path = type == .movie ? "movie/\(titleTmdbId)/credits" : "tv/\(titleTmdbId)/aggregate_credits"
+            if let credits: TMDBCreditsResponse = try? await request(path: path),
+               let match = ((credits.cast ?? []) + (credits.crew ?? [])).first(where: {
+                   $0.name.map(Self.normalizedName) == target }),
+               let id = match.id {
+                return id
+            }
         }
-        func norm(_ s: String) -> String { s.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
-        let target = norm(name)
-        let match = ((credits.cast ?? []) + (credits.crew ?? [])).first { ($0.name.map(norm)) == target }
-        return match?.id
+        guard let search: TMDBPersonSearchResponse = try? await request(
+            path: "search/person", queryItems: [URLQueryItem(name: "query", value: name)]) else { return nil }
+        let exact = (search.results ?? []).filter { $0.name.map(Self.normalizedName) == target }
+        if let titleTmdbId,
+           let knownForTitle = exact.first(where: { ($0.knownFor ?? []).contains { $0.id == titleTmdbId } }) {
+            return knownForTitle.id
+        }
+        return exact.max { ($0.popularity ?? 0) < ($1.popularity ?? 0) }?.id
+    }
+
+    /// Names compared without case, accents, punctuation or extra spaces:
+    /// "Robert Downey Jr." and "Robert Downey Jr" are one person.
+    static func normalizedName(_ name: String) -> String {
+        let folded = name.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current).lowercased()
+        let spaced = String(folded.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : " " })
+        return spaced.split(separator: " ").joined(separator: " ")
     }
 
     /// Every movie and show the person is credited on. nil on failure.

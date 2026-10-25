@@ -18,6 +18,9 @@
 //
 
 import UIKit
+import os.log
+
+private let copiesLog = Logger(subsystem: "com.rivulet.app", category: "WaysToWatch")
 
 /// Where a play actually goes.
 nonisolated enum WaysToWatchTarget: Hashable, Sendable {
@@ -64,6 +67,9 @@ final class DetailCopySelection {
     static var pendingServer: [String: String] = [:]
 
     private(set) var copies: [DetailCopy] = []
+    /// True once the other servers have answered (with or without a copy):
+    /// an unowned page then shows Ways to Watch either way.
+    private(set) var hasLookedUp = false
     private(set) var selectedIndex: Int?
     /// The picked version, or nil for the copy's best.
     private(set) var selectedMediaID: String?
@@ -87,6 +93,7 @@ final class DetailCopySelection {
 
     func reset() {
         token &+= 1
+        hasLookedUp = false
         copies = []
         selectedIndex = nil
         selectedMediaID = nil
@@ -110,7 +117,10 @@ final class DetailCopySelection {
 
         Task { @MainActor [weak self] in
             let (guid, tmdbKey, remote) = await Self.otherCopies(of: item, mainDetail: mainDetail)
-            guard let guid, let self, self.token == current else { return }
+            copiesLog.info("[Copies] \(item.title, privacy: .public): guid \(guid ?? "none", privacy: .public), \(remote.count, privacy: .public) server copies")
+            guard let self, self.token == current else { return }
+            self.hasLookedUp = true
+            guard let guid else { self.onChange?(); return }
             var own = self.copies.filter(\.isMainServer)
             // The lookup searches the main server too, so it finds the
             // page's own item again: list that one once, as the page's.
@@ -161,6 +171,11 @@ final class DetailCopySelection {
         if item.isMetadataOnly, let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) {
             tmdbKey = "tmdb:\(type.rawValue):\(tmdbId)"
             guid = await checker.plexGuid(forTmdbId: tmdbId, type: type)
+        } else if guid == nil, item.kind == .movie || item.kind == .show,
+                  let tmdbId = mainDetail?.externalIDs["tmdb"].flatMap(Int.init) {
+            // An owned item without Plex's own guid (a legacy agent): its
+            // TMDB id still names the title on the other servers.
+            guid = await checker.plexGuid(forTmdbId: tmdbId, type: item.kind == .movie ? .movie : .tv)
         }
         guard let guid else { return (nil, tmdbKey, []) }
         let found = await checker.copies(plexGuid: guid)
@@ -205,7 +220,10 @@ final class DetailCopySelection {
                 actions.append(row(text, selected: isSelected, copyID: copy.id, mediaID: source.id))
             }
         }
-        guard !actions.isEmpty else { return }
+        if actions.isEmpty {
+            // An unowned title no server holds: say so, rather than no list.
+            actions = [TileMenuAction(title: "Not on your servers", systemImage: "xmark.circle") {}]
+        }
         let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: sourceFrame,
                                                 header: TileMenuHeader(title: "Ways to Watch"))
         host.topmostPresented.present(popup, animated: false)

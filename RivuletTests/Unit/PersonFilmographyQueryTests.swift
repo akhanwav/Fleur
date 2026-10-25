@@ -68,6 +68,13 @@ final class PersonFilmographyQueryTests: XCTestCase {
         XCTAssertEqual(entries.first?.credit, "Director / Writer")
     }
 
+    /// A Plex name and TMDB's match despite case, accents and punctuation.
+    func test_personNamesMatchLoosely() {
+        XCTAssertEqual(TMDBClient.normalizedName("Robert Downey Jr."), TMDBClient.normalizedName("robert downey jr"))
+        XCTAssertEqual(TMDBClient.normalizedName("Penélope  Cruz"), "penelope cruz")
+        XCTAssertNotEqual(TMDBClient.normalizedName("Sam Neill"), TMDBClient.normalizedName("Sam Neil"))
+    }
+
     /// TV's combined genres split, so one pick matches movies and shows.
     func test_genreNamesSplitCombinedTVGenres() {
         XCTAssertEqual(TMDBGenreNames.names(for: [10765, 878]), ["Science Fiction", "Fantasy"])

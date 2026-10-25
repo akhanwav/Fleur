@@ -189,7 +189,9 @@ final class BelowFoldContentLoader {
 
         // On Your Servers on every Plex title: every copy on every server,
         // filled in by `loadServerAvailability` once the lookup answers.
-        if item.ref.isPlex, content.detail?.plexGuid != nil { content.serverAvailability = .checking }
+        if item.ref.isPlex, content.detail?.plexGuid != nil || content.detail?.externalIDs["tmdb"] != nil {
+            content.serverAvailability = .checking
+        }
 
         return content
     }
@@ -233,6 +235,9 @@ final class BelowFoldContentLoader {
             copies = await checker.copies(plexGuid: guid)
         } else if let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) {
             copies = await checker.copies(forTmdbId: tmdbId, type: type)
+        } else if item.kind == .movie || item.kind == .show,
+                  let tmdbId = detail?.externalIDs["tmdb"].flatMap(Int.init) {
+            copies = await checker.copies(forTmdbId: tmdbId, type: item.kind == .movie ? .movie : .tv)
         } else {
             return nil
         }

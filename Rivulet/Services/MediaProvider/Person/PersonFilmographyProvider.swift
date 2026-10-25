@@ -173,20 +173,20 @@ private let _defaultBiography: @Sendable (MediaPerson) async -> String? = { pers
        !summary.isEmpty {
         return summary
     }
-    guard let titleTmdbId = person.titleTmdbId else { return nil }
     let type: TMDBMediaType = person.titleIsMovie ? .movie : .tv
-    return await TMDBClient.shared.actorBiography(titleTmdbId: titleTmdbId, type: type, actorName: person.name)
+    return await TMDBClient.shared.actorBiography(titleTmdbId: person.titleTmdbId, type: type, actorName: person.name)
 }
 
 // MARK: - Default TMDB filmography
 
 /// The person's TMDB credits: by their own TMDB id when the credit came from
-/// TMDB, else resolved by name on the originating title's credits.
+/// TMDB, else resolved by name (the originating title's credits, then a
+/// TMDB person search). Known For takes over only when TMDB has no one.
 private let _defaultTMDBFilmography: @Sendable (MediaPerson) async -> TMDBPersonFilmography? = { person in
     var personId = person.tmdbPersonId
-    if personId == nil, let titleTmdbId = person.titleTmdbId {
+    if personId == nil {
         personId = await TMDBClient.shared.personId(
-            titleTmdbId: titleTmdbId, type: person.titleIsMovie ? .movie : .tv, name: person.name)
+            titleTmdbId: person.titleTmdbId, type: person.titleIsMovie ? .movie : .tv, name: person.name)
     }
     guard let personId else { return nil }
     return await TMDBClient.shared.personFilmography(personId: personId)

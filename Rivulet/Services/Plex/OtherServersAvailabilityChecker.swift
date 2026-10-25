@@ -144,15 +144,20 @@ actor OtherServersAvailabilityChecker {
         guard let url = components.url else { return nil }
         struct Matches: Decodable, Sendable {
             struct Inner: Decodable, Sendable { let Metadata: [Item]? }
-            struct Item: Decodable, Sendable { let ratingKey: String? }
+            struct Item: Decodable, Sendable { let ratingKey: String?; let guid: String? }
             let MediaContainer: Inner
         }
         let headers = await PlexNetworkManager.shared.plexHeaders(authToken: token)
         guard let matches: Matches = try? await PlexNetworkManager.shared.request(
             url, headers: headers, timeout: Self.lookupTimeout),
-              let ratingKey = matches.MediaContainer.Metadata?.first?.ratingKey
-        else { return nil }
-        let guid = "plex://\(type == .movie ? "movie" : "show")/\(ratingKey)"
+              let match = matches.MediaContainer.Metadata?.first
+        else {
+            otherServersLog.info("[OtherServers] no Discover match for tmdb \(key, privacy: .public)")
+            return nil
+        }
+        // The guid Discover returns, else the one its ratingKey names.
+        guard let guid = match.guid?.hasPrefix("plex://") == true ? match.guid
+                : match.ratingKey.map({ "plex://\(type == .movie ? "movie" : "show")/\($0)" }) else { return nil }
         tmdbGuidCache[key] = guid
         return guid
     }

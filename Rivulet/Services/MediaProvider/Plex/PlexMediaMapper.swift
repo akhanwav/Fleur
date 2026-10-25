@@ -352,10 +352,15 @@ enum PlexMediaMapper {
             return URL(string: "\(serverURL)\(thumb)?X-Plex-Token=\(authToken)")
         }
 
-        let titleTmdbId: Int? = (meta.Guid ?? []).compactMap { g -> Int? in
-            guard let gid = g.id, gid.hasPrefix("tmdb://") else { return nil }
-            return Int(gid.dropFirst("tmdb://".count))
-        }.first
+        // An episode's or season's tmdb:// guid is its OWN TMDB id, not the
+        // show's, so asking TMDB for that "show's" cast finds someone else's
+        // credits or none, and every actor page from an episode fell back to
+        // Known For. Leave it out there; the person is found by name instead.
+        let titleTmdbId: Int? = (meta.type == "episode" || meta.type == "season") ? nil
+            : (meta.Guid ?? []).compactMap { g -> Int? in
+                guard let gid = g.id, gid.hasPrefix("tmdb://") else { return nil }
+                return Int(gid.dropFirst("tmdb://".count))
+            }.first
         let titleIsMovie = (meta.type == "movie")
 
         // Backdrop of the originating title — passed to each cast member so the

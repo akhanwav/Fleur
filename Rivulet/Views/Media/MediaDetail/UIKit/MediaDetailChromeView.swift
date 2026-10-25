@@ -705,7 +705,13 @@ final class MediaDetailChromeView: UIView {
 
     /// Repaint everything tied to the selected copy.
     private func applySelectedCopy() {
-        guard let item, let copy = copySelection.selected else { return }
+        guard let item else { return }
+        guard let copy = copySelection.selected else {
+            // An unowned title no server holds still gets Ways to Watch,
+            // which says so, once the lookup has answered.
+            if item.isMetadataOnly, copySelection.hasLookedUp { insertWaysToWatchButtonIfNeeded(force: true) }
+            return
+        }
         if item.isMetadataOnly { insertPlayPillIfNeeded(item: item) }
         if copy.isMainServer {
             setPlayTarget(mainPlayTarget ?? copy.item)
@@ -746,8 +752,8 @@ final class MediaDetailChromeView: UIView {
     /// Ways to Watch button after Info, once the title has a copy to list:
     /// every owned title (one copy included, so its server and quality can
     /// always be read) and any unowned one another server holds.
-    private func insertWaysToWatchButtonIfNeeded() {
-        guard !copySelection.copies.isEmpty, versionsButton == nil else { return }
+    private func insertWaysToWatchButtonIfNeeded(force: Bool = false) {
+        guard force || !copySelection.copies.isEmpty, versionsButton == nil else { return }
         let button = makeCircleButton(systemImage: "square.stack", caption: "Ways to Watch")
         button.onPrimaryAction = { [weak self, weak button] in
             guard let self, let button, let host = self.hostViewController else { return }
