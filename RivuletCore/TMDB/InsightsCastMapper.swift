@@ -24,7 +24,8 @@ enum InsightsCastMapper {
                 role: credit.character,
                 imageURL: credit.profilePath.flatMap { URL(string: tmdbProfileBase + $0) },
                 titleTmdbId: titleTmdbId,
-                titleIsMovie: titleIsMovie
+                titleIsMovie: titleIsMovie,
+                tmdbPersonId: credit.id
             )
         }
     }

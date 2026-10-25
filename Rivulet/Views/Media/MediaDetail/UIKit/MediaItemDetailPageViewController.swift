@@ -47,12 +47,6 @@ final class MediaItemDetailPageViewController: UIViewController {
     /// (issue #228). The ref never changes — only the user state does.
     private var item: MediaItem
     private let onPlay: (MediaItem, String?) -> Void
-    /// Ways to Watch: a copy on a server OTHER than the selected one was
-    /// picked. nil (the default) means this host doesn't support cross-server
-    /// playback, so the picker only offers this episode's own versions —
-    /// `TVSidebarView`/`PlexHomeViewController`'s deep-link and tile-menu
-    /// opens of this page don't wire it, `PreviewCarouselViewController` does.
-    private let onPlayRemote: ((MediaItem, WaysToWatchTarget) -> Void)?
 
     private let backdrop = UIImageView()
     private let scrim = ScrimGradientView()
@@ -94,11 +88,9 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let blurFade = BlurFadeTransitioningDelegate()
     private var provider: MediaProvider? { MediaProviderRegistry.shared.provider(for: item.ref.providerID) }
 
-    init(item: MediaItem, seriesTitle: String?, onPlay: @escaping (MediaItem, String?) -> Void,
-         onPlayRemote: ((MediaItem, WaysToWatchTarget) -> Void)? = nil) {
+    init(item: MediaItem, seriesTitle: String?, onPlay: @escaping (MediaItem, String?) -> Void) {
         self.item = item
         self.onPlay = onPlay
-        self.onPlayRemote = onPlayRemote
         self.isWatched = item.isWatched
         self.resumeOffset = item.userState.viewOffset
         super.init(nibName: nil, bundle: nil)
@@ -608,16 +600,16 @@ final class MediaItemDetailPageViewController: UIViewController {
         addVersionsButton(detail)
     }
 
-    /// Ways to Watch button after Watchlist — inserted only once the lookup
-    /// resolves to two or more playable copies (see `MediaDetailChromeView`'s
-    /// twin for the owned-title movie/show route; this is the episode route).
+    /// Ways to Watch button after Watchlist, whenever the episode has a copy
+    /// to list, one included (see `MediaDetailChromeView`'s twin for the
+    /// movie/show route; this is the episode route, which every host opens,
+    /// Continue Watching's tile menu and deep links included).
     private func addVersionsButton(_ detail: MediaItemDetail) {
         guard versionsButton == nil, let row = actionRow, let watchlist = watchlistButton else { return }
-        let includeOtherServers = onPlayRemote != nil
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let rows = await WaysToWatchPicker.rows(for: self.item, detail: detail, includeOtherServers: includeOtherServers)
-            guard rows.count >= 2, self.versionsButton == nil,
+            let rows = await WaysToWatchPicker.rows(for: self.item, detail: detail)
+            guard !rows.isEmpty, self.versionsButton == nil,
                   let index = row.arrangedSubviews.firstIndex(of: watchlist) else { return }
             let button = self.circleButton(systemImage: "square.stack")
             button.onPrimaryAction = { [weak self, weak button] in
@@ -627,7 +619,7 @@ final class MediaItemDetailPageViewController: UIViewController {
                     guard let self else { return }
                     switch target {
                     case .local(let id): self.onPlay(self.item, id)
-                    case .remote: self.onPlayRemote?(self.item, target)
+                    case .remote: RemoteCopyPlayer.play(target, from: self)
                     }
                 }
             }

@@ -7,23 +7,25 @@
 //
 //  The person (cast/crew) detail page — Docs/atv_ref/actor_details_ref.JPG.
 //  A dark blue→black gradient page with a biography header (circular portrait +
-//  name + truncated bio + MORE) over horizontal poster shelves for the person's
-//  Movies and Shows.
+//  name + truncated bio + MORE) over the person's filmography: the Watchlist's
+//  filter header (Sort / Type / Genre, plus an On My Servers toggle) and a
+//  poster grid with each title's year and the person's character under it.
+//  Owned and unowned titles open the same page.
 //
-//  Structure mirrors PlexHomeViewController's outer vertical collection: a
-//  UICollectionViewCompositionalLayout with ONE list section per row, each shelf
-//  hosted by a `ShelfRowCell` (which owns its inner horizontal collection, its
-//  own "Movies"/"Shows" header, and its self-driven focus scrolling). Unlike the
-//  home — which has a dynamic, paginated section set — this page has a FIXED set:
-//  header + Movies + Shows (a shelf is dropped when its entries are empty).
+//  Structure mirrors PlexHomeViewController's Watchlist grid: a
+//  UICollectionViewCompositionalLayout with a header section, the filter
+//  header (`WatchlistFilterHeaderControl`) and a six-across grid of
+//  `WatchlistPosterCell`s.
 //
 //  The vertical axis is owned by `FocusScrollControlledCollectionView`
 //  (isScrollEnabled = false; it self-drives the vertical scroll from
 //  didUpdateFocus), the same component the MediaDetail page adopts. With
 //  topSectionIndex left nil, every focused row simply centers.
 //
-//  Data comes from `PersonFilmographyProvider`; `onSelectItem` reports a tapped
-//  poster's MediaItem back to the presenter (Task 7 wires routing).
+//  Data comes from `PersonFilmographyProvider`: the bio and server titles
+//  first, then TMDB's combined credits merged with them, then the titles on
+//  the user's other servers marked. Filters start fresh on every open.
+//  `onSelectItem` reports a tapped poster's MediaItem back to the presenter.
 //
 
 import UIKit
@@ -40,13 +42,12 @@ final class PersonDetailViewController: UIViewController {
 
     private enum Section: Int, CaseIterable {
         case header
-        case movies
-        case shows
-        case knownFor
+        case filters
+        case grid
     }
 
-    /// Diffable item identity. Each shelf is a SINGLE item (the ShelfRowCell
-    /// hosts the tiles in its own collection), exactly like the home rows.
+    /// Diffable item identity: one each for the header and the filter row,
+    /// one per title in the grid (keyed by `FilmographyEntry.key`).
     /// `nonisolated` + `Sendable` so its Hashable conformance satisfies the
     /// diffable data source's `Sendable` ItemIdentifierType requirement under
     /// Swift 6 (the enclosing VC is @MainActor-isolated).
@@ -56,9 +57,7 @@ final class PersonDetailViewController: UIViewController {
     }
 
     private static let headerItem = ItemID(section: Section.header.rawValue, token: "header")
-    private static let moviesItem = ItemID(section: Section.movies.rawValue, token: "movies-row")
-    private static let showsItem = ItemID(section: Section.shows.rawValue, token: "shows-row")
-    private static let knownForItem = ItemID(section: Section.knownFor.rawValue, token: "known-for-row")
+    private static let filtersItem = ItemID(section: Section.filters.rawValue, token: "filters")
 
     // MARK: - Dependencies / state
 
@@ -66,21 +65,20 @@ final class PersonDetailViewController: UIViewController {
     private let provider: PersonFilmographyProviding
 
     private var detail: PersonDetail?
-    private var movies: [FilmographyEntry] = []
-    private var shows: [FilmographyEntry] = []
-    private var knownFor: [FilmographyEntry] = []
+    /// Every title, unfiltered.
+    private var entries: [FilmographyEntry] = []
+    /// `entries` through `query`: what the grid shows.
+    private var visibleEntries: [FilmographyEntry] = []
+    private var query = FilmographyQuery()
     /// True from first paint until the provider returns — drives the header's
     /// loading dots so the page reads as "working".
     private var isLoading = true
 
-    /// The current section layout, in display order. Recomputed on every
-    /// reload so empty shelves drop out.
+    /// The current section layout, in display order. The filter row and the
+    /// grid appear once there is a title to filter.
     private var sections: [Section] = [.header]
 
     private var loadTask: Task<Void, Never>?
-
-    /// Resting horizontal offset per shelf, restored across cell reuse.
-    private var shelfOffsets: [Section: CGFloat] = [:]
 
     // MARK: - Views
 
@@ -248,8 +246,11 @@ final class PersonDetailViewController: UIViewController {
         // subclass's per-frame CADisplayLink driver (same as BelowFoldCollectionView).
         // topSectionIndex stays nil so every focused row centers — no pinned top band.
         collectionView.isScrollEnabled = false
+        collectionView.delegate = self
         collectionView.register(PersonHeaderCell.self, forCellWithReuseIdentifier: PersonHeaderCell.reuseID)
-        collectionView.register(ShelfRowCell.self, forCellWithReuseIdentifier: ShelfRowCell.reuseID)
+        collectionView.register(WatchlistFilterHeaderControl.self,
+                                forCellWithReuseIdentifier: WatchlistFilterHeaderControl.reuseID)
+        collectionView.register(WatchlistPosterCell.self, forCellWithReuseIdentifier: WatchlistPosterCell.reuseID)
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
             collectionView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -271,8 +272,9 @@ final class PersonDetailViewController: UIViewController {
     private func layoutSection(at sectionIndex: Int, environment: NSCollectionLayoutEnvironment) -> NSCollectionLayoutSection? {
         guard sectionIndex < sections.count else { return nil }
         switch sections[sectionIndex] {
-        case .header:        return makeHeaderSectionLayout()
-        case .movies, .shows, .knownFor: return makeShelfSectionLayout()
+        case .header:  return makeHeaderSectionLayout()
+        case .filters: return makeFiltersSectionLayout()
+        case .grid:    return makeGridSectionLayout()
         }
     }
 
@@ -293,28 +295,35 @@ final class PersonDetailViewController: UIViewController {
         return section
     }
 
-    /// One full-bleed ShelfRowCell per shelf. The cell hosts its own horizontal
-    /// collection (no orthogonal scrolling here) and paints its own "Movies" /
-    /// "Shows" header via `headerTitle`. Height = ShelfRowCell header (44) +
-    /// poster tile + focus-growth padding. Mirrors PlexHomeViewController's
-    /// makeHubSectionLayout, but with the title carried by the cell instead of a
-    /// boundary supplementary view.
-    private func makeShelfSectionLayout() -> NSCollectionLayoutSection {
-        let shelfHeaderHeight: CGFloat = 44   // ShelfRowCell.headerHeight
-        let rowHeight = shelfHeaderHeight + MediaRowMetrics.posterHeight + MediaRowMetrics.focusGrowthPadding
-        let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
-                                          heightDimension: .absolute(rowHeight))
+    /// The filter row: the Watchlist header's own section shape.
+    private func makeFiltersSectionLayout() -> NSCollectionLayoutSection {
+        let size = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .estimated(96))
         let item = NSCollectionLayoutItem(layoutSize: size)
         let group = NSCollectionLayoutGroup.horizontal(layoutSize: size, subitems: [item])
         let section = NSCollectionLayoutSection(group: group)
-        // Full-bleed: ShelfRowCell owns the leading margin + peeking slivers
-        // internally.
         section.contentInsetsReference = .none
         section.contentInsets = NSDirectionalEdgeInsets(
-            top: MediaRowMetrics.rowTopInset,
-            leading: 0,
-            bottom: MediaRowMetrics.rowBottomInset,
-            trailing: 0)
+            top: 0, leading: MediaRowMetrics.rowLeading, bottom: 24, trailing: MediaRowMetrics.rowTrailing)
+        return section
+    }
+
+    /// Six across on the shared grid, like the Watchlist grid, each tile
+    /// tall enough for its caption.
+    private func makeGridSectionLayout() -> NSCollectionLayoutSection {
+        let tile = MediaRowMetrics.poster
+        let groupHeight = tile.frame.height + WatchlistPosterCell.captionHeight + MediaRowMetrics.focusGrowthPadding / 2
+        let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(1.0 / CGFloat(MediaRowMetrics.posterFullCount)),
+            heightDimension: .absolute(groupHeight)))
+        let group = NSCollectionLayoutGroup.horizontal(
+            layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(groupHeight)),
+            repeatingSubitem: item,
+            count: MediaRowMetrics.posterFullCount)
+        group.interItemSpacing = .fixed(tile.gap)
+        let section = NSCollectionLayoutSection(group: group)
+        section.contentInsetsReference = .none
+        section.interGroupSpacing = 24
+        section.contentInsets = NSDirectionalEdgeInsets(top: 8, leading: tile.leading, bottom: 80, trailing: tile.leading)
         return section
     }
 
@@ -327,91 +336,132 @@ final class PersonDetailViewController: UIViewController {
         switch sections[indexPath.section] {
         case .header:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: PersonHeaderCell.reuseID, for: indexPath) as! PersonHeaderCell
-            cell.configure(
-                name: detail?.name ?? person.name,
-                biography: detail?.biography,
-                // Always the Plex thumb — identical before/after load so the
-                // portrait never visibly swaps when the bio arrives.
-                portraitURL: person.imageURL,
-                isLoading: isLoading,
-                onMore: { [weak self] in self?.presentBiography() })
+            configureHeader(cell)
             return cell
-        case .movies:
-            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
-            configureShelf(cell, section: .movies, title: "Movies", entries: movies)
+        case .filters:
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: WatchlistFilterHeaderControl.reuseID, for: indexPath) as! WatchlistFilterHeaderControl
+            configureFilters(cell)
             return cell
-        case .shows:
-            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
-            configureShelf(cell, section: .shows, title: "Shows", entries: shows)
-            return cell
-        case .knownFor:
-            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
-            configureShelf(cell, section: .knownFor, title: "Known For", entries: knownFor)
+        case .grid:
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: WatchlistPosterCell.reuseID, for: indexPath) as! WatchlistPosterCell
+            if let entry = visibleEntries[safe: indexPath.item] {
+                cell.configure(
+                    item: entry.item,
+                    badge: entry.isOnServer ? "On Server" : nil,
+                    caption: .init(title: entry.item.title,
+                                   detail: entry.item.year.map(String.init),
+                                   credit: entry.credit))
+            }
             return cell
         }
     }
 
-    private func configureShelf(_ cell: ShelfRowCell, section: Section, title: String, entries: [FilmographyEntry]) {
-        cell.headerTitle = title
-        cell.cellProvider = { [weak self] innerCV, indexPath in
-            guard let self else {
-                return innerCV.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath)
-            }
-            let poster = innerCV.dequeueReusableCell(withReuseIdentifier: PosterCell.reuseID, for: indexPath) as! PosterCell
-            let entries = self.entries(for: section)
-            if indexPath.item < entries.count {
-                poster.configure(item: entries[indexPath.item].item)
-            }
-            return poster
-        }
-        cell.onSelect = { [weak self] index in
-            guard let self else { return }
-            let entries = self.entries(for: section)
-            guard index < entries.count else { return }
-            self.onSelectItem?(entries[index].item)
-        }
-        // No tile menu on filmography shelves: no reusable watchlist action
-        // builder exists for a bare MediaItem (the home VC's builders are
-        // private and tied to TMDBListItem / PlexWatchlistItem + instance
-        // state). ShelfRowCell.onLongPressItem stays unset here.
-        cell.onOffsetChanged = { [weak self] offset in
-            self?.shelfOffsets[section] = offset
-        }
+    private func configureHeader(_ cell: PersonHeaderCell) {
         cell.configure(
-            kind: .poster,
-            realCount: entries.count,
-            hasSkeleton: false,
-            contentToken: contentToken(for: entries),
-            initialOffset: shelfOffsets[section] ?? 0)
+            name: detail?.name ?? person.name,
+            biography: detail?.biography,
+            // Always the Plex thumb — identical before/after load so the
+            // portrait never visibly swaps when the bio arrives.
+            portraitURL: person.imageURL,
+            isLoading: isLoading,
+            onMore: { [weak self] in self?.presentBiography() })
     }
 
-    private func entries(for section: Section) -> [FilmographyEntry] {
-        switch section {
-        case .header: return []
-        case .movies: return movies
-        case .shows: return shows
-        case .knownFor: return knownFor
+    private func configureFilters(_ cell: WatchlistFilterHeaderControl) {
+        cell.configure(
+            title: "Filmography",
+            count: visibleEntries.count,
+            sortName: query.sort.displayName,
+            typeName: query.type.displayName,
+            genreName: genreButtonLabel,
+            countNoun: ("title", "titles"),
+            toggle: ("On My Servers", query.onMyServersOnly))
+        cell.onSortTapped = { [weak self] in self?.presentSortPicker() }
+        cell.onTypeTapped = { [weak self] in self?.presentTypePicker() }
+        cell.onGenreTapped = { [weak self, weak cell] in
+            guard let cell else { return }
+            self?.presentGenrePicker(from: cell.genreButtonView)
+        }
+        cell.onToggleTapped = { [weak self] in
+            guard let self else { return }
+            self.query.onMyServersOnly.toggle()
+            self.applySnapshot(animated: false)
         }
     }
 
-    /// Content identity for a shelf — reload its tiles only when this changes.
-    private func contentToken(for entries: [FilmographyEntry]) -> Int {
-        var hasher = Hasher()
-        for entry in entries { hasher.combine(entry.item.ref.itemID) }
-        return hasher.finalize()
+    // MARK: - Filters
+
+    /// The Watchlist's Genre label rule: "All Genres", one name, "A + B"
+    /// while it fits, else a count.
+    private var genreButtonLabel: String {
+        switch query.genres.count {
+        case 0: return "All Genres"
+        case 1: return query.genres.first!
+        default:
+            let joined = query.genres.sorted().joined(separator: " + ")
+            return joined.count <= 24 ? joined : "\(query.genres.count) Genres"
+        }
+    }
+
+    private func presentSortPicker() {
+        let sheet = UIAlertController(title: "Sort By", message: nil, preferredStyle: .actionSheet)
+        for option in FilmographySortOption.allCases {
+            let title = option == query.sort ? "\u{2713} \(option.displayName)" : option.displayName
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                guard let self, option != self.query.sort else { return }
+                self.query.sort = option
+                self.applySnapshot(animated: false)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    private func presentTypePicker() {
+        let sheet = UIAlertController(title: "Show", message: nil, preferredStyle: .actionSheet)
+        for option in WatchlistTypeFilter.allCases {
+            let title = option == query.type ? "\u{2713} \(option.displayName)" : option.displayName
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                guard let self, option != self.query.type else { return }
+                self.query.type = option
+                self.applySnapshot(animated: false)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    /// The Watchlist's multi-select Genre popup: AND across the picks, a
+    /// live count, Done or Menu applies.
+    private func presentGenrePicker(from button: UIView) {
+        let genres = Set(entries.flatMap(\.genres)).sorted()
+        let popup = WatchlistGenreFilterPopupViewController(
+            genres: genres,
+            selected: query.genres,
+            sourceFrame: button.convert(button.bounds, to: nil),
+            countProvider: { [weak self] candidate in
+                guard let self else { return 0 }
+                return self.query.filtered(self.entries, genres: candidate).count
+            },
+            onApply: { [weak self] picked in
+                guard let self, picked != self.query.genres else { return }
+                self.query.genres = picked
+                self.applySnapshot(animated: false)
+            })
+        present(popup, animated: false)
     }
 
     // MARK: - Data
 
     private func reload() async {
-        async let knownForTask = provider.knownFor(person: person)
         let loaded: PersonDetail
         do {
             loaded = try await provider.load(person: person)
         } catch {
             // The provider degrades gracefully for the no-token / fetch-error
-            // case, but can still throw — show name + portrait with empty rows
-            // rather than crashing.
+            // case, but can still throw — show name + portrait with an empty
+            // filmography rather than crashing.
             loaded = PersonDetail(
                 id: person.tagKey ?? person.id,
                 name: person.name,
@@ -422,24 +472,30 @@ final class PersonDetailViewController: UIViewController {
         }
         if Task.isCancelled { return }
 
+        // Bio and the server's own titles first, so the page is never empty
+        // while TMDB answers.
         detail = loaded
-        movies = loaded.movies
-        shows = loaded.shows
+        let onServer = loaded.movies + loaded.shows
+        entries = onServer
         isLoading = false
         applySnapshot(animated: false)
 
-        let titles = await knownForTask
+        entries = await provider.filmography(person: person, onServer: onServer)
         if Task.isCancelled { return }
-        knownFor = FilmographyEntry.excluding(movies + shows, from: titles)
-        if !knownFor.isEmpty { applySnapshot(animated: false) }
+        applySnapshot(animated: false)
+
+        let marked = await provider.markingOtherServers(entries)
+        if Task.isCancelled || marked == entries { return }
+        entries = marked
+        applySnapshot(animated: false)
     }
 
     private func applySnapshot(animated: Bool) {
-        // Fixed section set: header always; a shelf only when it has entries.
+        visibleEntries = query.apply(entries)
         var visible: [Section] = [.header]
-        if !movies.isEmpty { visible.append(.movies) }
-        if !shows.isEmpty { visible.append(.shows) }
-        if !knownFor.isEmpty { visible.append(.knownFor) }
+        // The filter row stays once there is anything to filter, so a filter
+        // that matches nothing can still be undone.
+        if !entries.isEmpty { visible += [.filters, .grid] }
         sections = visible
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, ItemID>()
@@ -447,46 +503,19 @@ final class PersonDetailViewController: UIViewController {
             snapshot.appendSections([section.rawValue])
             switch section {
             case .header: snapshot.appendItems([Self.headerItem], toSection: section.rawValue)
-            case .movies: snapshot.appendItems([Self.moviesItem], toSection: section.rawValue)
-            case .shows:  snapshot.appendItems([Self.showsItem], toSection: section.rawValue)
-            case .knownFor: snapshot.appendItems([Self.knownForItem], toSection: section.rawValue)
+            case .filters: snapshot.appendItems([Self.filtersItem], toSection: section.rawValue)
+            case .grid:
+                var seen = Set<String>()
+                let ids = visibleEntries.compactMap { entry -> ItemID? in
+                    guard seen.insert(entry.key).inserted else { return nil }
+                    return ItemID(section: section.rawValue, token: entry.key)
+                }
+                snapshot.appendItems(ids, toSection: section.rawValue)
             }
         }
+        // Identity is the title, so a badge or caption change needs a reconfigure.
+        snapshot.reconfigureItems(snapshot.itemIdentifiers)
         dataSource.apply(snapshot, animatingDifferences: animated)
-
-        // Shelf rows keep a single diffable identity, so pushing fresh content
-        // into already-visible rows must be done by hand (mirrors the home).
-        refreshVisibleCells()
-    }
-
-    /// Re-push current data into visible cells whose diffable identity didn't
-    /// change (the header text/portrait after load; shelf tiles after load).
-    private func refreshVisibleCells() {
-        for cell in collectionView.visibleCells {
-            guard let indexPath = collectionView.indexPath(for: cell),
-                  indexPath.section < sections.count else { continue }
-            switch sections[indexPath.section] {
-            case .header:
-                (cell as? PersonHeaderCell)?.configure(
-                    name: detail?.name ?? person.name,
-                    biography: detail?.biography,
-                    portraitURL: person.imageURL,
-                    isLoading: isLoading,
-                    onMore: { [weak self] in self?.presentBiography() })
-            case .movies:
-                if let row = cell as? ShelfRowCell {
-                    configureShelf(row, section: .movies, title: "Movies", entries: movies)
-                }
-            case .shows:
-                if let row = cell as? ShelfRowCell {
-                    configureShelf(row, section: .shows, title: "Shows", entries: shows)
-                }
-            case .knownFor:
-                if let row = cell as? ShelfRowCell {
-                    configureShelf(row, section: .knownFor, title: "Known For", entries: knownFor)
-                }
-            }
-        }
     }
 
     // MARK: - Biography popup
@@ -496,5 +525,16 @@ final class PersonDetailViewController: UIViewController {
         let content = InfoPopupContent.description(title: detail.name, subtitle: nil, body: bio)
         let popup = InfoPopupViewController(content: content, width: 840, scrollable: true)
         present(popup, animated: true)
+    }
+}
+
+extension PersonDetailViewController: UICollectionViewDelegate {
+    /// A grid title opens its normal detail page: the playable one when it's
+    /// on the selected server, else the metadata-only one (whose On Your
+    /// Servers row plays a copy on another server).
+    func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        guard sections[safe: indexPath.section] == .grid,
+              let entry = visibleEntries[safe: indexPath.item] else { return }
+        onSelectItem?(entry.item)
     }
 }

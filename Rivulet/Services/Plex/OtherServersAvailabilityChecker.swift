@@ -28,15 +28,9 @@ private let otherServersLog = Logger(subsystem: "com.rivulet.app", category: "Ot
 actor OtherServersAvailabilityChecker {
     static let shared = OtherServersAvailabilityChecker()
 
-    enum Availability: Sendable, Equatable {
-        case checking
-        case notFound
-        case found([String])
-    }
-
-    /// One other-server match for `copies(forGuids:)`: enough to fetch that
-    /// server's own full metadata for the item directly.
-    struct ServerCopy: Sendable {
+    /// One other-server match: enough to fetch that server's own full
+    /// metadata for the item directly.
+    struct ServerCopy: Sendable, Hashable {
         let serverName: String
         let serverURL: String
         let token: String
@@ -48,42 +42,37 @@ actor OtherServersAvailabilityChecker {
         let displayName: String
         let serverURL: String
         let token: String
-        var tmdbGuids: Set<String> = []
         /// Every guid string seen (any namespace: tmdb/imdb/tvdb, Plex's own
         /// "scheme://value" shape) mapped to that item's ratingKey on this
-        /// server — `copies(forGuids:)`'s index. `tmdbGuids` above is kept
-        /// as its own set rather than derived from this dict's keys because
-        /// `availability(forTmdbId:)` only ever needs presence, not a key scan.
+        /// server — `copies(forGuids:)`'s index.
         var guidToRatingKey: [String: String] = [:]
+        /// ratingKey → Plex type ("movie" / "show"). TMDB numbers movies and
+        /// shows separately, so a tmdb:// guid alone can name both.
+        var typeByRatingKey: [String: String] = [:]
     }
 
     private var serverIndexes: [String: ServerIndex] = [:]
     private var buildTask: Task<Void, Never>?
 
-    /// Looks up whether `tmdbId`/`type` is on any other accessible server.
-    /// Triggers the one-time background build on first call; subsequent
-    /// calls (any title, for the rest of the session) are instant.
-    func availability(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> Availability {
-        await ensureBuilt()
-        let guid = "tmdb://\(tmdbId)"
-        let names = serverIndexes.values
-            .filter { $0.tmdbGuids.contains(guid) }
-            .map(\.displayName)
-            .sorted()
-        return names.isEmpty ? .notFound : .found(names)
+    /// Every other accessible server holding `tmdbId` as a `type`. Triggers
+    /// the one-time background build on first call; subsequent calls (any
+    /// title, for the rest of the session) are instant.
+    func copies(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> [ServerCopy] {
+        await copies(forGuids: ["tmdb://\(tmdbId)"], plexType: type == .movie ? "movie" : "show")
     }
 
     /// Resolves an owned item (not just a metadata-only one) to every OTHER
     /// server that holds a matching copy, keyed by any of its own guids
     /// (tmdb/imdb/tvdb — Plex's "scheme://value" shape, e.g. "tmdb://603").
     /// One copy per matching server, first guid match wins.
-    func copies(forGuids guids: [String]) async -> [ServerCopy] {
+    func copies(forGuids guids: [String], plexType: String? = nil) async -> [ServerCopy] {
         guard !guids.isEmpty else { return [] }
         await ensureBuilt()
         var results: [ServerCopy] = []
         for (machineId, index) in serverIndexes {
             for guid in guids {
                 guard let ratingKey = index.guidToRatingKey[guid] else { continue }
+                if let plexType, index.typeByRatingKey[ratingKey] != plexType { continue }
                 results.append(ServerCopy(serverName: index.displayName, serverURL: index.serverURL,
                                           token: index.token, ratingKey: ratingKey, machineId: machineId))
                 break
@@ -127,7 +116,7 @@ actor OtherServersAvailabilityChecker {
     }
 
     /// Resolves a reachable connection, then pages every movie/show section's
-    /// full item list (includeGuids) into a tmdb:// guid set. Any failure
+    /// full item list (includeGuids) into a guid → ratingKey index. Any failure
     /// (unreachable, no token, no libraries) is a quiet skip, not an error —
     /// a shared server being asleep just means we can't say "available" for
     /// it this session, not that the title isn't there.
@@ -156,9 +145,9 @@ actor OtherServersAvailabilityChecker {
 
                 for item in result.items {
                     guard let ratingKey = item.ratingKey else { continue }
+                    index.typeByRatingKey[ratingKey] = item.type
                     for guid in item.Guid ?? [] {
                         guard let id = guid.id else { continue }
-                        if id.hasPrefix("tmdb://") { index.tmdbGuids.insert(id) }
                         index.guidToRatingKey[id] = ratingKey
                     }
                 }

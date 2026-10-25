@@ -340,11 +340,9 @@ final class PreviewCardView: UICollectionViewCell {
     /// Hero Play → play this item (resolved to its on-deck episode for shows by
     /// the carousel VC). Set by the VC in cellForItemAt.
     var onPlay: ((MediaItem) -> Void)?
-    /// Versions → play `item` from the picked file. Set by the VC in cellForItemAt.
+    /// Ways to Watch → play `item` (the hero item, or a show's Play target
+    /// episode) from the picked file on this server. Set by the VC in cellForItemAt.
     var onPlayVersion: ((MediaItem, String) -> Void)?
-    /// Ways to Watch → play `item` from a copy on a DIFFERENT server. Set by
-    /// the VC in cellForItemAt; nil hosts get local-only Ways to Watch rows.
-    var onPlayRemoteVersion: ((MediaItem, WaysToWatchTarget) -> Void)?
     /// Info button → show the structured info popup (carries the loaded detail).
     var onShowInfo: ((MediaItemDetail) -> Void)?
 
@@ -373,13 +371,8 @@ final class PreviewCardView: UICollectionViewCell {
             guard let self, let item = self.chromeView.item else { return }
             self.onPlay?(item)
         }
-        chromeView.onPlayVersion = { [weak self] sourceID in
-            guard let self, let item = self.chromeView.item else { return }
-            self.onPlayVersion?(item, sourceID)
-        }
-        chromeView.onPlayRemoteVersion = { [weak self] target in
-            guard let self, let item = self.chromeView.item else { return }
-            self.onPlayRemoteVersion?(item, target)
+        chromeView.onPlayVersion = { [weak self] item, sourceID in
+            self?.onPlayVersion?(item, sourceID)
         }
         chromeView.onShowFullDescription = { [weak self] detail in
             self?.onShowInfo?(detail)

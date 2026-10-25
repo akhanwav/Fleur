@@ -62,6 +62,52 @@ struct TMDBPersonDetails: Codable, Sendable {
     }
 }
 
+/// One title in a person's TMDB combined credits (`person/{id}/combined_credits`).
+/// A person credited twice on one title (two characters, or a cast and a
+/// crew credit) appears once per credit.
+struct TMDBPersonCredit: Codable, Sendable {
+    let id: Int
+    let mediaType: String?      // "movie" | "tv"
+    let title: String?          // movies
+    let name: String?           // shows
+    let character: String?      // cast credits
+    let job: String?            // crew credits
+    let posterPath: String?
+    let releaseDate: String?    // movies, "YYYY-MM-DD"
+    let firstAirDate: String?   // shows
+    let genreIds: [Int]?
+    let popularity: Double?
+    enum CodingKeys: String, CodingKey {
+        case id, title, name, character, job, popularity
+        case mediaType = "media_type"
+        case posterPath = "poster_path"
+        case releaseDate = "release_date"
+        case firstAirDate = "first_air_date"
+        case genreIds = "genre_ids"
+    }
+}
+
+/// A person's TMDB credits, with the department they're known for
+/// ("Acting", "Directing", …) so a director's page lists what they directed.
+struct TMDBPersonFilmography: Sendable {
+    let knownForDepartment: String?
+    let cast: [TMDBPersonCredit]
+    let crew: [TMDBPersonCredit]
+}
+
+private struct TMDBPersonCreditsResponse: Codable {
+    let knownForDepartment: String?
+    let combinedCredits: Credits?
+    struct Credits: Codable {
+        let cast: [TMDBPersonCredit]?
+        let crew: [TMDBPersonCredit]?
+    }
+    enum CodingKeys: String, CodingKey {
+        case knownForDepartment = "known_for_department"
+        case combinedCredits = "combined_credits"
+    }
+}
+
 private struct TMDBKeywordsResponse: Codable {
     let keywords: [TMDBKeyword]?
     let results: [TMDBKeyword]?
@@ -210,15 +256,32 @@ final class TMDBClient: @unchecked Sendable {
     /// TMDB — the page renders the Plex role thumb from first paint, and swapping
     /// in a different TMDB image seconds later is jarring. Returns nil if unresolved.
     func actorBiography(titleTmdbId: Int, type: TMDBMediaType, actorName: String) async -> String? {
+        guard let personId = await personId(titleTmdbId: titleTmdbId, type: type, name: actorName) else { return nil }
+        let person: TMDBPersonDetails? = try? await request(path: "person/\(personId)")
+        return person?.biography.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// The TMDB person behind a credit on `titleTmdbId`, matched by name
+    /// (cast first, then crew, so a director resolves too).
+    func personId(titleTmdbId: Int, type: TMDBMediaType, name: String) async -> Int? {
         guard let credits: TMDBCreditsResponse = try? await request(path: "\(type.rawValue)/\(titleTmdbId)/credits") else {
             return nil
         }
         func norm(_ s: String) -> String { s.folding(options: .diacriticInsensitive, locale: .current).lowercased() }
-        let target = norm(actorName)
-        let match = (credits.cast ?? []).first { ($0.name.map(norm)) == target }
-        guard let match, let personId = match.id else { return nil }
-        let person: TMDBPersonDetails? = try? await request(path: "person/\(personId)")
-        return person?.biography.flatMap { $0.isEmpty ? nil : $0 }
+        let target = norm(name)
+        let match = ((credits.cast ?? []) + (credits.crew ?? [])).first { ($0.name.map(norm)) == target }
+        return match?.id
+    }
+
+    /// Every movie and show the person is credited on. nil on failure.
+    func personFilmography(personId: Int) async -> TMDBPersonFilmography? {
+        guard let response: TMDBPersonCreditsResponse = try? await request(
+            path: "person/\(personId)",
+            queryItems: [URLQueryItem(name: "append_to_response", value: "combined_credits")]
+        ) else { return nil }
+        return TMDBPersonFilmography(knownForDepartment: response.knownForDepartment,
+                                     cast: response.combinedCredits?.cast ?? [],
+                                     crew: response.combinedCredits?.crew ?? [])
     }
 
     // MARK: - Structured cast (Insights)

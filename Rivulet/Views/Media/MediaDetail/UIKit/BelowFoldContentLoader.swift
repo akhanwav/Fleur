@@ -54,10 +54,28 @@ struct BelowFoldContent: Sendable {
     /// `.checking` on first render; the host patches in the real answer once
     /// `OtherServersAvailabilityChecker` (slow on its first call this session)
     /// resolves. nil means "not applicable" (an owned item never shows this).
-    var serverAvailability: OtherServersAvailabilityChecker.Availability?
+    var serverAvailability: ServerAvailability?
 
     var hasEpisodes: Bool { !episodes.isEmpty }
     var hasCast: Bool { !cast.isEmpty || !directors.isEmpty }
+}
+
+/// The unowned detail's On Your Servers answer.
+nonisolated enum ServerAvailability: Hashable, Sendable {
+    case checking
+    case notFound
+    case found([ServerCopyEntry])
+}
+
+/// One copy of an unowned title on another accessible server: a focusable
+/// entry that plays it.
+nonisolated struct ServerCopyEntry: Hashable, Sendable {
+    let serverName: String
+    /// Best version's quality ("4K · Dolby Vision · …") for a movie, the
+    /// episode count for a show, led by "Resume" when that server holds a
+    /// resume point.
+    let summary: String?
+    let target: WaysToWatchTarget
 }
 
 struct BelowFoldTrailer: Hashable, Sendable {
@@ -197,10 +215,45 @@ final class BelowFoldContentLoader {
     /// Cross-server availability for a metadata-only item — deferred exactly
     /// like `loadAdvisory`, because `OtherServersAvailabilityChecker` can be
     /// slow on its first call this session (pages every other server's
-    /// library once, then caches for the rest of the session).
-    func loadServerAvailability(for item: MediaItem) async -> OtherServersAvailabilityChecker.Availability? {
+    /// library once, then caches for the rest of the session). Each match is
+    /// then read on its own server for the entry's quality and resume line.
+    func loadServerAvailability(for item: MediaItem) async -> ServerAvailability? {
         guard let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) else { return nil }
-        return await OtherServersAvailabilityChecker.shared.availability(forTmdbId: tmdbId, type: type)
+        let copies = await OtherServersAvailabilityChecker.shared.copies(forTmdbId: tmdbId, type: type)
+        guard !copies.isEmpty else { return .notFound }
+        let entries = await withTaskGroup(of: ServerCopyEntry.self) { group in
+            for copy in copies {
+                group.addTask { await Self.entry(for: copy) }
+            }
+            var entries: [ServerCopyEntry] = []
+            for await entry in group { entries.append(entry) }
+            return entries
+        }
+        return .found(entries.sorted { $0.serverName.localizedCaseInsensitiveCompare($1.serverName) == .orderedAscending })
+    }
+
+    /// A copy's entry. A failed metadata read still yields a playable entry,
+    /// just without its summary line.
+    private static func entry(for copy: OtherServersAvailabilityChecker.ServerCopy) async -> ServerCopyEntry {
+        let target = WaysToWatchTarget.remote(serverURL: copy.serverURL, token: copy.token,
+                                              ratingKey: copy.ratingKey, mediaID: nil)
+        guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
+            serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey
+        ) else { return ServerCopyEntry(serverName: copy.serverName, summary: nil, target: target) }
+        var parts: [String] = []
+        if meta.type == "show" {
+            if let count = meta.leafCount { parts.append(count == 1 ? "1 episode" : "\(count) episodes") }
+        } else {
+            if meta.isInProgress { parts.append("Resume") }
+            let detail = PlexMediaMapper.detail(meta, providerID: "plex:\(copy.machineId)",
+                                                serverURL: copy.serverURL, authToken: copy.token)
+            if let best = VersionRanking.ordered(detail.mediaSources).first {
+                parts.append(VersionPicker.rowLabel(best))
+            }
+        }
+        return ServerCopyEntry(serverName: copy.serverName,
+                               summary: parts.isEmpty ? nil : parts.joined(separator: " · "),
+                               target: target)
     }
 
     /// Deferred Common Sense Media fetch — runs AFTER the below-fold renders so

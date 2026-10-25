@@ -112,11 +112,10 @@ final class MediaDetailChromeView: UIView {
     /// (action row is interaction-disabled). Wired in `.expandedDetail`
     /// during Iter B/D.
     var onPlay: (() -> Void)?
-    var onPlayVersion: ((String) -> Void)?
-    /// Ways to Watch: a copy on a server OTHER than the selected one was
-    /// picked. nil (the default) means this host doesn't support cross-server
-    /// playback, so the picker only offers this server's own versions.
-    var onPlayRemoteVersion: ((WaysToWatchTarget) -> Void)?
+    /// Ways to Watch picked a version on this server: the item it belongs
+    /// to (a show's Play target episode, else the hero item) and its file.
+    /// Copies on other servers play through `RemoteCopyPlayer` directly.
+    var onPlayVersion: ((MediaItem, String) -> Void)?
     var onToggleWatchlist: (() -> Void)?
     var onShowFullDescription: ((MediaItemDetail) -> Void)?
 
@@ -623,6 +622,7 @@ final class MediaDetailChromeView: UIView {
                   self.loadToken == token
             else { return }
             self.setPlayTarget(episode)
+            self.addVersionsButton(item: episode, detail: nil, token: token)
         }
     }
 
@@ -671,32 +671,39 @@ final class MediaDetailChromeView: UIView {
         } else {
             castLabel.attributedText = nil
         }
-        addVersionsButton(item: item, detail: detail)
+        if item.kind == .movie || item.kind == .episode {
+            addVersionsButton(item: item, detail: detail, token: loadToken)
+        }
         addTrailerButton(detail)
     }
 
-    /// Ways to Watch button after Info — inserted only once the lookup
-    /// resolves to two or more playable copies (this server's own versions,
-    /// plus one per OTHER accessible server that has a match), so a
-    /// single-version item on a server with no copy elsewhere never grows a
-    /// button that opens to nothing. The lookup pages every other server's
-    /// library on first use this session only; cached after.
-    private func addVersionsButton(item: MediaItem, detail: MediaItemDetail) {
-        guard versionsButton == nil, let info = infoButton else { return }
-        let includeOtherServers = onPlayRemoteVersion != nil
+    /// Ways to Watch button after Info, on every owned title: this server's
+    /// own versions plus every copy on another accessible server, even when
+    /// that is one copy, so its server and quality can always be read. A
+    /// show or season lists its Play target's copies (`detail` nil: fetched
+    /// here). The lookup pages every other server's library on first use
+    /// this session only; cached after.
+    private func addVersionsButton(item: MediaItem, detail: MediaItemDetail?, token: UInt64) {
+        guard versionsButton == nil, infoButton != nil else { return }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let rows = await WaysToWatchPicker.rows(for: item, detail: detail, includeOtherServers: includeOtherServers)
-            guard rows.count >= 2, self.versionsButton == nil,
+            var resolved = detail
+            if resolved == nil { resolved = await Self.fetchDetail(item.ref) }
+            guard let resolved else { return }
+            let rows = await WaysToWatchPicker.rows(for: item, detail: resolved)
+            guard !rows.isEmpty, self.loadToken == token, self.versionsButton == nil, let info = self.infoButton,
                   let index = self.actionButtonsStack.arrangedSubviews.firstIndex(of: info) else { return }
             let button = self.makeCircleButton(systemImage: "square.stack")
             button.onPrimaryAction = { [weak self, weak button] in
                 guard let self, let button, let host = self.hostViewController else { return }
                 WaysToWatchPicker.present(rows, from: host, sourceFrame: button.convert(button.bounds, to: nil)) {
                     [weak self] target in
+                    guard let self else { return }
                     switch target {
-                    case .local(let id): self?.onPlayVersion?(id)
-                    case .remote: self?.onPlayRemoteVersion?(target)
+                    case .local(let id): self.onPlayVersion?(item, id)
+                    case .remote:
+                        guard let host = self.hostViewController else { return }
+                        RemoteCopyPlayer.play(target, from: host)
                     }
                 }
             }

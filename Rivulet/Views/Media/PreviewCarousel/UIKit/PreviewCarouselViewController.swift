@@ -366,8 +366,7 @@ final class PreviewCarouselViewController: UIViewController {
             let page = MediaItemDetailPageViewController(
                 item: episode,
                 seriesTitle: nil,
-                onPlay: { [weak self] ep, sourceID in self?.playMediaItem(ep, sourceID: sourceID) },
-                onPlayRemote: { [weak self] _, target in self?.playRemoteCopy(target) })
+                onPlay: { [weak self] ep, sourceID in self?.playMediaItem(ep, sourceID: sourceID) })
             self.present(page, animated: true)
         }
 
@@ -1264,33 +1263,6 @@ final class PreviewCarouselViewController: UIViewController {
         }
     }
 
-    /// Play a Ways to Watch pick that lives on a server OTHER than the
-    /// selected one. Unlike `presentPlayer` (which reads the SELECTED
-    /// server's resume point from `item.userState`/a passed-in override),
-    /// the remote server's own copy can be at a different position — a
-    /// shared library's progress is per-server, not shared — so this fetches
-    /// that server's metadata FIRST and prompts from ITS viewOffset, not the
-    /// local item's.
-    private func playRemoteCopy(_ target: WaysToWatchTarget) {
-        guard case .remote(let serverURL, let token, let ratingKey, let mediaID) = target else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            guard let playItem = try? await PlexNetworkManager.shared.getFullMetadata(
-                serverURL: serverURL, authToken: token, ratingKey: ratingKey
-            ) else {
-                previewCarouselLog.error("[PCV] remote play: metadata fetch failed")
-                return
-            }
-            let serverResume = playItem.isInProgress ? playItem.viewOffset.map { Double($0) / 1000 } : nil
-            await MainActor.run {
-                ResumePrompt.resolve(offsetSeconds: serverResume ?? 0, from: self) { [weak self] startOver in
-                    self?.present(playItem: playItem, serverURL: serverURL, token: token,
-                                  resumeOffset: startOver ? 0 : serverResume, mediaID: mediaID)
-                }
-            }
-        }
-    }
-
     /// Play a trailer/extra. Extras come in two flavors and only one of them is
     /// addressable as a library item:
     ///
@@ -1948,7 +1920,6 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
         }
         cell.onPlay = { [weak self] item in self?.playHeroItem(item) }
         cell.onPlayVersion = { [weak self] item, sourceID in self?.playMediaItem(item, sourceID: sourceID) }
-        cell.onPlayRemoteVersion = { [weak self] _, target in self?.playRemoteCopy(target) }
         cell.onShowInfo = { [weak self] detail in self?.presentInfoPopup(detail) }
         // Default to non-current; if this dequeued cell happens to be
         // at selectedIndex (e.g. on first viewport population), the

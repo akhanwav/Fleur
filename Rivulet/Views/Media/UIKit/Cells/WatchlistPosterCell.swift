@@ -13,10 +13,11 @@
 //   - placeholder when no posterURL: dark gradient + film/tv SF symbol
 //     (32pt light, white-0.3)
 //
-//  Caption (`title` / `subtitle`) is intentionally nil — see comment in
-//  `PosterCell.swift` for the rationale (TVPosterView reserves bottom
-//  caption space that crops 2:3 posters; SwiftUI WatchlistTile doesn't
-//  render a caption either).
+//  TVPosterView's own caption (`title` / `subtitle`) is intentionally nil —
+//  see comment in `PosterCell.swift` for the rationale (TVPosterView reserves
+//  bottom caption space that crops 2:3 posters). A tile that needs a caption
+//  (the person page's filmography: title, year, character) gets labels of
+//  this cell's own below the lockup frame, `configure(item:badge:caption:)`.
 //
 
 import UIKit
@@ -35,6 +36,26 @@ final class WatchlistPosterCell: UICollectionViewCell {
     /// "On Server" badge for entries already owned locally — same visual
     /// language as `PosterCell`'s server-name badge, top-leading.
     private let ownedBadge = SourceBadgeView(style: .onArtwork)
+
+    /// Lines under the poster for `configure(item:badge:caption:)`.
+    struct Caption {
+        let title: String
+        let detail: String?
+        /// Up to two lines, then "…".
+        let credit: String?
+    }
+    private static let captionTitleFont = UIFont.systemFont(ofSize: 23, weight: .semibold)
+    private static let captionFont = UIFont.systemFont(ofSize: 19, weight: .medium)
+    private static let captionTopGap: CGFloat = 10
+    /// The caption block's height below the lockup frame (title, detail and
+    /// two credit lines); add it to the cell's height to show one.
+    static let captionHeight: CGFloat = captionTopGap + ceil(captionTitleFont.lineHeight)
+        + 2 + ceil(captionFont.lineHeight) + 2 + ceil(captionFont.lineHeight * 2)
+
+    private let captionStack = UIStackView()
+    private let captionTitle = UILabel()
+    private let captionDetail = UILabel()
+    private let captionCredit = UILabel()
 
     private var imageLoadTask: Task<Void, Never>?
     private var currentURL: URL?
@@ -89,6 +110,25 @@ final class WatchlistPosterCell: UICollectionViewCell {
         ownedBadge.translatesAutoresizingMaskIntoConstraints = false
         posterView.imageView.addSubview(ownedBadge)
 
+        captionTitle.font = Self.captionTitleFont
+        captionTitle.textColor = .white
+        captionDetail.font = Self.captionFont
+        captionDetail.textColor = UIColor.white.withAlphaComponent(0.6)
+        captionCredit.font = Self.captionFont
+        captionCredit.textColor = UIColor.white.withAlphaComponent(0.6)
+        captionCredit.numberOfLines = 2
+        captionCredit.lineBreakMode = .byTruncatingTail
+        captionStack.axis = .vertical
+        captionStack.spacing = 2
+        captionStack.alignment = .fill
+        captionStack.isHidden = true
+        captionStack.translatesAutoresizingMaskIntoConstraints = false
+        [captionTitle, captionDetail, captionCredit].forEach(captionStack.addArrangedSubview)
+        contentView.addSubview(captionStack)
+        // Under the frame, not the resting artwork: a focused poster grows
+        // to fill the frame, and the caption stays clear of it.
+        let artInset = (posterWidth - MediaRowMetrics.poster.art.width) / 2
+
         NSLayoutConstraint.activate([
             posterView.topAnchor.constraint(equalTo: contentView.topAnchor),
             posterView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
@@ -107,6 +147,10 @@ final class WatchlistPosterCell: UICollectionViewCell {
 
             ownedBadge.topAnchor.constraint(equalTo: posterView.imageView.topAnchor, constant: 10),
             ownedBadge.leadingAnchor.constraint(equalTo: posterView.imageView.leadingAnchor, constant: 10),
+
+            captionStack.topAnchor.constraint(equalTo: posterView.bottomAnchor, constant: Self.captionTopGap),
+            captionStack.leadingAnchor.constraint(equalTo: posterView.leadingAnchor, constant: artInset),
+            captionStack.trailingAnchor.constraint(equalTo: posterView.trailingAnchor, constant: -artInset),
         ])
     }
 
@@ -136,6 +180,18 @@ final class WatchlistPosterCell: UICollectionViewCell {
         loadImage(from: item.artwork.poster, failureIcon: failureIconImage(for: item.kind))
     }
 
+    /// MediaItem with a badge (e.g. "On Server") and the caption lines below.
+    func configure(item: MediaItem, badge: String?, caption: Caption) {
+        configure(item: item)
+        ownedBadge.text = badge
+        captionTitle.text = caption.title
+        captionDetail.text = caption.detail
+        captionDetail.isHidden = caption.detail == nil
+        captionCredit.text = caption.credit
+        captionCredit.isHidden = caption.credit == nil
+        captionStack.isHidden = false
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         imageLoadTask?.cancel()
@@ -145,6 +201,7 @@ final class WatchlistPosterCell: UICollectionViewCell {
         placeholderView.isHidden = false
         placeholderIcon.image = nil
         ownedBadge.text = nil
+        captionStack.isHidden = true
     }
 
     private func loadImage(from url: URL?, failureIcon: UIImage?) {

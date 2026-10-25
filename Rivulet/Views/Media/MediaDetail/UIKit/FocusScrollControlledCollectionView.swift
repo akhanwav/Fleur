@@ -58,6 +58,12 @@ final class FocusScrollControlledCollectionView: UICollectionView {
     /// would mis-tag a focused trailer as "on episodes" and send Up to the pills.
     var topSectionIndex: Int?
 
+    /// Sections with nothing focusable (a static info block). Focus skips
+    /// them, so centering the row past one would scroll the block out
+    /// unread. A row that follows static sections instead rests just below
+    /// them when both fit on screen.
+    var staticSections: Set<Int> = []
+
     /// True while the focused view is an episode DESCRIPTION (vs a thumb). When
     /// true, every episode description becomes focusable so Left/Right moves
     /// between adjacent descriptions; when false they stay gated so Up coming up
@@ -118,9 +124,30 @@ final class FocusScrollControlledCollectionView: UICollectionView {
         // resolved for EVERY row shape, including the shelf-host walk-up above
         // that plain `indexPath(for:)` returns nil for.
         if let cellIndexPath { lastFocusedIndexPath = cellIndexPath }
-        let targetY = isTop ? (frame.minY - topBand) : (frame.midY - bounds.height / 2)
+        var targetY = isTop ? (frame.minY - topBand) : (frame.midY - bounds.height / 2)
+        if !isTop, let section = cellIndexPath?.section,
+           let revealY = revealY(forStaticSectionsAbove: section, focusedFrame: frame) {
+            targetY = min(targetY, revealY)
+        }
         let clamped = max(minY, min(targetY, maxY))
         animateOffset(to: clamped)
+    }
+
+    /// The offset that shows the run of static sections directly above
+    /// `section` together with the focused row, trimming the run from its
+    /// top until it fits. nil when there is no such run or none of it fits.
+    private func revealY(forStaticSectionsAbove section: Int, focusedFrame: CGRect) -> CGFloat? {
+        var first = section
+        while staticSections.contains(first - 1) { first -= 1 }
+        guard first < section else { return nil }
+        let margin: CGFloat = 60
+        for candidate in first..<section {
+            guard let top = collectionViewLayout.layoutAttributesForItem(
+                at: IndexPath(item: 0, section: candidate))?.frame.minY else { continue }
+            let y = top - margin
+            if focusedFrame.maxY - y <= bounds.height - margin { return y }
+        }
+        return nil
     }
 
     // MARK: - Per-frame scroll driver

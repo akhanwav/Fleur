@@ -6,10 +6,14 @@
 //  Rivulet
 //
 //  Turns a MediaPerson into a PersonDetail:
-//    - Filmography: the person's titles on the user's Plex server, via a
+//    - Server titles: the person's titles on the user's Plex server, via a
 //      server-wide `?actor=` filter.
+//    - Filmography: TMDB's combined credits (movies and shows, with the
+//      character names), each title on the server swapped for its playable
+//      copy, then marked when another of the user's servers holds it.
 //    - Known For: Plex Discover's list for the person, minus titles already on
-//      the server, as metadata-only items.
+//      the server, as metadata-only items — the filmography when TMDB can't
+//      name the person.
 //    - Biography: the Discover person's summary, else TMDB.
 //  The data sources are injected so the logic unit-tests with fakes.
 //
@@ -174,6 +178,36 @@ private let _defaultBiography: @Sendable (MediaPerson) async -> String? = { pers
     return await TMDBClient.shared.actorBiography(titleTmdbId: titleTmdbId, type: type, actorName: person.name)
 }
 
+// MARK: - Default TMDB filmography
+
+/// The person's TMDB credits: by their own TMDB id when the credit came from
+/// TMDB, else resolved by name on the originating title's credits.
+private let _defaultTMDBFilmography: @Sendable (MediaPerson) async -> TMDBPersonFilmography? = { person in
+    var personId = person.tmdbPersonId
+    if personId == nil, let titleTmdbId = person.titleTmdbId {
+        personId = await TMDBClient.shared.personId(
+            titleTmdbId: titleTmdbId, type: person.titleIsMovie ? .movie : .tv, name: person.name)
+    }
+    guard let personId else { return nil }
+    return await TMDBClient.shared.personFilmography(personId: personId)
+}
+
+/// The selected server's playable copy of a TMDB title, from the in-memory
+/// library index (no network).
+private let _defaultOwnedItem: @Sendable (Int, TMDBMediaType) async -> MediaItem? = { tmdbId, type in
+    guard let match = await LibraryGUIDIndex.shared.lookup(tmdbId: tmdbId, type: type) else { return nil }
+    return await MainActor.run {
+        guard let serverURL = PlexAuthManager.shared.selectedServerURL,
+              let token = PlexAuthManager.shared.selectedServerToken else { return nil }
+        let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
+        return PlexMediaMapper.item(match, providerID: providerID, serverURL: serverURL, authToken: token)
+    }
+}
+
+private let _defaultOnOtherServer: @Sendable (Int, TMDBMediaType) async -> Bool = { tmdbId, type in
+    !(await OtherServersAvailabilityChecker.shared.copies(forTmdbId: tmdbId, type: type)).isEmpty
+}
+
 // MARK: - Provider
 
 @MainActor
@@ -184,15 +218,24 @@ final class PersonFilmographyProvider: PersonFilmographyProviding {
     private let serverFilmographyItems: @Sendable (_ person: MediaPerson) async -> [FilmographyEntry]
     private let biography: @Sendable (MediaPerson) async -> String?
     private let knownForTitles: @Sendable (MediaPerson) async -> [FilmographyEntry]
+    private let tmdbFilmography: @Sendable (MediaPerson) async -> TMDBPersonFilmography?
+    private let ownedItem: @Sendable (Int, TMDBMediaType) async -> MediaItem?
+    private let onOtherServer: @Sendable (Int, TMDBMediaType) async -> Bool
 
     nonisolated init(
         serverFilmographyItems: @escaping @Sendable (_ person: MediaPerson) async -> [FilmographyEntry] = _defaultServerFilmography,
         biography: @escaping @Sendable (MediaPerson) async -> String? = _defaultBiography,
-        knownFor: @escaping @Sendable (MediaPerson) async -> [FilmographyEntry] = _defaultKnownFor
+        knownFor: @escaping @Sendable (MediaPerson) async -> [FilmographyEntry] = _defaultKnownFor,
+        tmdbFilmography: @escaping @Sendable (MediaPerson) async -> TMDBPersonFilmography? = _defaultTMDBFilmography,
+        ownedItem: @escaping @Sendable (Int, TMDBMediaType) async -> MediaItem? = _defaultOwnedItem,
+        onOtherServer: @escaping @Sendable (Int, TMDBMediaType) async -> Bool = _defaultOnOtherServer
     ) {
         self.serverFilmographyItems = serverFilmographyItems
         self.biography = biography
         self.knownForTitles = knownFor
+        self.tmdbFilmography = tmdbFilmography
+        self.ownedItem = ownedItem
+        self.onOtherServer = onOtherServer
     }
 
     nonisolated func load(person: MediaPerson) async throws -> PersonDetail {
@@ -213,6 +256,38 @@ final class PersonFilmographyProvider: PersonFilmographyProviding {
 
     nonisolated func knownFor(person: MediaPerson) async -> [FilmographyEntry] {
         await knownForTitles(person)
+    }
+
+    nonisolated func filmography(person: MediaPerson, onServer: [FilmographyEntry]) async -> [FilmographyEntry] {
+        if let tmdb = await tmdbFilmography(person) {
+            let credits = await FilmographyBuilder.entries(from: tmdb)
+            if !credits.isEmpty {
+                var merged = await FilmographyBuilder.merge(credits: credits, server: onServer)
+                // The `?actor=` lookup can miss a title the server holds (an
+                // actor tag split across ids); the guid index cannot.
+                for index in merged.indices where !merged[index].isOnServer {
+                    guard let tmdbId = merged[index].tmdbId,
+                          let owned = await ownedItem(tmdbId, merged[index].item.kind == .movie ? .movie : .tv)
+                    else { continue }
+                    merged[index].item = owned
+                    merged[index].isOnServer = true
+                }
+                return merged
+            }
+        }
+        let known = await knownForTitles(person)
+        return onServer + FilmographyEntry.excluding(onServer, from: known)
+    }
+
+    nonisolated func markingOtherServers(_ entries: [FilmographyEntry]) async -> [FilmographyEntry] {
+        var result = entries
+        for index in result.indices where !result[index].isOnServer {
+            guard let tmdbId = result[index].tmdbId else { continue }
+            if await onOtherServer(tmdbId, result[index].item.kind == .movie ? .movie : .tv) {
+                result[index].isOnServer = true
+            }
+        }
+        return result
     }
 
     /// Server filmography bucketed by kind. All on-server.

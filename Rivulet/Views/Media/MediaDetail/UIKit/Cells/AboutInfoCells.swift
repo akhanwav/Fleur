@@ -591,9 +591,27 @@ final class AboutCardControl: UIControl {
 /// Stream / Rent / Buy rows of provider logos, plus the text credit TMDB's
 /// terms require for JustWatch-sourced data. Not focusable — like
 /// AboutCollectionCell, it's a static info block the focus-driven below-fold
-/// scrolls PAST rather than into.
+/// scrolls PAST rather than into (`BelowFoldCollectionView` keeps it in view
+/// on the way past, see `FocusScrollControlledCollectionView.staticSections`).
+/// Its height is measured from its rows, so the section never clips or
+/// overlaps the one below it.
 final class WhereToWatchCollectionCell: UICollectionViewCell {
     static let reuseID = "WhereToWatchCollectionCell"
+
+    private enum Metrics {
+        static let headerFont = UIFont.systemFont(ofSize: 30, weight: .semibold)
+        static let rowTitleFont = UIFont.systemFont(ofSize: 21, weight: .semibold)
+        static let attributionFont = UIFont.systemFont(ofSize: 17, weight: .regular)
+        static let headerGap: CGFloat = 24
+        static let rowGap: CGFloat = 32
+        static let rowTitleGap: CGFloat = 12
+        static let attributionGap: CGFloat = 28
+        /// Logos per row: a static block, not a second scroller.
+        static let maxLogos = 8
+    }
+    private static let groups: [(title: String, kind: MediaWatchOption.Kind)] = [
+        ("Stream", .stream), ("Rent", .rent), ("Buy", .buy)
+    ]
 
     private let header = sectionHeaderLabel("Where to Watch")
     private let rowsStack = UIStackView()
@@ -608,13 +626,13 @@ final class WhereToWatchCollectionCell: UICollectionViewCell {
         rowsStack.translatesAutoresizingMaskIntoConstraints = false
         rowsStack.axis = .vertical
         rowsStack.alignment = .leading
-        rowsStack.spacing = 20
+        rowsStack.spacing = Metrics.rowGap
         contentView.addSubview(rowsStack)
 
         // TMDB's terms require this credit whenever watch/providers data is
         // shown — see Docs/RIVULET_PLAYER.md-adjacent TMDB usage notes.
         attributionLabel.translatesAutoresizingMaskIntoConstraints = false
-        attributionLabel.font = .systemFont(ofSize: 17, weight: .regular)
+        attributionLabel.font = Metrics.attributionFont
         attributionLabel.textColor = UIColor.white.withAlphaComponent(0.4)
         attributionLabel.text = "Streaming, rental, and purchase data provided by JustWatch"
         attributionLabel.numberOfLines = 1
@@ -624,23 +642,30 @@ final class WhereToWatchCollectionCell: UICollectionViewCell {
             header.topAnchor.constraint(equalTo: contentView.topAnchor),
             header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
 
-            rowsStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
+            rowsStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.headerGap),
             rowsStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             rowsStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
 
-            attributionLabel.topAnchor.constraint(equalTo: rowsStack.bottomAnchor, constant: 24),
+            attributionLabel.topAnchor.constraint(equalTo: rowsStack.bottomAnchor, constant: Metrics.attributionGap),
             attributionLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
         ])
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// The cell's full height for `availability`: header, one row per
+    /// non-empty group, the attribution line.
+    static func height(for availability: MediaWatchAvailability) -> CGFloat {
+        let rows = CGFloat(groups.filter { group in availability.options.contains { $0.kind == group.kind } }.count)
+        let rowHeight = ceil(Metrics.rowTitleFont.lineHeight) + Metrics.rowTitleGap + WatchProviderChip.height
+        return ceil(Metrics.headerFont.lineHeight) + Metrics.headerGap
+            + rows * rowHeight + max(0, rows - 1) * Metrics.rowGap
+            + Metrics.attributionGap + ceil(Metrics.attributionFont.lineHeight)
+    }
+
     func configure(availability: MediaWatchAvailability) {
         rowsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let groups: [(title: String, kind: MediaWatchOption.Kind)] = [
-            ("Stream", .stream), ("Rent", .rent), ("Buy", .buy)
-        ]
-        for group in groups {
+        for group in Self.groups {
             let options = availability.options.filter { $0.kind == group.kind }
             guard !options.isEmpty else { continue }
             rowsStack.addArrangedSubview(Self.makeRow(title: group.title, options: options))
@@ -652,7 +677,7 @@ final class WhereToWatchCollectionCell: UICollectionViewCell {
 
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .systemFont(ofSize: 21, weight: .semibold)
+        label.font = Metrics.rowTitleFont
         label.textColor = UIColor.white.withAlphaComponent(0.5)
         label.text = title
         container.addSubview(label)
@@ -660,10 +685,9 @@ final class WhereToWatchCollectionCell: UICollectionViewCell {
         let logos = UIStackView()
         logos.translatesAutoresizingMaskIntoConstraints = false
         logos.axis = .horizontal
-        logos.spacing = 16
-        // Enough to fill a row without the shelf becoming a second scroller —
-        // this is a static info block, not a focusable rail.
-        for option in options.prefix(8) {
+        logos.alignment = .top
+        logos.spacing = WatchProviderChip.gap
+        for option in options.prefix(Metrics.maxLogos) {
             logos.addArrangedSubview(WatchProviderChip(option: option))
         }
         container.addSubview(logos)
@@ -672,7 +696,7 @@ final class WhereToWatchCollectionCell: UICollectionViewCell {
             label.topAnchor.constraint(equalTo: container.topAnchor),
             label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
 
-            logos.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 10),
+            logos.topAnchor.constraint(equalTo: label.bottomAnchor, constant: Metrics.rowTitleGap),
             logos.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             logos.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
             logos.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -684,11 +708,19 @@ final class WhereToWatchCollectionCell: UICollectionViewCell {
     override var canBecomeFocused: Bool { false }
 }
 
-/// One provider's logo chip (rounded square) + name, used by the Where to
-/// Watch rows. `MediaWatchOption.logoURL` is already fully-qualified by
-/// `TMDBMediaMapper`.
+/// One provider's logo chip (rounded square) over its name, used by the
+/// Where to Watch rows. The chip's own width is its name's column, so a
+/// long name wraps to two lines and truncates inside it instead of running
+/// under the next logo. `MediaWatchOption.logoURL` is already fully-qualified
+/// by `TMDBMediaMapper`.
 private final class WatchProviderChip: UIView {
-    private static let chipSize: CGFloat = 64
+    private static let logoSize: CGFloat = 64
+    private static let columnWidth: CGFloat = 112
+    private static let nameGap: CGFloat = 8
+    private static let nameFont = UIFont.systemFont(ofSize: 15, weight: .medium)
+    /// Space between two chips' name columns.
+    static let gap: CGFloat = 20
+    static let height: CGFloat = logoSize + nameGap + ceil(nameFont.lineHeight * 2)
 
     private let imageContainer = UIView()
     private let imageView = UIImageView()
@@ -710,28 +742,32 @@ private final class WatchProviderChip: UIView {
         imageContainer.addSubview(imageView)
 
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        nameLabel.font = Self.nameFont
         nameLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         nameLabel.textAlignment = .center
-        nameLabel.numberOfLines = 1
+        nameLabel.numberOfLines = 2
+        nameLabel.lineBreakMode = .byTruncatingTail
         nameLabel.text = option.providerName
         addSubview(nameLabel)
 
         NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: Self.columnWidth),
+            heightAnchor.constraint(equalToConstant: Self.height),
+
             imageContainer.topAnchor.constraint(equalTo: topAnchor),
-            imageContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            imageContainer.widthAnchor.constraint(equalToConstant: Self.chipSize),
-            imageContainer.heightAnchor.constraint(equalToConstant: Self.chipSize),
+            imageContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
+            imageContainer.widthAnchor.constraint(equalToConstant: Self.logoSize),
+            imageContainer.heightAnchor.constraint(equalToConstant: Self.logoSize),
 
             imageView.topAnchor.constraint(equalTo: imageContainer.topAnchor, constant: 6),
             imageView.leadingAnchor.constraint(equalTo: imageContainer.leadingAnchor, constant: 6),
             imageView.trailingAnchor.constraint(equalTo: imageContainer.trailingAnchor, constant: -6),
             imageView.bottomAnchor.constraint(equalTo: imageContainer.bottomAnchor, constant: -6),
 
-            nameLabel.topAnchor.constraint(equalTo: imageContainer.bottomAnchor, constant: 6),
-            nameLabel.centerXAnchor.constraint(equalTo: imageContainer.centerXAnchor),
-            nameLabel.widthAnchor.constraint(equalToConstant: Self.chipSize + 24),
-            nameLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            nameLabel.topAnchor.constraint(equalTo: imageContainer.bottomAnchor, constant: Self.nameGap),
+            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            nameLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
+            nameLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
 
         guard let url = option.logoURL else { return }
@@ -749,14 +785,30 @@ private final class WatchProviderChip: UIView {
 // MARK: - On Your Servers (metadata-only items)
 
 /// Cross-server check result for a title with no playback-capable provider:
-/// either it's available on another server this account can reach (owned or
-/// shared), or it isn't. Not focusable — a static status line, like the
-/// Where to Watch block above it.
+/// one focusable card per other server this account can reach (owned or
+/// shared) that holds it, each playing that server's copy, or a static
+/// status line while checking and when none does.
 final class ServerAvailabilityCollectionCell: UICollectionViewCell {
     static let reuseID = "ServerAvailabilityCollectionCell"
 
+    private enum Metrics {
+        static let headerGap: CGFloat = 16
+        static let cardWidth: CGFloat = 380
+        static let cardHeight: CGFloat = 104
+        static let cardGap: CGFloat = MediaRowMetrics.tileGap
+        /// Four cards fill the row's width.
+        static let maxCards = 4
+    }
+    /// The cell's height in every state (the cards are the tallest).
+    static let height: CGFloat = ceil(UIFont.systemFont(ofSize: 30, weight: .semibold).lineHeight)
+        + Metrics.headerGap + Metrics.cardHeight
+
     private let header = sectionHeaderLabel("On Your Servers")
     private let statusLabel = UILabel()
+    private let cardsStack = UIStackView()
+
+    /// Select on a card: play that server's copy.
+    var onSelectCopy: ((ServerCopyEntry) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -767,31 +819,91 @@ final class ServerAvailabilityCollectionCell: UICollectionViewCell {
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.font = .systemFont(ofSize: 25, weight: .medium)
         statusLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-        statusLabel.numberOfLines = 2
+        statusLabel.numberOfLines = 1
         contentView.addSubview(statusLabel)
+
+        cardsStack.translatesAutoresizingMaskIntoConstraints = false
+        cardsStack.axis = .horizontal
+        cardsStack.spacing = Metrics.cardGap
+        contentView.addSubview(cardsStack)
 
         NSLayoutConstraint.activate([
             header.topAnchor.constraint(equalTo: contentView.topAnchor),
             header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
 
-            statusLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 16),
+            statusLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.headerGap),
             statusLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
+
+            cardsStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: Metrics.headerGap),
+            cardsStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            cardsStack.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
         ])
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(availability: OtherServersAvailabilityChecker.Availability) {
+    func configure(availability: ServerAvailability) {
+        cardsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         switch availability {
         case .checking:
             statusLabel.text = "Checking your servers…"
         case .notFound:
             statusLabel.text = "Not on your servers"
-        case .found(let names):
-            statusLabel.text = "Available on \(names.joined(separator: ", "))"
+        case .found(let entries):
+            statusLabel.text = nil
+            for entry in entries.prefix(Metrics.maxCards) {
+                cardsStack.addArrangedSubview(makeCard(entry))
+            }
         }
+        statusLabel.isHidden = statusLabel.text == nil
     }
 
+    private func makeCard(_ entry: ServerCopyEntry) -> UIView {
+        let card = AboutCardControl()
+        card.translatesAutoresizingMaskIntoConstraints = false
+        card.onSelect = { [weak self] in self?.onSelectCopy?(entry) }
+
+        let icon = UIImageView(image: UIImage(systemName: "play.fill"))
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.tintColor = .white
+        icon.contentMode = .scaleAspectFit
+        icon.setContentHuggingPriority(.required, for: .horizontal)
+
+        let name = UILabel()
+        name.font = .systemFont(ofSize: 27, weight: .semibold)
+        name.textColor = .white
+        name.text = entry.serverName
+
+        let summary = UILabel()
+        summary.font = .systemFont(ofSize: 20, weight: .medium)
+        summary.textColor = UIColor.white.withAlphaComponent(0.6)
+        summary.text = entry.summary
+        summary.isHidden = entry.summary == nil
+
+        let text = UIStackView(arrangedSubviews: [name, summary])
+        text.translatesAutoresizingMaskIntoConstraints = false
+        text.axis = .vertical
+        text.spacing = 4
+        card.addSubview(icon)
+        card.addSubview(text)
+
+        NSLayoutConstraint.activate([
+            card.widthAnchor.constraint(equalToConstant: Metrics.cardWidth),
+            card.heightAnchor.constraint(equalToConstant: Metrics.cardHeight),
+
+            icon.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 28),
+            icon.centerYAnchor.constraint(equalTo: card.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 26),
+            icon.heightAnchor.constraint(equalToConstant: 26),
+
+            text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 20),
+            text.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -24),
+            text.centerYAnchor.constraint(equalTo: card.centerYAnchor),
+        ])
+        return card
+    }
+
+    // Not a focus stop itself: its cards are.
     override var canBecomeFocused: Bool { false }
 }

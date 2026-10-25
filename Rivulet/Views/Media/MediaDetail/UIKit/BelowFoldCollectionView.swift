@@ -291,7 +291,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .cast:
                 return self.shelfSection(
                     itemW: Self.castWidth,
-                    itemH: 355,
+                    itemH: CastCell.height,
                     gap: MediaRowMetrics.tileGap,   // six across on the grid, the seventh peeking
                     header: true,
                     // Primary on a title with no extras or related: same peek,
@@ -305,8 +305,12 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     topInset: isPrimary ? max(0, peek - lift) : 0,
                     sectionBottomInset: isPrimary ? 36 : 56
                 )
-            case .whereToWatch: return self.fullWidthSection(height: 260, topInset: isPrimary ? peek : 0)
-            case .servers: return self.fullWidthSection(height: 110, topInset: isPrimary ? peek : 0)
+            case .whereToWatch:
+                let height = WhereToWatchCollectionCell.height(for: self.watchAvailability ?? .empty)
+                return self.fullWidthSection(height: height, topInset: isPrimary ? peek : 0)
+            case .servers:
+                return self.fullWidthSection(height: ServerAvailabilityCollectionCell.height,
+                                             topInset: isPrimary ? peek : 0)
             case .about: return self.fullWidthSection(height: 370, topInset: isPrimary ? peek : 0)
             case .info:
                 // Sized to its rows, so a short title leaves no empty band below them.
@@ -513,6 +517,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .servers:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: ServerAvailabilityCollectionCell.reuseID, for: indexPath) as! ServerAvailabilityCollectionCell
                 cell.configure(availability: self.serverAvailability ?? .checking)
+                cell.onSelectCopy = { [weak self] entry in
+                    guard let self, let host = self.hostViewController else { return }
+                    RemoteCopyPlayer.play(entry.target, from: host)
+                }
                 return cell
             case .moreLikeThisShelf:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: ShelfRowCell.reuseID, for: indexPath) as! ShelfRowCell
@@ -635,12 +643,35 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// Patch the Servers cell with the real cross-server answer once it
     /// resolves, without a full snapshot rebuild (focus-preserving) — mirrors
     /// `applyContentAdvisory` above.
-    private func applyServerAvailability(_ availability: OtherServersAvailabilityChecker.Availability) {
+    private func applyServerAvailability(_ availability: ServerAvailability) {
         serverAvailability = availability
         var snapshot = dataSource.snapshot()
         guard snapshot.sectionIdentifiers.contains(.servers) else { return }
         snapshot.reconfigureItems([.servers])
         dataSource.apply(snapshot, animatingDifferences: false)
+        updateStaticSections()
+    }
+
+    /// Sections with nothing to focus: Where to Watch always, On Your
+    /// Servers until it has a copy to play. The collection keeps them in
+    /// view while focus passes them (`staticSections`), so stepping from
+    /// Cast & Crew to the next row shows the logos instead of skipping them.
+    private func updateStaticSections() {
+        var statics = Set<Int>()
+        for (index, kind) in sectionKinds.enumerated() {
+            switch kind {
+            case .whereToWatch: statics.insert(index)
+            case .servers:
+                if case .found(let entries) = serverAvailability, !entries.isEmpty { continue }
+                statics.insert(index)
+            default: continue
+            }
+        }
+        collectionView.staticSections = statics
+    }
+
+    private var hostViewController: UIViewController? {
+        sequence(first: self as UIResponder, next: \.next).first { $0 is UIViewController } as? UIViewController
     }
 
     /// Patch the About cell with the rich advisory after it arrives, without a
@@ -920,7 +951,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// TMDB watch/providers (metadata-only items). nil = no section.
     private var watchAvailability: MediaWatchAvailability?
     /// Cross-server check (metadata-only items). nil = no section (owned item).
-    private var serverAvailability: OtherServersAvailabilityChecker.Availability?
+    private var serverAvailability: ServerAvailability?
     /// The collection row (Plex's hub title, members, optional trailing
     /// collection tile). nil or no members: no row.
     private var collectionRow: CollectionRow?
@@ -960,6 +991,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // The primary peek row is section 0 (when any content exists). Drives the
         // focus-scroll "top section" logic for episodes OR a movie's related row.
         collectionView.topSectionIndex = sectionKinds.isEmpty ? nil : 0
+        updateStaticSections()
     }
 
     /// Reset scroll to the rest (peek) position — used on collapse. Rest offset

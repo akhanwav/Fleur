@@ -19,6 +19,16 @@ import UIKit
 final class CastCell: UIView {
 
     static let circleSize: CGFloat = MediaRowMetrics.gridWidth(columns: 6)
+    /// Labels may overflow the circle into the gap, but only far enough to
+    /// leave a neighbour's labels clear: a long "Batman / Bruce Wayne / …"
+    /// used to run into the next card.
+    static let labelWidth: CGFloat = circleSize + MediaRowMetrics.tileGap - 12
+    private static let nameFont = UIFont.systemFont(ofSize: 27, weight: .semibold)
+    private static let subtitleFont = UIFont.systemFont(ofSize: 22, weight: .medium)
+    private static let subtitleLines = 2
+    /// Circle, name and a two-line subtitle: the cell's full height.
+    static let height: CGFloat = circleSize + 14 + ceil(nameFont.lineHeight) + 4
+        + ceil(subtitleFont.lineHeight * CGFloat(subtitleLines))
 
     /// Scale host for the focus enlarge.
     private let glowView = UIView()
@@ -68,16 +78,18 @@ final class CastCell: UIView {
         imageContainer.addSubview(fallbackIcon)
 
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        nameLabel.font = .systemFont(ofSize: 27, weight: .semibold)
+        nameLabel.font = Self.nameFont
         nameLabel.textColor = UIColor.white.withAlphaComponent(0.9)
         nameLabel.numberOfLines = 1
         nameLabel.textAlignment = .center
         addSubview(nameLabel)
 
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        subtitleLabel.font = .systemFont(ofSize: 22, weight: .medium)
+        subtitleLabel.font = Self.subtitleFont
         subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.72)
-        subtitleLabel.numberOfLines = 1
+        // Several characters ("Batman / Bruce Wayne / …") wrap, then end in "…".
+        subtitleLabel.numberOfLines = Self.subtitleLines
+        subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.textAlignment = .center
         addSubview(subtitleLabel)
 
@@ -106,12 +118,12 @@ final class CastCell: UIView {
             // labels can overflow into the inter-item gap — that's intended).
             nameLabel.topAnchor.constraint(equalTo: glowView.bottomAnchor, constant: 14),
             nameLabel.centerXAnchor.constraint(equalTo: glowView.centerXAnchor),
-            nameLabel.widthAnchor.constraint(equalToConstant: Self.circleSize + 56),
+            nameLabel.widthAnchor.constraint(equalToConstant: Self.labelWidth),
 
             subtitleLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 4),
             subtitleLabel.centerXAnchor.constraint(equalTo: glowView.centerXAnchor),
-            subtitleLabel.widthAnchor.constraint(equalToConstant: Self.circleSize + 56),
-            subtitleLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            subtitleLabel.widthAnchor.constraint(equalToConstant: Self.labelWidth),
+            subtitleLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
         ])
     }
 

@@ -18,7 +18,7 @@
 import UIKit
 
 /// Where a Ways to Watch row actually plays from.
-enum WaysToWatchTarget {
+nonisolated enum WaysToWatchTarget: Hashable, Sendable {
     /// A version on the CURRENTLY SELECTED server — the existing
     /// single-server path (`MediaSource.id`).
     case local(mediaID: String)
@@ -34,12 +34,11 @@ enum WaysToWatchPicker {
     }
 
     /// Every row for `item`: this server's own versions (ranked, best first)
-    /// plus one best copy per OTHER server that has a match, each labeled
-    /// with its server name. `includeOtherServers` is false when the host
-    /// has no way to play a remote pick (`onPlayRemoteVersion` unset) — the
-    /// picker then degrades to exactly `VersionPicker`'s old single-server
-    /// behavior, never offering a choice it can't carry out.
-    static func rows(for item: MediaItem, detail: MediaItemDetail, includeOtherServers: Bool) async -> [Row] {
+    /// plus every copy on each OTHER server that has a match, each labeled
+    /// with its server name. One row is still a list worth showing: it is
+    /// where the server, resolution, HDR/DV, bitrate, size and audio of the
+    /// only copy are read.
+    static func rows(for item: MediaItem, detail: MediaItemDetail) async -> [Row] {
         let localSources = VersionRanking.ordered(detail.mediaSources)
         guard !localSources.isEmpty else { return [] }
 
@@ -52,10 +51,10 @@ enum WaysToWatchPicker {
             return Row(label: "\(localName) · \(label)", isDefault: index == 0, target: .local(mediaID: source.id))
         }
 
-        guard includeOtherServers, item.ref.isPlex else { return localSources.count >= 2 ? rows : [] }
+        guard item.ref.isPlex else { return rows }
 
         let matchGuids = await guidsForMatching(item: item, detail: detail)
-        guard !matchGuids.isEmpty else { return localSources.count >= 2 ? rows : [] }
+        guard !matchGuids.isEmpty else { return rows }
 
         let copies = await OtherServersAvailabilityChecker.shared.copies(forGuids: matchGuids)
         for copy in copies {
@@ -70,14 +69,12 @@ enum WaysToWatchPicker {
             }
         }
 
-        // One local version and no other-server copies found: nothing to
-        // choose between, matching VersionPicker's own single-version gate.
-        return rows.count >= 2 ? rows : []
+        return rows
     }
 
     static func present(_ rows: [Row], from host: UIViewController, sourceFrame: CGRect?,
                         onPick: @escaping (WaysToWatchTarget) -> Void) {
-        guard rows.count >= 2 else { return }
+        guard !rows.isEmpty else { return }
         let actions = rows.map { row in
             TileMenuAction(title: row.isDefault ? "\(row.label) · Default" : row.label, systemImage: "play.fill") {
                 onPick(row.target)
@@ -113,7 +110,7 @@ enum WaysToWatchPicker {
     /// directly for a movie; for an episode, the matched ratingKey is the
     /// SHOW, so its episode list is paged to find the one with the same
     /// season/episode numbers.
-    private static func remoteDetail(for item: MediaItem,
+    static func remoteDetail(for item: MediaItem,
                                      copy: OtherServersAvailabilityChecker.ServerCopy) async -> MediaItemDetail? {
         let network = PlexNetworkManager.shared
         var ratingKey = copy.ratingKey
@@ -133,5 +130,44 @@ enum WaysToWatchPicker {
         // `.ref.isPlex` honest for a value that stays entirely in this file.
         return PlexMediaMapper.detail(meta, providerID: "plex:\(copy.machineId)",
                                       serverURL: copy.serverURL, authToken: copy.token)
+    }
+}
+
+/// Plays a copy that lives on a server OTHER than the selected one: Ways to
+/// Watch picks and the unowned detail's On Your Servers entries. A shared
+/// library's progress is per server, so this reads THAT server's metadata
+/// first and prompts from its own viewOffset, not the local item's.
+enum RemoteCopyPlayer {
+    @MainActor
+    static func play(_ target: WaysToWatchTarget, from host: UIViewController) {
+        guard case .remote(let serverURL, let token, let ratingKey, let mediaID) = target else { return }
+        Task { @MainActor [weak host] in
+            let network = PlexNetworkManager.shared
+            guard var playItem = try? await network.getFullMetadata(
+                serverURL: serverURL, authToken: token, ratingKey: ratingKey
+            ) else { return }
+            // A show plays its next episode on that server: the one in
+            // progress, else the first unwatched, else the first.
+            if playItem.type == "show" {
+                guard let leaves = try? await network.getAllLeaves(
+                    serverURL: serverURL, authToken: token, ratingKey: ratingKey),
+                    let next = leaves.first(where: \.isInProgress)
+                        ?? leaves.first(where: { ($0.viewCount ?? 0) == 0 }) ?? leaves.first,
+                    let nextKey = next.ratingKey,
+                    let episode = try? await network.getFullMetadata(
+                        serverURL: serverURL, authToken: token, ratingKey: nextKey)
+                else { return }
+                playItem = episode
+            }
+            guard let host else { return }
+            let resume = playItem.isInProgress ? playItem.viewOffset.map { Double($0) / 1000 } : nil
+            ResumePrompt.resolve(offsetSeconds: resume ?? 0, from: host) { [weak host] startOver in
+                guard let host else { return }
+                let viewModel = UniversalPlayerViewModel(
+                    metadata: playItem, serverURL: serverURL, authToken: token,
+                    startOffset: startOver ? 0 : resume, preferredMediaID: mediaID)
+                PlayerPresenter.present(viewModel: viewModel, from: host)
+            }
+        }
     }
 }

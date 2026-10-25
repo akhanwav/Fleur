@@ -93,7 +93,8 @@ enum TMDBMediaMapper {
                 role: credit.character,
                 imageURL: profileURL(credit.profilePath),
                 titleTmdbId: tmdb.id,
-                titleIsMovie: tmdb.mediaType == .movie
+                titleIsMovie: tmdb.mediaType == .movie,
+                tmdbPersonId: credit.id
             )
         }
         // TMDB has no per-show "director" credit — movies get one from the
@@ -109,7 +110,8 @@ enum TMDBMediaMapper {
                         role: "Director",
                         imageURL: profileURL(credit.profilePath),
                         titleTmdbId: tmdb.id,
-                        titleIsMovie: true
+                        titleIsMovie: true,
+                        tmdbPersonId: credit.id
                     )
                 }
         } else {
@@ -120,7 +122,8 @@ enum TMDBMediaMapper {
                     role: "Creator",
                     imageURL: profileURL(creator.profilePath),
                     titleTmdbId: tmdb.id,
-                    titleIsMovie: false
+                    titleIsMovie: false,
+                    tmdbPersonId: creator.id
                 )
             }
         }
