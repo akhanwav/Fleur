@@ -13,8 +13,12 @@
 //  artwork, plus vibrant-colour, lighten (`plusL`) and darken (`plusD`)
 //  passes over it. Those passes are the rim. Hiding the whole group hides the
 //  artwork, so only the passes go, along with the specular glare layer.
+//  A card (TVCardView: Continue Watching, episodes, trailers) adds two more:
+//  a white focus platter (`_UIFloatingContentCornerRadiusAnimatingView`, 0.9
+//  white) that shows around the artwork's antialiased edge, and a glass
+//  backdrop (`CABackdropLayer`, `glassBackground`) behind it. Both go too.
 //  Measured in the tvOS 26 simulator against screenshots of a focused poster
-//  and card.
+//  and a focused Continue Watching cell with artwork.
 //
 //  There is no public switch for any of this. Everything is matched by layer
 //  class and filter name and only ever hidden, so on an OS that draws focus
@@ -35,7 +39,7 @@ enum FocusRim {
     private static func hideGlare(_ layer: CALayer) {
         // Our own glass (badges, tags) is left alone.
         if layer.delegate is UIVisualEffectView { return }
-        if NSStringFromClass(type(of: layer)).contains("SpecularHighlight") {
+        if NSStringFromClass(type(of: layer)).contains("SpecularHighlight") || isPlatter(layer) {
             layer.isHidden = true
             return
         }
@@ -49,11 +53,17 @@ enum FocusRim {
     private static func hidePasses(_ layer: CALayer) {
         let blend = layer.compositingFilter as? String
         let vibrant = (layer.filters ?? []).contains { String(describing: $0).contains("vibrantColorMatrix") }
-        if blend == "plusL" || blend == "plusD" || vibrant {
+        let backdrop = NSStringFromClass(type(of: layer)) == "CABackdropLayer"
+        if blend == "plusL" || blend == "plusD" || vibrant || backdrop {
             layer.isHidden = true
             return
         }
         layer.sublayers?.forEach(hidePasses)
+    }
+
+    private static func isPlatter(_ layer: CALayer) -> Bool {
+        guard let delegate = layer.delegate else { return false }
+        return String(describing: type(of: delegate)) == "_UIFloatingContentCornerRadiusAnimatingView"
     }
 
     private static func isGlassGroup(_ layer: CALayer) -> Bool {

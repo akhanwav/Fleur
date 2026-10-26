@@ -168,9 +168,28 @@ final class TileMenuPopupViewController: UIViewController {
             stack.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -panelInset),
         ])
 
+        // Placed in viewDidLayoutSubviews, once the view has its real size.
+        panel.alpha = 0
+        view.addSubview(panel)
+
+        // Menu cancels (rows own Select via their own recognizers).
+        let menuTap = UITapGestureRecognizer(target: self, action: #selector(menuPressed))
+        menuTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
+        view.addGestureRecognizer(menuTap)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if !isPlaced, view.bounds.width > 0, view.bounds.height > 0 { placePanel() }
+    }
+
+    /// Lay the panel out beside the tile. Not in viewDidLoad: the view's
+    /// bounds are not the screen's there yet, and a panel placed against them
+    /// could land partly or wholly off screen (a dim and nothing to move to).
+    private func placePanel() {
+        isPlaced = true
         let (frame, growsFromLeftEdge) = panelFrame()
         panel.frame = frame
-        view.addSubview(panel)
         anchorCorner = CGPoint(x: growsFromLeftEdge ? frame.minX : frame.maxX, y: frame.minY)
 
         // The system menu grows out of the tile's top corner and shrinks
@@ -183,13 +202,15 @@ final class TileMenuPopupViewController: UIViewController {
 
         // Entrance start state; animated in viewDidAppear.
         panel.transform = CGAffineTransform(scaleX: 0.02, y: 0.02)
-        panel.alpha = 0
-
-        // Menu cancels (rows own Select via their own recognizers).
-        let menuTap = UITapGestureRecognizer(target: self, action: #selector(menuPressed))
-        menuTap.allowedPressTypes = [NSNumber(value: UIPress.PressType.menu.rawValue)]
-        view.addGestureRecognizer(menuTap)
     }
+
+    private var isPlaced = false
+    private static let maximumPanelWidth: CGFloat = 680
+
+    /// A menu whose rows grow while it is up (Ways to Watch): it picks its
+    /// side of the tile for its widest size, so later rows never push it off
+    /// the screen or over the tile.
+    var growsWhileOpen = false
 
     /// Replace the rows in place (Ways to Watch adds each server's copies as
     /// it answers). Focus stays on the row it was on, matched by title, and
@@ -204,6 +225,7 @@ final class TileMenuPopupViewController: UIViewController {
         // popup that no longer holds focus cannot ask for it back (a dimmed
         // screen nothing moves on, until Menu).
         buildRows(reusing: rows)
+        guard isPlaced else { return }
         // Grow from the corner the panel opened at, never re-placed: only a
         // bottom that would leave the safe area moves it up, and only by that.
         var (frame, _) = panelFrame()
@@ -301,7 +323,8 @@ final class TileMenuPopupViewController: UIViewController {
         let actionCount = sections.reduce(0) { $0 + $1.count }
         let dividerCount = max(0, sections.count - 1) + (headerView != nil && !sections.isEmpty ? 1 : 0)
         let minimumWidth: CGFloat = headerView == nil ? 440 : 620
-        let panelWidth = min(max(Self.widestRowWidth(for: sections) + panelInset * 2, minimumWidth), 680)
+        let panelWidth = min(max(Self.widestRowWidth(for: sections) + panelInset * 2, minimumWidth),
+                             Self.maximumPanelWidth)
         var headerHeight: CGFloat = 0
         if let headerView {
             headerHeight = ceil(headerView.systemLayoutSizeFitting(
@@ -321,7 +344,8 @@ final class TileMenuPopupViewController: UIViewController {
         var growsFromLeftEdge = true  // panel's tile-adjacent top corner
         if let sourceFrame {
             origin = CGPoint(x: sourceFrame.maxX + gap, y: sourceFrame.minY)
-            if origin.x + panelWidth > safe.maxX {
+            let widest = growsWhileOpen ? Self.maximumPanelWidth : panelWidth
+            if origin.x + widest > safe.maxX {
                 origin.x = sourceFrame.minX - gap - panelWidth
                 growsFromLeftEdge = false
             }

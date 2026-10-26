@@ -4574,8 +4574,31 @@ final class PlexHomeViewController: UIViewController {
         guard sections.contains(where: { !$0.isEmpty }), presentedViewController == nil else { return }
         // animated: false — the popup runs its own grow-from-the-tile
         // entrance/exit (see TileMenuPopupViewController).
-        present(TileMenuPopupViewController(sections: sections,
-                                            sourceFrame: focusedTileFrame()), animated: false)
+        let popup = TileMenuPopupViewController(sections: sections, sourceFrame: focusedTileFrame())
+        returnFocusOnDismiss(of: popup)
+        present(popup, animated: false)
+    }
+
+    /// The tile a popup was opened from, focused again when it closes.
+    /// Left to the engine, focus came back to the first tile on screen in the
+    /// row or grid, on Back as much as after a pick.
+    private weak var popupReturnFocus: UIView?
+
+    private func returnFocusOnDismiss(of popup: TileMenuPopupViewController) {
+        popupReturnFocus = UIFocusSystem.focusSystem(for: view)?.focusedItem as? UIView
+        let previous = popup.onDismiss
+        popup.onDismiss = { [weak self] in
+            previous?()
+            self?.restorePopupReturnFocus()
+        }
+    }
+
+    private func restorePopupReturnFocus() {
+        guard let target = popupReturnFocus, target.window != nil, presentedViewController == nil,
+              let system = UIFocusSystem.focusSystem(for: target),
+              (system.focusedItem as? UIView) !== target else { return }
+        system.requestFocusUpdate(to: target)
+        system.updateFocusIfNeeded()
     }
 
     /// Discover tile menu — mirror of SwiftUI `TMDBContextMenu`: Details when
@@ -7054,6 +7077,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                                                 header: TileMenuHeader(title: title))
         let token = lookup.observe { [weak popup] in popup?.update(sections: [rows()]) }
         popup.onDismiss = { lookup.stopObserving(token) }
+        popup.growsWhileOpen = true
+        returnFocusOnDismiss(of: popup)
         waysToWatchPopup = popup
         topmostPresented.present(popup, animated: false)
     }
@@ -7081,6 +7106,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     DetailCopySelection.pendingServer[guid] = copy
                 }
                 self.refreshTiles(showing: item.ref)
+                self.restorePopupReturnFocus()
             }
         }
         if !lookup.isFinished { actions.append(Self.checkingServersRow) }
