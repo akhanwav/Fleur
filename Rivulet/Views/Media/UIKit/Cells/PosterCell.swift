@@ -270,6 +270,7 @@ final class PosterCell: UICollectionViewCell {
     func configure(item: MediaItem) {
         sourceBadge.text = nil
         versionTags.clear()
+        cancelSeasonCount()
         setSquare(item.isMusic == true)
         setFallbackQuery(item.isMusic == true ? nil : ArtworkFallback.Query(item))
         caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
@@ -367,6 +368,7 @@ final class PosterCell: UICollectionViewCell {
         watchedBadge.isHidden = true
         sourceBadge.text = nil
         versionTags.clear()
+        cancelSeasonCount()
         fallbackQuery = nil
         triedFallback = false
         caption.configure(title: nil, year: nil)
@@ -565,6 +567,67 @@ final class PosterCell: UICollectionViewCell {
         watchedBadge.setStyle(.unwatchedCount(count))
         watchedBadge.isHidden = false
     }
+
+    private var seasonsTask: Task<Void, Never>?
+
+    /// Search: a show's tag names its seasons ("3 Seasons") in place of the
+    /// unwatched-episode count. Call after `configure`, which clears it.
+    func showSeasonCount(for item: MediaItem) {
+        seasonsTask?.cancel()
+        watchedBadge.isHidden = true
+        if let known = TitleSeasons.known(for: item.ref) {
+            showSeasons(known)
+            return
+        }
+        let ref = item.ref
+        seasonsTask = Task { [weak self] in
+            let count = await TitleSeasons.count(for: item)
+            guard !Task.isCancelled, let self, self.seasonsRef == ref else { return }
+            self.showSeasons(count)
+        }
+        seasonsRef = ref
+    }
+
+    private var seasonsRef: MediaItemRef?
+
+    private func showSeasons(_ count: Int?) {
+        guard let count, count > 0 else { return }
+        watchedBadge.setStyle(.seasons(count))
+        watchedBadge.isHidden = false
+    }
+
+    private func cancelSeasonCount() {
+        seasonsTask?.cancel()
+        seasonsTask = nil
+        seasonsRef = nil
+    }
+}
+
+/// How many seasons a show has, not counting Specials (season 0). Read once
+/// per show from its season list and kept for the session.
+@MainActor
+enum TitleSeasons {
+    private static var counts: [MediaItemRef: Int?] = [:]
+    private static var inFlight: [MediaItemRef: Task<Int?, Never>] = [:]
+
+    /// `.some(nil)` when the read found nothing; nil before the first read.
+    static func known(for ref: MediaItemRef) -> Int?? { counts[ref] }
+
+    static func count(for show: MediaItem) async -> Int? {
+        let ref = show.ref
+        if let known = counts[ref] { return known }
+        if let task = inFlight[ref] { return await task.value }
+        let task = Task<Int?, Never> {
+            guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID),
+                  let seasons = try? await provider.children(of: ref) else { return nil }
+            return seasons.filter { $0.kind == .season && $0.seasonNumber != 0 }.count
+        }
+        inFlight[ref] = task
+        let count = await task.value
+        inFlight[ref] = nil
+        counts[ref] = .some(count)
+        return count
+    }
 }
 
 // MARK: - Unwatched-count badge
@@ -577,6 +640,8 @@ final class PosterCell: UICollectionViewCell {
 final class PosterWatchedBadge: UIView {
     enum Style {
         case unwatchedCount(Int)
+        /// Search's show tiles: "1 Season", "3 Seasons".
+        case seasons(Int)
     }
 
     private let countTag = QualityTagView()
@@ -601,6 +666,8 @@ final class PosterWatchedBadge: UIView {
         switch style {
         case .unwatchedCount(let count):
             countTag.text = "\(count)"
+        case .seasons(let count):
+            countTag.text = count == 1 ? "1 Season" : "\(count) Seasons"
         }
     }
 

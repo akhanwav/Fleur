@@ -1238,6 +1238,12 @@ final class PlexHomeViewController: UIViewController {
         isSearchLoading = false
         searchError = Self.searchErrorMessage(plex: filteredPlex, jellyfin: jellyfinResult)
         lastSubmittedQuery = query
+        // New results start at their first tile. The rows keep their ids from
+        // query to query ("Movies"), so the offset left by the previous search
+        // was restored onto these: results opened mid-row, the start a Left
+        // press away. (The query is also in the rows' content token, so a
+        // search returning the same titles rebinds at the start too.)
+        shelfOffsets = shelfOffsets.filter { !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) }
         applySnapshot(animated: false)
         reconfigureVisibleSearchCells()
     }
@@ -4167,6 +4173,7 @@ final class PlexHomeViewController: UIViewController {
     /// Content identity for a shelf row — reload only when this changes.
     private func shelfContentToken(_ section: HomeSectionData) -> Int {
         var hasher = Hasher()
+        if section.kind == .searchGrid { hasher.combine(lastSubmittedQuery) }
         if section.kind == .watchlist {
             for item in section.watchlistItems { hasher.combine(item.id) }
         } else {
@@ -4295,6 +4302,7 @@ final class PlexHomeViewController: UIViewController {
                 // The tags name the server, so search drops the source badge.
                 if section.kind == .searchGrid, item.isMusic != true {
                     cell.showVersionTags(for: item)
+                    if item.kind == .show { cell.showSeasonCount(for: item) }
                 }
             }
             return cell
@@ -4395,7 +4403,9 @@ final class PlexHomeViewController: UIViewController {
                 return
             }
             let item = section.items[itemIndex]
-            presentTileMenu(for: item, isContinueWatching: false)
+            // No Ways to Watch: the result's tags already name its quality and
+            // servers, and switching copies is the detail page's.
+            presentTileMenu(for: item, isContinueWatching: false, offersWaysToWatch: false)
         case .watchlist:
             presentWatchlistTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
@@ -4571,9 +4581,11 @@ final class PlexHomeViewController: UIViewController {
 
     /// A library tile's long-press menu: the Music menu for a music tile, the video one otherwise.
     private func presentTileMenu(for item: MediaItem, isContinueWatching: Bool,
+                                 offersWaysToWatch: Bool = true,
                                  shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) {
         if presentMusicTileMenuIfNeeded(for: item) { return }
         presentTileMenu(sections: tileMenuSections(for: item, isContinueWatching: isContinueWatching,
+                                                   offersWaysToWatch: offersWaysToWatch,
                                                    shelfLocation: shelfLocation))
     }
 
@@ -6934,6 +6946,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     /// group for Remove-from-CW + Go-to-Show.
     private func tileMenuSections(for item: MediaItem,
                                   isContinueWatching: Bool,
+                                  offersWaysToWatch: Bool = true,
                                   shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil) -> [[TileMenuAction]] {
         // A collection opens its page on Select and has nothing to play or
         // mark. In a library its menu is Pin to Home or Unpin from Home.
@@ -7029,7 +7042,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         }) {
             first.insert(version, at: 1)
         }
-        if item.kind == .movie || item.kind == .show || item.kind == .episode {
+        if offersWaysToWatch, item.kind == .movie || item.kind == .show || item.kind == .episode {
             first.insert(TileMenuAction(title: "Ways to Watch…", systemImage: "server.rack") { [weak self] in
                 self?.presentServerChoices(for: item, from: tileFrame)
             }, at: 1)
