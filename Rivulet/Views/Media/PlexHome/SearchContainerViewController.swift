@@ -74,6 +74,11 @@ final class SearchContainerViewController: UIViewController {
         // tab mounts, empty query included. (`showsSearchResultsController`,
         // the iOS way to force that, is unavailable on tvOS.)
         searchController.obscuresBackgroundDuringPresentation = false
+        // Rows do not clip (a focused tile's scale and the peeking tiles must
+        // show), so beside the grid keyboard a row scrolled right drew its
+        // leftmost tiles over the keys, and a tile realized for a frame as it
+        // left flashed there. The results area is the edge they stop at.
+        results.view.clipsToBounds = true
 
         // A recents pill sets the query from inside the results controller;
         // mirror it back into the field so the two never disagree.

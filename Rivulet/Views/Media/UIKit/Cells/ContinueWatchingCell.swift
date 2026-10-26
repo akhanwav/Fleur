@@ -199,7 +199,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         if let knownQuality {
             showQuality(knownQuality)
         } else {
-            loadQuality(for: item.ref)
+            loadQuality(for: item)
         }
 
         let isEpisodeStill = isEpisode && item.grandparentArtwork?.backdrop == nil && item.artwork.backdrop == nil
@@ -236,14 +236,14 @@ final class ContinueWatchingCell: UICollectionViewCell {
     }
 
     /// The tag for the version this card would play, fetched once per title.
-    private func loadQuality(for ref: MediaItemRef) {
-        if let known = TitleQuality.known(for: ref) {
+    private func loadQuality(for item: MediaItem) {
+        if let known = TitleQuality.known(for: item.ref) {
             showQuality(known)
             return
         }
         showQuality(nil)
         qualityTask = Task { [weak self] in
-            let label = await TitleQuality.label(for: ref)
+            let label = await TitleQuality.label(for: item)
             guard !Task.isCancelled, let self else { return }
             self.qualityTag.text = label
             self.qualityTag.isHidden = label == nil
@@ -396,12 +396,22 @@ enum TitleQuality {
     /// nil before the first read.
     static func known(for ref: MediaItemRef) -> String?? { labels[ref] }
 
-    static func label(for ref: MediaItemRef) async -> String? {
+    /// A show or season has no file of its own: its label is the episode
+    /// Play would start (`EpisodePicker.resolvePlayTarget`), as Ways to Watch
+    /// describes it.
+    static func label(for item: MediaItem) async -> String? {
+        let ref = item.ref
         if let known = labels[ref] { return known }
         if let task = inFlight[ref] { return await task.value }
         let task = Task<String?, Never> {
-            guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID),
-                  let detail = try? await provider.fullDetail(for: ref) else { return nil }
+            guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID) else { return nil }
+            var target = ref
+            if item.kind == .show || item.kind == .season {
+                guard let episode = await EpisodePicker.resolvePlayTarget(for: item, provider: provider)
+                else { return nil }
+                target = episode.ref
+            }
+            guard let detail = try? await provider.fullDetail(for: target) else { return nil }
             return DetailCopySelection.qualityText(VersionRanking.ordered(detail.mediaSources).first)
         }
         inFlight[ref] = task
@@ -418,10 +428,20 @@ enum TitleQuality {
 @MainActor
 final class QualityTagView: UIView {
     private let label = UILabel()
+    /// Never truncated: a long `text` gives way first ("Sesa… +2").
+    private let suffixLabel = UILabel()
 
     var text: String? {
         get { label.text }
         set { label.text = newValue }
+    }
+
+    var suffix: String? {
+        get { suffixLabel.text }
+        set {
+            suffixLabel.text = newValue.map { " \($0)" }
+            suffixLabel.isHidden = newValue == nil
+        }
     }
 
     override init(frame: CGRect) {
@@ -431,14 +451,19 @@ final class QualityTagView: UIView {
         layer.cornerRadius = 6
         backgroundColor = UIColor.black.withAlphaComponent(0.65)
         layer.cornerCurve = .continuous
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = .systemFont(ofSize: 16, weight: .semibold)
-        addSubview(label)
+        let stack = UIStackView(arrangedSubviews: [label, suffixLabel])
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        for part in [label, suffixLabel] {
+            part.font = .systemFont(ofSize: 16, weight: .semibold)
+        }
+        suffixLabel.isHidden = true
+        suffixLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(stack)
         NSLayoutConstraint.activate([
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
         ])
         setFocused(false)
     }
@@ -446,8 +471,16 @@ final class QualityTagView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// How readily `text` truncates when tags share too little room: lower
+    /// gives way first (a server name before a quality).
+    func setTextCompressionResistance(_ priority: UILayoutPriority) {
+        label.setContentCompressionResistancePriority(priority, for: .horizontal)
+    }
+
     func setFocused(_ focused: Bool) {
-        label.textColor = UIColor.white.withAlphaComponent(focused ? 0.95 : 0.7)
+        let color = UIColor.white.withAlphaComponent(focused ? 0.95 : 0.7)
+        label.textColor = color
+        suffixLabel.textColor = color
         layer.borderColor = UIColor.white.withAlphaComponent(focused ? 0.6 : 0.3).cgColor
     }
 }

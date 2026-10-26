@@ -178,7 +178,7 @@ final class SearchRecentsCell: UICollectionViewCell {
     }
 
     /// One Recently Searched card: poster, title, "Movie · 1977", and the
-    /// copy's quality and server tags.
+    /// copy's quality tag.
     ///
     /// `.glass` focus rather than the pill inversion the recents pills used:
     /// a card carries artwork, and a white fill with inverted text under a
@@ -212,8 +212,8 @@ final class SearchRecentsCell: UICollectionViewCell {
         subtitle.numberOfLines = 2
         subtitle.lineBreakMode = .byTruncatingTail
 
-        // Two copies of one title are two recents; the tags tell them apart.
-        let tags = VersionTagsView()
+        // Two copies of one title are two recents; the quality tells them apart.
+        let tags = VersionTagsView(showsServers: false)
         tags.show(item: item)
 
         let text = UIStackView(arrangedSubviews: [title, subtitle, tags])

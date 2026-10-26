@@ -210,6 +210,7 @@ final class PosterCell: UICollectionViewCell {
                       || context.nextFocusedView?.isDescendant(of: self) == true
         FocusRim.remove(in: posterView, focused: nowFocused, coordinator: coordinator)
         versionTags.setFocused(nowFocused)
+        watchedBadge.setFocused(nowFocused)
         let artSize = posterView.imageView.bounds.size
         let longSide = max(artSize.width, artSize.height)
         let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1
@@ -568,8 +569,9 @@ final class PosterCell: UICollectionViewCell {
 
 // MARK: - Unwatched-count badge
 
-/// Top-trailing blue pill showing the unwatched-episode count for an in-progress
-/// TV show. The fully-watched state is now shown by a bottom-left rewatch glyph
+/// Top-trailing tag showing the unwatched-episode count for an in-progress
+/// TV show, in the same dark outlined style as the quality and server tags.
+/// The fully-watched state is shown by a bottom-left rewatch glyph
 /// (`WatchedGlyphView`), Apple-style — not by this badge.
 @MainActor
 final class PosterWatchedBadge: UIView {
@@ -577,40 +579,19 @@ final class PosterWatchedBadge: UIView {
         case unwatchedCount(Int)
     }
 
-    private let pillLabel = UILabel()
-    private let pillBackground = UIView()
+    private let countTag = QualityTagView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = .clear
-
-        // Blue capsule with N text.
-        pillBackground.translatesAutoresizingMaskIntoConstraints = false
-        pillBackground.backgroundColor = .systemBlue
-        pillBackground.layer.cornerRadius = 10
-        pillBackground.layer.cornerCurve = .continuous
-        pillBackground.layer.shadowColor = UIColor.black.cgColor
-        pillBackground.layer.shadowOpacity = 0.3
-        pillBackground.layer.shadowRadius = 4
-        pillBackground.layer.shadowOffset = CGSize(width: 0, height: 2)
-        addSubview(pillBackground)
-
-        pillLabel.translatesAutoresizingMaskIntoConstraints = false
-        pillLabel.font = .systemFont(ofSize: 12, weight: .bold)
-        pillLabel.textColor = .white
-        pillBackground.addSubview(pillLabel)
-
+        countTag.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(countTag)
         NSLayoutConstraint.activate([
-            pillLabel.topAnchor.constraint(equalTo: pillBackground.topAnchor, constant: 4),
-            pillLabel.bottomAnchor.constraint(equalTo: pillBackground.bottomAnchor, constant: -4),
-            pillLabel.leadingAnchor.constraint(equalTo: pillBackground.leadingAnchor, constant: 8),
-            pillLabel.trailingAnchor.constraint(equalTo: pillBackground.trailingAnchor, constant: -8),
-
-            pillBackground.topAnchor.constraint(equalTo: topAnchor),
-            pillBackground.bottomAnchor.constraint(equalTo: bottomAnchor),
-            pillBackground.leadingAnchor.constraint(equalTo: leadingAnchor),
-            pillBackground.trailingAnchor.constraint(equalTo: trailingAnchor)
+            countTag.topAnchor.constraint(equalTo: topAnchor),
+            countTag.bottomAnchor.constraint(equalTo: bottomAnchor),
+            countTag.leadingAnchor.constraint(equalTo: leadingAnchor),
+            countTag.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
     }
 
@@ -619,9 +600,11 @@ final class PosterWatchedBadge: UIView {
     func setStyle(_ style: Style) {
         switch style {
         case .unwatchedCount(let count):
-            pillLabel.text = "\(count)"
+            countTag.text = "\(count)"
         }
     }
+
+    func setFocused(_ focused: Bool) { countTag.setFocused(focused) }
 }
 
 extension PosterCell: PreviewSourceTile {

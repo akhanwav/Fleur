@@ -547,7 +547,20 @@ final class ShelfRowCell: UICollectionViewCell {
     }
 
     private func maxColumn() -> Int {
-        max(0, displayCount - tileKind.fullCount)
+        max(0, displayCount - fullCount)
+    }
+
+    /// Whole tiles that fit in THIS row's width between its insets. Full
+    /// screen width gives the kind's own count (6 posters on the 1920 grid).
+    /// A narrower row (Search beside the grid keyboard: 1330 pt, 4 posters)
+    /// counts its own, or the last tiles could never be scrolled into view,
+    /// focused or not.
+    private var fullCount: Int {
+        let width = rowCollectionView.bounds.width
+        guard width > 0 else { return tileKind.fullCount }
+        let insets = flow.sectionInset.left + flow.sectionInset.right
+        let fitting = Int(((width - insets + tileKind.gap) / tileKind.pitch + 0.01).rounded(.down))
+        return max(1, min(tileKind.fullCount, fitting))
     }
 
     /// Smallest window shift that brings `itemIndex` fully into view. While a
@@ -557,7 +570,7 @@ final class ShelfRowCell: UICollectionViewCell {
     private func snappedOffset(toShow itemIndex: Int) -> CGFloat {
         let logicalX = offsetLink != nil ? animTargetX : rowCollectionView.contentOffset.x
         let fCur = column(for: logicalX)
-        var f = min(max(fCur, itemIndex - (tileKind.fullCount - 1)), itemIndex)
+        var f = min(max(fCur, itemIndex - (fullCount - 1)), itemIndex)
         f = min(max(0, f), maxColumn())
         return CGFloat(f) * tileKind.pitch
     }

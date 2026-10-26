@@ -36,6 +36,9 @@ final class WaysToWatchLookup {
         return lookup
     }
 
+    /// `item`'s lookup if one is cached or running, without starting one.
+    static func existing(for item: MediaItem) -> WaysToWatchLookup? { cache[item.ref] }
+
     /// Start `item`'s lookup ahead of a long press.
     static func prefetch(_ item: MediaItem) {
         guard offersWaysToWatch(item) else { return }

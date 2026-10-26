@@ -1286,11 +1286,14 @@ final class PlexHomeViewController: UIViewController {
         let jellyfin = jellyfinSearchResults
         guard !filtered.isEmpty || !jellyfin.isEmpty else { return [.searchState()] }
 
-        // Same grouping as PlexSearchView.groupedResults, each group mixing
-        // both servers (Jellyfin music is not browsable yet, so Music is Plex's).
+        // One row per kind, each mixing both servers (Jellyfin music is not
+        // browsable yet, so Music is Plex's). Movies and shows are separate
+        // rows: mixed, a show read as one more copy of a film.
         let groups: [(key: String, title: String, metas: [PlexMetadata], jellyfin: [MediaItem])] = [
-            ("titles", "Movies & TV", filtered.filter { $0.type == "movie" || $0.type == "show" },
-             jellyfin.filter { $0.kind == .movie || $0.kind == .show }),
+            ("movies", "Movies", filtered.filter { $0.type == "movie" },
+             jellyfin.filter { $0.kind == .movie }),
+            ("shows", "TV Shows", filtered.filter { $0.type == "show" },
+             jellyfin.filter { $0.kind == .show }),
             ("episodes", "Episodes & Seasons", filtered.filter { $0.type == "episode" || $0.type == "season" },
              jellyfin.filter { $0.kind == .episode || $0.kind == .season }),
             ("music", "Music", filtered.filter { $0.type == "artist" || $0.type == "album" || $0.type == "track" }, [])
