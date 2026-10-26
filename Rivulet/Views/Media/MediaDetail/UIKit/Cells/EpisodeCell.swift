@@ -41,6 +41,7 @@ final class EpisodeThumbCardView: TVCardView {
 
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
+        FocusRim.remove(in: self, focused: context.nextFocusedView === self, coordinator: coordinator)
         onFocusChange?(context.nextFocusedView === self, context.nextFocusedView, coordinator)
     }
 

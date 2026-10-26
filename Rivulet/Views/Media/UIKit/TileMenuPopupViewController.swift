@@ -41,6 +41,9 @@ struct TileMenuAction {
     /// A status line ("Checking other servers…"): shown dimmed and skipped
     /// by focus.
     var isEnabled: Bool = true
+    /// Names the row across `update(sections:)`, so focus stays on it while
+    /// its title changes. nil falls back to the title.
+    var id: String? = nil
     let handler: () -> Void
 }
 
@@ -168,6 +171,7 @@ final class TileMenuPopupViewController: UIViewController {
         let (frame, growsFromLeftEdge) = panelFrame()
         panel.frame = frame
         view.addSubview(panel)
+        anchorCorner = CGPoint(x: growsFromLeftEdge ? frame.minX : frame.maxX, y: frame.minY)
 
         // The system menu grows out of the tile's top corner and shrinks
         // back into it. Anchor the scale at the panel's tile-adjacent top
@@ -193,45 +197,100 @@ final class TileMenuPopupViewController: UIViewController {
     func update(sections newSections: [[TileMenuAction]]) {
         sections = newSections.filter { !$0.isEmpty }
         guard isViewLoaded, !isDismissing else { return }
-        let focusedTitle = rows.first(where: \.isFocused)?.title
-        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        buildRows()
-        let (frame, _) = panelFrame()
+        let focusedIndex = rows.firstIndex(where: \.isFocused)
+        let focusedKey = focusedIndex.map { rows[$0].key }
+        // Rows that stay are updated in place, never removed: taking the
+        // focused row out of the window drops focus out of the popup, and a
+        // popup that no longer holds focus cannot ask for it back (a dimmed
+        // screen nothing moves on, until Menu).
+        buildRows(reusing: rows)
+        // Grow from the corner the panel opened at, never re-placed: only a
+        // bottom that would leave the safe area moves it up, and only by that.
+        var (frame, _) = panelFrame()
         let anchor = panel.layer.anchorPoint
+        if let anchorCorner {
+            let safe = view.bounds.insetBy(dx: 80, dy: 50)
+            frame.origin.x = anchor.x == 0 ? anchorCorner.x : anchorCorner.x - frame.width
+            frame.origin.x = min(max(frame.origin.x, safe.minX), safe.maxX - frame.width)
+            frame.origin.y = max(safe.minY, min(anchorCorner.y, safe.maxY - frame.height))
+        }
         let transform = panel.transform
         panel.transform = .identity
         panel.bounds = CGRect(origin: .zero, size: frame.size)
         panel.layer.position = CGPoint(x: frame.minX + frame.width * anchor.x,
                                        y: frame.minY + frame.height * anchor.y)
         panel.transform = transform
-        refocusTarget = rows.first { $0.title == focusedTitle && $0.canBecomeFocused }
+        guard !rows.contains(where: \.isFocused) else { return }
+        refocusTarget = rows.first { $0.key == focusedKey && $0.canBecomeFocused }
+            ?? focusedIndex.flatMap { index in
+                rows.indices.contains(index) && rows[index].canBecomeFocused ? rows[index] : nil
+            }
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
         refocusTarget = nil
+        claimFocusIfLost()
+    }
+
+    /// Pull focus into the popup when it is somewhere else. Opened from a held
+    /// Select (the hero's Play, a tile's long press), focus can stay behind
+    /// the dim, and then `setNeedsFocusUpdate` here is ignored: only an
+    /// environment that holds focus can move it. The focus system can.
+    private func claimFocusIfLost() {
+        guard !isDismissing, !rows.contains(where: \.isFocused),
+              let target = rows.first(where: \.canBecomeFocused),
+              let system = UIFocusSystem.focusSystem(for: view) else { return }
+        system.requestFocusUpdate(to: target)
+        system.updateFocusIfNeeded()
     }
 
     private var refocusTarget: MenuRowButton?
+    /// The panel's tile-adjacent top corner as first laid out.
+    private var anchorCorner: CGPoint?
 
-    private func buildRows() {
+    /// Lay the rows out in the stack, reusing `old` rows by key (updated in
+    /// place) and dividers in order, and removing only what is gone.
+    private func buildRows(reusing old: [MenuRowButton] = []) {
+        var spareRows = Dictionary(old.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        var spareDividers = stack.arrangedSubviews.compactMap { $0 as? DividerView }
+        func divider() -> DividerView { spareDividers.isEmpty ? DividerView() : spareDividers.removeFirst() }
+        var arranged: [UIView] = []
         rows = []
         firstRow = nil
         if let headerView {
-            stack.addArrangedSubview(headerView)
-            if !sections.isEmpty { stack.addArrangedSubview(DividerView()) }
+            arranged.append(headerView)
+            if !sections.isEmpty { arranged.append(divider()) }
         }
         for (sectionIndex, section) in sections.enumerated() {
-            if sectionIndex > 0 {
-                stack.addArrangedSubview(DividerView())
-            }
+            if sectionIndex > 0 { arranged.append(divider()) }
             for action in section {
-                let row = MenuRowButton(action: action) { [weak self] handler in
-                    self?.animateOut { handler() }
+                let key = action.id ?? action.title
+                let row: MenuRowButton
+                if let reused = spareRows.removeValue(forKey: key) {
+                    reused.apply(action)
+                    row = reused
+                } else {
+                    row = MenuRowButton(action: action) { [weak self] handler in
+                        self?.animateOut { handler() }
+                    }
                 }
                 if firstRow == nil, action.isEnabled { firstRow = row }
                 rows.append(row)
-                stack.addArrangedSubview(row)
+                arranged.append(row)
             }
         }
+        let keep = Set(arranged.map(ObjectIdentifier.init))
+        for view in stack.arrangedSubviews where !keep.contains(ObjectIdentifier(view)) {
+            view.removeFromSuperview()
+        }
+        for (index, view) in arranged.enumerated() where stack.arrangedSubviews.firstIndex(of: view) != index {
+            stack.insertArrangedSubview(view, at: index)
+        }
+    }
+
+    /// Focus stays in the popup: the page behind is still in the window.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        guard !isDismissing, let next = context.nextFocusedView else { return true }
+        return next.isDescendant(of: view)
     }
 
     /// Rows + dividers, wide enough for the longest title, beside the tile
@@ -368,6 +427,9 @@ final class TileMenuPopupViewController: UIViewController {
         entrance.startAnimation()
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+        claimFocusIfLost()
+        // Again once a held Select has let go.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.claimFocusIfLost() }
     }
 }
 
@@ -414,11 +476,13 @@ private final class MenuRowButton: UIView {
 
     private let iconView = UIImageView()
     private let labelView = UILabel()
-    private let destructive: Bool
+    private var destructive: Bool
     private let onPress: (@escaping () -> Void) -> Void
-    private let handler: () -> Void
-    private let isEnabled: Bool
-    let title: String
+    private var handler: () -> Void
+    private var isEnabled: Bool
+    private(set) var title: String
+    /// `TileMenuAction.id`, else the title.
+    private(set) var key: String
 
     override var canBecomeFocused: Bool { isEnabled }
 
@@ -426,6 +490,7 @@ private final class MenuRowButton: UIView {
         self.destructive = action.destructive
         self.isEnabled = action.isEnabled
         self.title = action.title
+        self.key = action.id ?? action.title
         self.onPress = onPress
         self.handler = action.handler
         super.init(frame: .zero)
@@ -467,6 +532,25 @@ private final class MenuRowButton: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     @objc private func pressed() { onPress(handler) }
+
+    /// Show `action` instead, in place (`TileMenuPopupViewController.update`).
+    func apply(_ action: TileMenuAction) {
+        destructive = action.destructive
+        isEnabled = action.isEnabled
+        title = action.title
+        key = action.id ?? action.title
+        handler = action.handler
+        labelView.text = action.title
+        iconView.image = UIImage(systemName: action.systemImage)
+        alpha = isEnabled ? 1 : 0.5
+        if isFocused {
+            backgroundColor = destructive ? .systemRed : .white
+            labelView.textColor = destructive ? .white : .black
+            iconView.tintColor = destructive ? .white : .black
+        } else {
+            applyUnfocusedAppearance()
+        }
+    }
 
     private func applyUnfocusedAppearance() {
         backgroundColor = .clear

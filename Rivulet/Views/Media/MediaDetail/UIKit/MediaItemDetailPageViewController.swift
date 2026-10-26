@@ -610,6 +610,10 @@ final class MediaItemDetailPageViewController: UIViewController {
                 .trimmingCharacters(in: .whitespaces)
             if !text.isEmpty { badgeRow.addArrangedSubview(Self.badge(text)) }
         }
+        // The server the page's copy is on, following Ways to Watch.
+        let server = copySelection.selected?.serverName
+            ?? (item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil)
+        if let server, !server.isEmpty { badgeRow.addArrangedSubview(Self.badge(server)) }
     }
 
     /// The server copies of this episode and which one the page is on (see

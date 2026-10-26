@@ -137,6 +137,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         super.didUpdateFocus(in: context, with: coordinator)
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
+        FocusRim.remove(in: card, focused: nowFocused, coordinator: coordinator)
         coordinator.addCoordinatedAnimations({
             self.infoBar.setFocused(nowFocused)
             self.qualityTag.setFocused(nowFocused)

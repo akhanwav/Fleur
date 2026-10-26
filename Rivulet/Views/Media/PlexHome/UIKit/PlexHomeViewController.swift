@@ -4131,7 +4131,7 @@ final class PlexHomeViewController: UIViewController {
     /// The page reads a chosen copy once, so every open names them all again:
     /// the carousel can page to any of them.
     private func nameChosenCopies() {
-        for chosen in chosenCopies.values { DetailCopySelection.pendingServer[chosen.guid] = chosen.copy.id }
+        for chosen in chosenCopies.values { DetailCopySelection.pendingServer[chosen.guid] = chosen.copy }
     }
 
     private func isShelfKind(_ kind: HomeSectionKind) -> Bool {
@@ -7069,7 +7069,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let label = [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
                 .joined(separator: " · ")
             return TileMenuAction(title: label,
-                                  systemImage: isCurrent ? "checkmark.circle.fill" : "circle") { [weak self] in
+                                  systemImage: isCurrent ? "checkmark.circle.fill" : "circle",
+                                  id: copy.id) { [weak self] in
                 guard let self, !isCurrent else { return }
                 let guid = lookup.guid
                 if copy.id == ownID || guid == nil {
@@ -7077,6 +7078,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     if let guid { DetailCopySelection.pendingServer[guid] = nil }
                 } else if let guid {
                     self.chosenCopies[item.ref] = (guid: guid, copy: copy)
+                    DetailCopySelection.pendingServer[guid] = copy
                 }
                 self.refreshTiles(showing: item.ref)
             }
@@ -7105,8 +7107,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         for (sectionIndex, section) in sectionsSnapshot.enumerated() {
             guard let slot = section.items.firstIndex(where: { $0.ref == ref }) else { continue }
             if isShelfKind(section.kind) {
+                // Just that tile: re-binding the row reloads it, and the
+                // reload dropped focus to the row's first tile.
                 if let row = collectionView.cellForItem(at: IndexPath(item: 0, section: sectionIndex)) as? ShelfRowCell {
-                    configureShelfRow(row, sectionID: section.id)
+                    let slots = section.items.indices.filter { section.items[$0].ref == ref }
+                    row.reconfigureItems(slots, contentToken: shelfContentToken(section))
                 }
             } else if section.kind == .grid {
                 reconfigureGridSlots(slot..<(slot + 1))
@@ -7133,7 +7138,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let sources = copy.sources
             if sources.isEmpty || copy.isSeries {
                 let label = ([copy.serverName] + DetailCopySelection.seriesSummary(copy)).joined(separator: " · ")
-                actions.append(TileMenuAction(title: label, systemImage: "play.fill") { [weak self] in
+                actions.append(TileMenuAction(title: label, systemImage: "play.fill", id: copy.id) { [weak self] in
                     self?.play(copy, of: item, mediaID: nil)
                 })
                 continue
@@ -7141,7 +7146,8 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             let resume = DetailCopySelection.resumeText(copy.item)
             for (source, label) in zip(sources, VersionPicker.labels(for: sources)) {
                 let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")
-                actions.append(TileMenuAction(title: text, systemImage: "play.fill") { [weak self] in
+                actions.append(TileMenuAction(title: text, systemImage: "play.fill",
+                                              id: "\(copy.id)/\(source.id)") { [weak self] in
                     self?.play(copy, of: item, mediaID: source.id)
                 })
             }

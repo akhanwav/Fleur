@@ -300,6 +300,16 @@ final class ShelfRowCell: UICollectionViewCell {
 
     // MARK: Configure
 
+    /// Redraw the tiles at `indices` in place (one tile switched copy): no
+    /// reload, so focus and the offset stay put. `contentToken` is the row's
+    /// token after the change, so the next `configure` does not reload either.
+    func reconfigureItems(_ indices: [Int], contentToken: Int) {
+        self.contentToken = contentToken
+        let paths = indices.filter { $0 < realCount }.map { IndexPath(item: $0, section: 0) }
+        guard !paths.isEmpty, !batchUpdateInFlight else { return }
+        rowCollectionView.reconfigureItems(at: paths)
+    }
+
     /// Full (re)bind. `contentToken` identifies the content (hash of item
     /// IDs); reload only happens when it changes, so reconfiguring with the
     /// same data is cheap and focus-safe.

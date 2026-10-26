@@ -139,6 +139,7 @@ final class MusicLockupCell: UICollectionViewCell {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self || context.nextFocusedView?.isDescendant(of: self) == true
+        FocusRim.remove(in: poster, focused: focused, coordinator: coordinator)
         coordinator.addCoordinatedAnimations({ self.applyFocusAppearance(focused) }, completion: { [weak self] in
             guard let self, !focused else { return }
             self.resetStaleFocusAppearance()

@@ -970,28 +970,26 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         func add(_ kind: BelowFoldSectionKind, _ items: [BelowFoldItem]) {
             snapshot.appendSections([kind]); snapshot.appendItems(items, toSection: kind); sectionKinds.append(kind)
         }
-        // TV-show order, minus whatever's absent. The FIRST section (Episodes for
-        // shows, Cast & Crew for most movies) is the primary peek row (gets the
-        // big peek inset in makeLayout).
-        // Episodes, then Cast & Crew and On Your Servers, then Trailers &
-        // Extras and the rest, Related last. On Your Servers shows on every
-        // Plex title.
+        // Order, minus whatever's absent: Episodes (shows), Cast & Crew, On
+        // Your Servers (with Where to Watch, the other "where is it" block, for
+        // unowned titles), About (synopsis and ratings), Trailers & Extras,
+        // the Collection and More Like This rows, the Information footer, and
+        // Related at the very bottom. The FIRST section present is the
+        // primary peek row (the big peek inset in makeLayout). On Your Servers
+        // shows on every Plex title.
         if !cachedEpisodes.isEmpty { add(.episodes, cachedEpisodes) }
         if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
         if serverAvailability != nil { add(.servers, [.servers]) }
+        // Where to Watch and More Like This are TMDB's, for unowned titles only.
+        if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
+        // About and Information only with the full detail (the episodes-only
+        // peek load has none).
+        if detail != nil { add(.about, [.about]) }
         if !cachedTrailers.isEmpty { add(.trailers, cachedTrailers) }
         if !cachedExtras.isEmpty { add(.extras, cachedExtras) }
         if let row = collectionRow, !row.members.isEmpty { add(.collection, [.collectionShelf]) }
-        // Where to Watch and More Like This are TMDB's, for unowned titles only.
-        if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
         if !cachedMoreLikeThis.isEmpty { add(.moreLikeThis, cachedMoreLikeThis) }
-        // About + Information/Languages/Accessibility — only when the full detail
-        // is present (the episodes-only peek load has no detail).
-        if detail != nil {
-            add(.about, [.about])
-            add(.info, [.info])
-        }
-        // Related closes the page, below the information footer.
+        if detail != nil { add(.info, [.info]) }
         if !cachedRelated.isEmpty { add(.related, cachedRelated) }
         dataSource.apply(snapshot, animatingDifferences: false)
         // The primary peek row is section 0 (when any content exists). Drives the

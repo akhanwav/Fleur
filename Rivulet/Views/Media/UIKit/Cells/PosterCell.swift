@@ -200,6 +200,7 @@ final class PosterCell: UICollectionViewCell {
         super.didUpdateFocus(in: context, with: coordinator)
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
+        FocusRim.remove(in: posterView, focused: nowFocused, coordinator: coordinator)
         let artSize = posterView.imageView.bounds.size
         let longSide = max(artSize.width, artSize.height)
         let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1

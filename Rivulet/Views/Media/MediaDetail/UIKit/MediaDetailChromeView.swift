@@ -1103,6 +1103,12 @@ final class MediaDetailChromeView: UIView {
             qualityRow.addArrangedSubview(
                 Self.makeCaptionLabel(PlayerInfoSheetStyle.bitrate(bitrate), alpha: Self.qualityRowAlpha))
         }
+        // The server the page's copy is on, following Ways to Watch.
+        let server = copySelection.selected?.serverName
+            ?? (item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil)
+        if let server, !server.isEmpty {
+            qualityRow.addArrangedSubview(Self.makeBadge(server, alpha: Self.qualityRowAlpha))
+        }
     }
 
     // MARK: - Factories

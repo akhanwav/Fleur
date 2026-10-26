@@ -205,6 +205,14 @@ final class WatchlistPosterCell: UICollectionViewCell {
         captionStack.isHidden = false
     }
 
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        let nowFocused = context.nextFocusedView === self
+                      || context.nextFocusedView?.isDescendant(of: self) == true
+        FocusRim.remove(in: posterView, focused: nowFocused, coordinator: coordinator)
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         imageLoadTask?.cancel()

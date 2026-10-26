@@ -65,10 +65,19 @@ struct DetailCopy {
 
 @MainActor
 final class DetailCopySelection {
-    /// A copy (`DetailCopy.id`) to open the next page for a title on, keyed by Plex guid or
-    /// `"tmdb:<movie|tv>:<id>"`: set by a pick that opens a page (Continue
-    /// Watching's menu), read once by that page.
-    static var pendingServer: [String: String] = [:]
+    /// The copy a tile was switched to (Ways to Watch on a tile), keyed by
+    /// Plex guid or `"tmdb:<movie|tv>:<id>"`. A page for that title opens on
+    /// it, before its own lookup answers and whether or not that lookup finds
+    /// it again (a slow server can time out), and every later load of the
+    /// page does the same: it is read, never consumed. The tile clears it.
+    static var pendingServer: [String: DetailCopy] = [:]
+
+    /// The pending pick for a page's title, from what the page knows now.
+    static func pendingCopy(for item: MediaItem, mainDetail: MediaItemDetail?) -> DetailCopy? {
+        if let guid = mainDetail?.plexGuid, let copy = pendingServer[guid] { return copy }
+        guard let (tmdbId, type) = TMDBMediaMapper.decodeItemID(item.ref.itemID) else { return nil }
+        return pendingServer["tmdb:\(type.rawValue):\(tmdbId)"]
+    }
 
     private(set) var copies: [DetailCopy] = []
     /// True once the other servers have answered (with or without a copy):
@@ -115,6 +124,11 @@ final class DetailCopySelection {
             copies = [DetailCopy(machineId: main, serverName: name ?? "This Server", isMainServer: true,
                                  item: item, detail: mainDetail, remote: nil)]
             selectedIndex = 0
+            if let pending = Self.pendingCopy(for: item, mainDetail: mainDetail), !pending.isMainServer,
+               pending.id != copies[0].id {
+                copies.append(pending)
+                selectedIndex = 1
+            }
             onChange?()
             if item.kind == .show || item.kind == .season {
                 Task { @MainActor [weak self] in
@@ -147,10 +161,14 @@ final class DetailCopySelection {
                 for index in own.indices { own[index].machineId = mainId }
             }
             let ownIDs = Set(own.map(\.id))
-            let all = Self.ordered(own + remote.filter { !ownIDs.contains($0.id) })
-            let pending = Self.pendingServer.removeValue(forKey: guid)
-                ?? tmdbKey.flatMap { Self.pendingServer.removeValue(forKey: $0) }
-            let preferred = [pending, ServerPreferences.lastWatchedServer(forGuid: guid)].compactMap { $0 }
+            var found = remote.filter { !ownIDs.contains($0.id) }
+            let pendingCopy = Self.pendingServer[guid] ?? tmdbKey.flatMap { Self.pendingServer[$0] }
+            // The tile's pick wins even when this lookup missed its server.
+            if let pendingCopy, !ownIDs.contains(pendingCopy.id), !found.contains(where: { $0.id == pendingCopy.id }) {
+                found.append(pendingCopy)
+            }
+            let all = Self.ordered(own + found)
+            let preferred = [pendingCopy?.id, ServerPreferences.lastWatchedServer(forGuid: guid)].compactMap { $0 }
             // A pending pick names a copy; last watched names a server.
             let index = preferred.lazy.compactMap { id in
                 all.firstIndex { $0.id == id } ?? all.firstIndex { $0.machineId == id }

@@ -70,7 +70,6 @@ final class HeroOverlayView: UIView {
 
     private var resolvedPlayTargets: [String: PlexMetadata] = [:]
     private var resolvedForWatchlistCache: [String: PlexMetadata] = [:]
-    private var isResolvingPlay = false
 
     private var watchlistObserver: AnyCancellable?
 
@@ -356,31 +355,11 @@ final class HeroOverlayView: UIView {
 
     private var titleResolving = Set<String>()
 
+    /// Play on a slide opens its detail page, as Info does; Play itself is
+    /// there, and holding Play here picks a server to play from.
     private func handlePlay() {
-        guard !isResolvingPlay, let item = currentItem else { return }
-        if let key = item.ratingKey, let cached = resolvedPlayTargets[key] {
-            onPlay?(cached)
-            return
-        }
-        if let type = item.type, type == "movie" || type == "episode" {
-            onPlay?(item)
-            return
-        }
-        // Re-entrancy guard only (no UI): resolving a show's next-up episode
-        // is async, and a second Play press mid-resolve would double-fire.
-        isResolvingPlay = true
-        Task { @MainActor in
-            let resolved = await HeroPlaySession.resolvePlaybackTarget(
-                for: item,
-                serverURL: serverURL,
-                authToken: authToken
-            )
-            if let key = item.ratingKey {
-                resolvedPlayTargets[key] = resolved
-            }
-            isResolvingPlay = false
-            onPlay?(resolved)
-        }
+        guard let item = currentItem else { return }
+        onInfo?(item)
     }
 
     // MARK: - Watchlist
@@ -788,9 +767,10 @@ final class MediaItemHeroOverlayView: UIView {
     // MARK: - Buttons
 
     private func wireButtons() {
+        // Play opens the slide's detail page, as on the Plex hero.
         buttonRow.onPlay = { [weak self] in
             guard let self, let item = self.currentItem else { return }
-            self.onPlay?(item)
+            self.onInfo?(item)
         }
         buttonRow.onInfo = { [weak self] in
             guard let self, let item = self.currentItem else { return }
