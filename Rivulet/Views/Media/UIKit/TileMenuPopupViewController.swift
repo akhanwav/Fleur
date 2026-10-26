@@ -190,7 +190,6 @@ final class TileMenuPopupViewController: UIViewController {
         isPlaced = true
         let (frame, growsFromLeftEdge) = panelFrame()
         panel.frame = frame
-        anchorCorner = CGPoint(x: growsFromLeftEdge ? frame.minX : frame.maxX, y: frame.minY)
 
         // The system menu grows out of the tile's top corner and shrinks
         // back into it. Anchor the scale at the panel's tile-adjacent top
@@ -207,9 +206,10 @@ final class TileMenuPopupViewController: UIViewController {
     private var isPlaced = false
     private static let maximumPanelWidth: CGFloat = 680
 
-    /// A menu whose rows grow while it is up (Ways to Watch): it picks its
-    /// side of the tile for its widest size, so later rows never push it off
-    /// the screen or over the tile.
+    /// A menu whose rows change while it is up (Ways to Watch): it opens at
+    /// its widest, so later rows never widen it, push it off the screen or
+    /// over the tile. Its rows hold their places (one per server), so the
+    /// height it opens at is close to final.
     var growsWhileOpen = false
 
     /// Replace the rows in place (Ways to Watch adds each server's copies as
@@ -226,22 +226,13 @@ final class TileMenuPopupViewController: UIViewController {
         // screen nothing moves on, until Menu).
         buildRows(reusing: rows)
         guard isPlaced else { return }
-        // Grow from the corner the panel opened at, never re-placed: only a
-        // bottom that would leave the safe area moves it up, and only by that.
-        var (frame, _) = panelFrame()
-        let anchor = panel.layer.anchorPoint
-        if let anchorCorner {
-            let safe = view.bounds.insetBy(dx: 80, dy: 50)
-            frame.origin.x = anchor.x == 0 ? anchorCorner.x : anchorCorner.x - frame.width
-            frame.origin.x = min(max(frame.origin.x, safe.minX), safe.maxX - frame.width)
-            frame.origin.y = max(safe.minY, min(anchorCorner.y, safe.maxY - frame.height))
-        }
-        let transform = panel.transform
-        panel.transform = .identity
-        panel.bounds = CGRect(origin: .zero, size: frame.size)
-        panel.layer.position = CGPoint(x: frame.minX + frame.width * anchor.x,
-                                       y: frame.minY + frame.height * anchor.y)
-        panel.transform = transform
+        // Locked where it opened. The layer's anchor point is the tile-side
+        // top corner, so a new height only moves the bottom edge, and a menu
+        // that grows while open keeps the full width it opened at. Nothing
+        // here touches the position or the entrance transform.
+        let (frame, _) = panelFrame()
+        let width = growsWhileOpen ? panel.bounds.width : frame.width
+        panel.bounds = CGRect(origin: .zero, size: CGSize(width: width, height: frame.height))
         guard !rows.contains(where: \.isFocused) else { return }
         refocusTarget = rows.first { $0.key == focusedKey && $0.canBecomeFocused }
             ?? focusedIndex.flatMap { index in
@@ -266,8 +257,6 @@ final class TileMenuPopupViewController: UIViewController {
     }
 
     private var refocusTarget: MenuRowButton?
-    /// The panel's tile-adjacent top corner as first laid out.
-    private var anchorCorner: CGPoint?
 
     /// Lay the rows out in the stack, reusing `old` rows by key (updated in
     /// place) and dividers in order, and removing only what is gone.
@@ -323,8 +312,8 @@ final class TileMenuPopupViewController: UIViewController {
         let actionCount = sections.reduce(0) { $0 + $1.count }
         let dividerCount = max(0, sections.count - 1) + (headerView != nil && !sections.isEmpty ? 1 : 0)
         let minimumWidth: CGFloat = headerView == nil ? 440 : 620
-        let panelWidth = min(max(Self.widestRowWidth(for: sections) + panelInset * 2, minimumWidth),
-                             Self.maximumPanelWidth)
+        let panelWidth = growsWhileOpen ? Self.maximumPanelWidth
+            : min(max(Self.widestRowWidth(for: sections) + panelInset * 2, minimumWidth), Self.maximumPanelWidth)
         var headerHeight: CGFloat = 0
         if let headerView {
             headerHeight = ceil(headerView.systemLayoutSizeFitting(
@@ -344,8 +333,7 @@ final class TileMenuPopupViewController: UIViewController {
         var growsFromLeftEdge = true  // panel's tile-adjacent top corner
         if let sourceFrame {
             origin = CGPoint(x: sourceFrame.maxX + gap, y: sourceFrame.minY)
-            let widest = growsWhileOpen ? Self.maximumPanelWidth : panelWidth
-            if origin.x + widest > safe.maxX {
+            if origin.x + panelWidth > safe.maxX {
                 origin.x = sourceFrame.minX - gap - panelWidth
                 growsFromLeftEdge = false
             }

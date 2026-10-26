@@ -54,12 +54,57 @@ final class WaysToWatchLookup {
     /// Every server has answered, or timed out.
     private(set) var isFinished = false
     private var observers: [UUID: () -> Void] = [:]
+    /// The other enabled servers, in Settings' order, fixed when the lookup
+    /// starts so rows never trade places as servers answer.
+    private let otherServers: [ServerPreferences.KnownServer]
+    /// Those that have not answered yet.
+    private var pending: Set<String>
 
     private init(item: MediaItem) {
         self.item = item
-        own = DetailCopy(machineId: DetailCopySelection.mainMachineId ?? "main",
+        let main = DetailCopySelection.mainMachineId ?? "main"
+        own = DetailCopy(machineId: main,
                          serverName: PlexAuthManager.shared.mainServerName ?? "This Server",
                          isMainServer: true, item: item, detail: nil, remote: nil)
+        otherServers = ServerPreferences.knownServers.filter {
+            $0.machineId != main && ServerPreferences.isEnabled($0.machineId)
+        }
+        pending = Set(otherServers.map(\.machineId))
+    }
+
+    /// One popup row: a copy, or a server still being asked.
+    enum Entry {
+        case copy(DetailCopy)
+        case checking(serverName: String, machineId: String)
+    }
+
+    /// The rows in a fixed order: this server's copies, then each other
+    /// server's in Settings' order, a server still being asked holding its
+    /// place with one `checking` row. A server that answers fills that place;
+    /// one without the title gives it up. Copies from a server the app did not
+    /// know of yet come last.
+    var entries: [Entry] {
+        let own = ownCopy
+        let all = [own] + others.filter { $0.id != own.id }
+        var placed = Set<String>()
+        var entries: [Entry] = []
+        func add(server machineId: String) {
+            let copies = DetailCopySelection.ordered(all.filter { $0.machineId == machineId })
+            entries += copies.map(Entry.copy)
+            placed.insert(machineId)
+        }
+        add(server: own.machineId)
+        for server in otherServers where !placed.contains(server.machineId) {
+            if pending.contains(server.machineId) {
+                entries.append(.checking(serverName: server.name, machineId: server.machineId))
+                placed.insert(server.machineId)
+            } else {
+                add(server: server.machineId)
+            }
+        }
+        let rest = all.filter { !placed.contains($0.machineId) }
+        entries += DetailCopySelection.ordered(rest).map(Entry.copy)
+        return entries
     }
 
     /// Every copy in Settings' server order, this server's listed once: the
@@ -104,9 +149,15 @@ final class WaysToWatchLookup {
                 of: item, mainDetail: detail,
                 onGuid: { [weak self] guid in self?.guid = guid },
                 onCopy: { [weak self] copy in
+                    // Shown with its server's answer, not alone: rows arrive
+                    // one server at a time.
                     self?.others.append(copy)
+                },
+                onServerDone: { [weak self] machineId in
+                    self?.pending.remove(machineId)
                     self?.changed()
                 })
+            self.pending.removeAll()
             self.isFinished = true
             self.changed()
         }
@@ -128,6 +179,7 @@ final class WaysToWatchLookup {
     /// Not cached: the next long press asks again.
     private func fail() {
         if Self.cache[item.ref] === self { Self.cache[item.ref] = nil }
+        pending.removeAll()
         isFinished = true
         changed()
     }

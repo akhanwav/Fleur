@@ -7089,11 +7089,16 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let item = lookup.item
         let ownID = lookup.ownCopy.id
         let shownID = chosenCopies[item.ref]?.copy.id ?? ownID
-        var actions = lookup.copies.map { copy in
+        var actions: [TileMenuAction] = []
+        for entry in lookup.entries {
+            guard case .copy(let copy) = entry else {
+                actions.append(Self.checkingRow(entry))
+                continue
+            }
             let isCurrent = copy.id == shownID
             let label = [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
                 .joined(separator: " · ")
-            return TileMenuAction(title: label,
+            actions.append(TileMenuAction(title: label,
                                   systemImage: isCurrent ? "checkmark.circle.fill" : "circle",
                                   id: copy.id) { [weak self] in
                 guard let self, !isCurrent else { return }
@@ -7107,14 +7112,28 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 }
                 self.refreshTiles(showing: item.ref)
                 self.restorePopupReturnFocus()
-            }
+            })
         }
-        if !lookup.isFinished { actions.append(Self.checkingServersRow) }
-        return actions
+        return Self.withCheckingRow(actions, lookup)
     }
 
-    private static let checkingServersRow = TileMenuAction(
-        title: "Checking other servers…", systemImage: "ellipsis", isEnabled: false) {}
+    /// "Checking Alpha…": a server's place in the popup until it answers.
+    private static func checkingRow(_ entry: WaysToWatchLookup.Entry) -> TileMenuAction {
+        guard case .checking(let name, let machineId) = entry else {
+            return TileMenuAction(title: "", systemImage: "ellipsis", isEnabled: false) {}
+        }
+        return TileMenuAction(title: "Checking \(name)…", systemImage: "ellipsis", isEnabled: false,
+                              id: "checking:\(machineId)") {}
+    }
+
+    /// Before the app knows its servers (the first lookup of a fresh
+    /// install), one row stands in for all of them.
+    private static func withCheckingRow(_ actions: [TileMenuAction], _ lookup: WaysToWatchLookup) -> [TileMenuAction] {
+        let holdsPlaces = lookup.entries.contains { if case .checking = $0 { return true } else { return false } }
+        guard !lookup.isFinished, !holdsPlaces else { return actions }
+        return actions + [TileMenuAction(title: "Checking other servers…", systemImage: "ellipsis",
+                                         isEnabled: false, id: "checking") {}]
+    }
 
     /// Start the focused tile's Ways to Watch lookup once focus has rested on
     /// it, so a long press finds it ready. Not on every tile focus passes.
@@ -7160,7 +7179,11 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     private func playChoiceRows(_ lookup: WaysToWatchLookup) -> [TileMenuAction] {
         let item = lookup.item
         var actions: [TileMenuAction] = []
-        for copy in lookup.copies {
+        for entry in lookup.entries {
+            guard case .copy(let copy) = entry else {
+                actions.append(Self.checkingRow(entry))
+                continue
+            }
             let sources = copy.sources
             if sources.isEmpty || copy.isSeries {
                 let label = ([copy.serverName] + DetailCopySelection.seriesSummary(copy)).joined(separator: " · ")
@@ -7178,8 +7201,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 })
             }
         }
-        if !lookup.isFinished { actions.append(Self.checkingServersRow) }
-        return actions
+        return Self.withCheckingRow(actions, lookup)
     }
 
     /// Play `copy` of `item`: another server's through `RemoteCopyPlayer`

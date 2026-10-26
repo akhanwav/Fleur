@@ -200,10 +200,13 @@ final class DetailCopySelection {
 
     /// Every OTHER server's copy of `item`, read from each server, with the
     /// Plex guid it was found by (and the TMDB key for an unowned title).
-    /// `onCopy` gets each copy as its server answers, before the rest.
+    /// `onCopy` gets each copy as its server answers, before the rest, and
+    /// `onServerDone` each server's machine id once all its copies are in
+    /// (none, for a server without the title).
     static func otherCopies(of item: MediaItem, mainDetail: MediaItemDetail?,
                             onGuid: (@MainActor @Sendable (String?) -> Void)? = nil,
-                            onCopy: (@MainActor @Sendable (DetailCopy) -> Void)? = nil) async
+                            onCopy: (@MainActor @Sendable (DetailCopy) -> Void)? = nil,
+                            onServerDone: (@MainActor @Sendable (String) -> Void)? = nil) async
         -> (guid: String?, tmdbKey: String?, copies: [DetailCopy]) {
         let checker = OtherServersAvailabilityChecker.shared
         var guid = mainDetail?.plexGuid
@@ -219,8 +222,8 @@ final class DetailCopySelection {
         }
         await onGuid?(guid)
         guard let guid else { return (nil, tmdbKey, []) }
-        let copies = await checker.copies(plexGuid: guid) { found in
-            await withTaskGroup(of: DetailCopy?.self) { group in
+        let copies = await checker.copies(plexGuid: guid) { machineId, found in
+            let copies = await withTaskGroup(of: DetailCopy?.self) { group in
                 for copy in found { group.addTask { await remoteCopy(copy) } }
                 var copies: [DetailCopy] = []
                 for await copy in group {
@@ -230,6 +233,8 @@ final class DetailCopySelection {
                 }
                 return copies
             }
+            await onServerDone?(machineId)
+            return copies
         }
         return (guid, tmdbKey, copies)
     }

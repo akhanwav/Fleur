@@ -78,14 +78,23 @@ actor OtherServersAvailabilityChecker {
         return ServerPreferences.sorted(all.filter { ServerPreferences.isEnabled($0.machineId) }, by: \.machineId)
     }
 
-    /// `copies(plexGuid:)` one server at a time: each server's copies go to
-    /// `perServer` as soon as that server answers (all at once from the
-    /// cache), so a slow server holds up only its own rows. Returns what
-    /// every `perServer` call returned.
+    /// `copies(plexGuid:)` one server at a time: each reachable server's
+    /// copies go to `perServer` with its machine id as soon as that server
+    /// answers (from the cache, all at once), an empty list included, so a
+    /// slow server holds up only its own rows and a caller can tell "has
+    /// none" from "has not answered". Returns what every call returned.
     func copies<T: Sendable>(plexGuid: String,
-                             perServer: @escaping @Sendable ([ServerCopy]) async -> [T]) async -> [T] {
+                             perServer: @escaping @Sendable (_ machineId: String, _ copies: [ServerCopy]) async -> [T])
+        async -> [T] {
         let servers = await reachableServers()
-        if let cached = copiesCache[plexGuid] { return await perServer(Self.enabled(cached)) }
+        if let cached = copiesCache[plexGuid] {
+            var results: [T] = []
+            for server in servers {
+                results += await perServer(server.machineId,
+                                           Self.enabled(cached.filter { $0.machineId == server.machineId }))
+            }
+            return results
+        }
         let start = ContinuousClock.now
         var found: [ServerCopy] = []
         var results: [T] = []
@@ -93,8 +102,7 @@ actor OtherServersAvailabilityChecker {
             for server in servers {
                 group.addTask {
                     let copies = await Self.lookup(plexGuid, on: server)
-                    let enabled = Self.enabled(copies)
-                    return (copies, enabled.isEmpty ? [] : await perServer(enabled))
+                    return (copies, await perServer(server.machineId, Self.enabled(copies)))
                 }
             }
             for await (copies, result) in group {
