@@ -186,6 +186,19 @@ final class SearchContainerViewController: UIViewController {
         let inResults = next.isDescendant(of: results.view)
         preferredHalf = inResults ? .results : .keyboard
         if inResults { lastResultsFocus = next }
+        if !inResults { keyboardFrame = next.convert(next.bounds, to: view) }
+    }
+
+    /// The window frame of the last keyboard-side item focus landed on.
+    private var keyboardFrame: CGRect?
+
+    /// True under the grid keyboard, where the results sit to the right of
+    /// the keys rather than under them. Read from the frames, not from the
+    /// setting: the system decides the layout (Auto picks per remote), and
+    /// the linear keyboard spans the page, so the test cannot pass there.
+    private var resultsBesideKeyboard: Bool {
+        guard let keyboardFrame else { return false }
+        return results.view.convert(results.view.bounds, to: view).minX >= keyboardFrame.maxX - 1
     }
 
     /// Re-expand the collapsed keyboard.
@@ -233,7 +246,17 @@ final class SearchContainerViewController: UIViewController {
         // Read-and-clear on EVERY arrow, so the flag never carries over from an
         // earlier press and makes the next one think a move happened.
         let engineMoved = results.consumeEngineMovedFocus()
-        if types.contains(.downArrow), !focusIsInResults {
+        // The grid keyboard (Settings > General > Keyboard Layout, and Auto
+        // with a remote that has no touch surface) puts the results BESIDE
+        // the keys, and the engine reaches them on Right by itself. Both
+        // corrections below assume the linear layout's results-below-keys,
+        // and the grid keyboard is a single focus item that moves its own
+        // highlight, so every key-to-key Down there looked like a decline and
+        // was "rescued" into the results: from "a" there was no way down to
+        // the other letters.
+        if resultsBesideKeyboard {
+            // Up/Down inside the results still need the reveal below.
+        } else if types.contains(.downArrow), !focusIsInResults {
             rescue(to: .results)
         } else if types.contains(.upArrow),
                   // Fall back to the last row focus was in: when the engine
