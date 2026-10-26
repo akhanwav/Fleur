@@ -33,8 +33,9 @@ final class WatchlistPosterCell: UICollectionViewCell {
     private let placeholderView = UIView()
     private let placeholderGradient = CAGradientLayer()
     private let placeholderIcon = UIImageView()
-    /// "On Server" badge for entries already owned locally — same visual
-    /// language as `PosterCell`'s server-name badge, top-leading.
+    /// The badge `configure(item:badge:caption:)` may set, top-leading, in
+    /// `PosterCell`'s server-name style. Watchlist entries carry none: which
+    /// servers hold a title is Ways to Watch's to say.
     private let ownedBadge = SourceBadgeView(style: .onArtwork)
 
     /// Lines under the poster for `configure(item:badge:caption:)`.
@@ -165,14 +166,14 @@ final class WatchlistPosterCell: UICollectionViewCell {
         CATransaction.commit()
     }
 
-    func configure(item: PlexWatchlistItem, owned: Bool = false) {
+    func configure(item: PlexWatchlistItem) {
         // Pick the SF Symbol that matches the watchlist type — `film` for
         // movies, `tv` for shows. Mirrors SwiftUI `WatchlistTile.placeholder`.
         let iconName = item.type == .movie ? "film" : "tv"
         let icon = UIImage(systemName: iconName)?
             .withConfiguration(UIImage.SymbolConfiguration(pointSize: 32, weight: .light))
         loadImage(from: item.posterURL, failureIcon: icon)
-        ownedBadge.text = owned ? "On Server" : nil
+        ownedBadge.text = nil
         showTitleCaption(item.title, year: item.year)
     }
 

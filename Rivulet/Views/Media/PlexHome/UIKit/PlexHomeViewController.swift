@@ -3311,9 +3311,8 @@ final class PlexHomeViewController: UIViewController {
         case .watchlistGrid:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: WatchlistPosterCell.reuseID, for: indexPath) as! WatchlistPosterCell
             if let item = section.watchlistItems[safe: indexPath.item] {
-                let owned = watchlistEnrichment[item.id]?.owned ?? false
                 Perf.interval(.cellPrepare, key: perfKey) {
-                    cell.configure(item: item, owned: owned)
+                    cell.configure(item: item)
                 }
             }
             return cell
@@ -7178,9 +7177,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
     }
 
     /// Ways to Watch on a Watchlist or Discover tile, a title the tile does
-    /// not hold on any server: every server that has it, each row with its
-    /// quality and the label Play would show there ("Resume · 42 min left",
-    /// "Play S2 · E3"), or "Not on your servers". Picking a row opens the
+    /// not hold on any server: every server that has it, each row with the
+    /// label Play would show there ("Resume · 42 min left", "Play S2 · E3")
+    /// and its file, as the library rows show them, or "Not on your servers". Picking a row opens the
     /// title's detail page (`open`, the tile's own way in) on that copy.
     private func presentServerChoices(forTitle item: MediaItem, from tileFrame: CGRect?,
                                       open: @escaping () -> Void) {
@@ -7199,9 +7198,12 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 actions.append(checkingRow(entry))
                 continue
             }
+            // The library rows' line: Play's label, then the best file in
+            // full (resolution, range, bitrate, codec, audio, size), which
+            // scrolls when focused.
             let parts = copy.isSeries
                 ? DetailCopySelection.seriesSummary(copy)
-                : [DetailCopySelection.qualityText(copy.sources.first), EpisodePicker.playTitle(for: copy.item)]
+                : [EpisodePicker.playTitle(for: copy.item), copy.sources.first.map(VersionPicker.rowLabel)]
                     .compactMap { $0 }
             let label = ([copy.serverName] + parts).joined(separator: " · ")
             actions.append(TileMenuAction(title: label, systemImage: "play.rectangle", id: copy.id) {
