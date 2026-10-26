@@ -301,7 +301,7 @@ final class DetailCopySelection {
     /// episode Play would start, as its Play button names it ("Play S2 · E3",
     /// "Resume S2 · E3 · 12 min left"), the
     /// watched count ("3 of 10 watched", or "10 episodes"), and that
-    /// episode's quality ("4K DV", "1080p").
+    /// episode's file in full ("4K · DV · 18.4 Mbps · HEVC · EAC3 5.1 · 3.1 GB").
     static func seriesSummary(_ copy: DetailCopy) -> [String] {
         var parts: [String] = []
         if let target = copy.playTarget, target.kind == .episode {
@@ -312,8 +312,9 @@ final class DetailCopySelection {
                 ? "\(progress.played) of \(progress.total) watched"
                 : (progress.total == 1 ? "1 episode" : "\(progress.total) episodes"))
         }
-        if let quality = qualityText(VersionRanking.ordered(copy.playTargetDetail?.mediaSources ?? []).first) {
-            parts.append(quality)
+        // That episode's file in full, as a movie's row shows its own.
+        if let source = VersionRanking.ordered(copy.playTargetDetail?.mediaSources ?? []).first {
+            parts.append(VersionPicker.rowLabel(source))
         }
         return parts
     }
