@@ -42,9 +42,15 @@ final class WaysToWatchLookup {
         _ = lookup(for: item)
     }
 
+    /// A Plex item, or a title known only by its TMDB id (a Watchlist or
+    /// Discover tile), which every server is asked for.
     static func offersWaysToWatch(_ item: MediaItem) -> Bool {
-        item.ref.isPlex && (item.kind == .movie || item.kind == .show || item.kind == .episode)
+        (item.ref.isPlex || item.isMetadataOnly) && (item.kind == .movie || item.kind == .show || item.kind == .episode)
     }
+
+    /// False for a title known only by its TMDB id: no copy of its own, and
+    /// the main server is asked like any other.
+    var hasOwnCopy: Bool { !item.isMetadataOnly }
 
     let item: MediaItem
     /// This server's copy: the tile's own item, its detail once it loads.
@@ -66,8 +72,9 @@ final class WaysToWatchLookup {
         own = DetailCopy(machineId: main,
                          serverName: PlexAuthManager.shared.mainServerName ?? "This Server",
                          isMainServer: true, item: item, detail: nil, remote: nil)
+        let ownless = item.isMetadataOnly
         otherServers = ServerPreferences.knownServers.filter {
-            $0.machineId != main && ServerPreferences.isEnabled($0.machineId)
+            ($0.machineId != main || ownless) && ServerPreferences.isEnabled($0.machineId)
         }
         pending = Set(otherServers.map(\.machineId))
     }
@@ -85,7 +92,7 @@ final class WaysToWatchLookup {
     /// know of yet come last.
     var entries: [Entry] {
         let own = ownCopy
-        let all = [own] + others.filter { $0.id != own.id }
+        let all = (hasOwnCopy ? [own] : []) + others.filter { $0.id != own.id }
         var placed = Set<String>()
         var entries: [Entry] = []
         func add(server machineId: String) {
@@ -93,7 +100,7 @@ final class WaysToWatchLookup {
             entries += copies.map(Entry.copy)
             placed.insert(machineId)
         }
-        add(server: own.machineId)
+        if hasOwnCopy { add(server: own.machineId) }
         for server in otherServers where !placed.contains(server.machineId) {
             if pending.contains(server.machineId) {
                 entries.append(.checking(serverName: server.name, machineId: server.machineId))
@@ -105,13 +112,6 @@ final class WaysToWatchLookup {
         let rest = all.filter { !placed.contains($0.machineId) }
         entries += DetailCopySelection.ordered(rest).map(Entry.copy)
         return entries
-    }
-
-    /// Every copy in Settings' server order, this server's listed once: the
-    /// lookup searches the main server too and finds the tile's item again.
-    var copies: [DetailCopy] {
-        let own = ownCopy
-        return DetailCopySelection.ordered([own] + others.filter { $0.id != own.id })
     }
 
     /// This server's copy under the main server's machine id, which may
@@ -135,6 +135,10 @@ final class WaysToWatchLookup {
 
     private func start() {
         let item = item
+        if item.isMetadataOnly {
+            Task { [weak self] in await self?.askServers(mainDetail: nil) }
+            return
+        }
         Task { [weak self] in
             guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
                   let detail = try? await provider.fullDetail(for: item.ref) else {
@@ -145,22 +149,25 @@ final class WaysToWatchLookup {
             self.own.detail = detail
             self.changed()
             if item.kind == .show { self.resolveOwnEpisode(provider: provider) }
-            _ = await DetailCopySelection.otherCopies(
-                of: item, mainDetail: detail,
-                onGuid: { [weak self] guid in self?.guid = guid },
-                onCopy: { [weak self] copy in
-                    // Shown with its server's answer, not alone: rows arrive
-                    // one server at a time.
-                    self?.others.append(copy)
-                },
-                onServerDone: { [weak self] machineId in
-                    self?.pending.remove(machineId)
-                    self?.changed()
-                })
-            self.pending.removeAll()
-            self.isFinished = true
-            self.changed()
+            await self.askServers(mainDetail: detail)
         }
+    }
+
+    /// Every server, each copy kept as it comes and shown with its server's
+    /// answer. The guid comes from the page's own detail, or for a title
+    /// known only by its TMDB id, from Plex's match for that id.
+    private func askServers(mainDetail: MediaItemDetail?) async {
+        _ = await DetailCopySelection.otherCopies(
+            of: item, mainDetail: mainDetail,
+            onGuid: { [weak self] guid in self?.guid = guid },
+            onCopy: { [weak self] copy in self?.others.append(copy) },
+            onServerDone: { [weak self] machineId in
+                self?.pending.remove(machineId)
+                self?.changed()
+            })
+        pending.removeAll()
+        isFinished = true
+        changed()
     }
 
     /// A show's copy names the episode Play would start, with its quality.

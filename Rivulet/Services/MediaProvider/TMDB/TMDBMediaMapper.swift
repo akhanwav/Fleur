@@ -85,6 +85,33 @@ enum TMDBMediaMapper {
         )
     }
 
+    /// A watchlist entry as a metadata-only item, for what needs only the
+    /// title's TMDB id (Ways to Watch on a Watchlist tile). nil without one.
+    static func item(_ entry: PlexWatchlistItem) -> MediaItem? {
+        guard let tmdbId = entry.tmdbId else { return nil }
+        let type: TMDBMediaType = entry.type == .movie ? .movie : .tv
+        return MediaItem(
+            ref: MediaItemRef(providerID: providerID, itemID: encodeItemID(tmdbId: tmdbId, type: type)),
+            kind: entry.type == .movie ? .movie : .show,
+            title: entry.title,
+            sortTitle: nil,
+            overview: nil,
+            year: entry.year,
+            releaseDate: nil,
+            contentRating: nil,
+            runtime: nil,
+            parentRef: nil,
+            grandparentRef: nil,
+            episodeNumber: nil,
+            seasonNumber: nil,
+            childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: entry.posterURL, backdrop: nil, thumbnail: entry.posterURL, logo: nil),
+            parentArtwork: nil,
+            grandparentArtwork: nil
+        )
+    }
+
     static func detail(_ tmdb: TMDBItemDetail) -> MediaItemDetail {
         let cast = tmdb.cast.map { credit in
             MediaPerson(

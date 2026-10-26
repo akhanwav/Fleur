@@ -4191,7 +4191,8 @@ final class PlexHomeViewController: UIViewController {
             self?.shelfOffsets[sectionID] = offset
         }
         cell.onFocusItem = { [weak self] itemIndex in
-            self?.prefetchWaysToWatch(self?.shelfSection(id: sectionID)?.items[safe: itemIndex])
+            guard let self, let section = self.shelfSection(id: sectionID) else { return }
+            self.prefetchWaysToWatch(Self.waysToWatchTitle(in: section, at: itemIndex))
         }
         cell.configure(
             kind: section.kind == .continueWatching ? .continueWatching : (section.isMusic ? .music : .poster),
@@ -4608,6 +4609,15 @@ final class PlexHomeViewController: UIViewController {
               itemIndex < tmdbItems.count else { return }
         let item = tmdbItems[itemIndex]
         var actions: [TileMenuAction] = []
+        if let section = shelfSection(id: sectionID), let title = section.items[safe: itemIndex],
+           WaysToWatchLookup.offersWaysToWatch(title) {
+            let tileFrame = focusedTileFrame()
+            actions.append(TileMenuAction(title: "Ways to Watch…", systemImage: "server.rack") { [weak self] in
+                self?.presentServerChoices(forTitle: title, from: tileFrame) {
+                    self?.handleShelfTap(sectionID: sectionID, itemIndex: itemIndex)
+                }
+            })
+        }
 
         if discoverModel.inLibraryTMDBIds.contains(item.id) {
             actions.append(TileMenuAction(title: "Details", systemImage: "info.circle") { [weak self] in
@@ -4675,7 +4685,20 @@ final class PlexHomeViewController: UIViewController {
                                     destructive: true) { [weak self] in
             Task { await self?.watchlistService.remove(guid: guid) }
         }
-        presentTileMenu(sections: [[info, remove]])
+        var first = [info]
+        if let title = TMDBMediaMapper.item(item), WaysToWatchLookup.offersWaysToWatch(title) {
+            let tileFrame = focusedTileFrame()
+            first.append(TileMenuAction(title: "Ways to Watch…", systemImage: "server.rack") { [weak self] in
+                self?.presentServerChoices(forTitle: title, from: tileFrame) {
+                    guard let self else { return }
+                    Task {
+                        await self.openWatchlistPreview(section: section, tappedIndex: itemIndex,
+                                                        indexPath: IndexPath(item: itemIndex, section: sectionIndex))
+                    }
+                }
+            })
+        }
+        presentTileMenu(sections: [first, [remove]])
     }
 
     /// Seed the ambient wash on surfaces that have no hero to drive it (hero
@@ -7135,6 +7158,15 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                                          isEnabled: false, id: "checking") {}]
     }
 
+    /// The title a tile's Ways to Watch asks about: its item, or a watchlist
+    /// entry as a TMDB title.
+    private static func waysToWatchTitle(in section: HomeSectionData, at index: Int) -> MediaItem? {
+        switch section.kind {
+        case .watchlist, .watchlistGrid: return section.watchlistItems[safe: index].flatMap(TMDBMediaMapper.item)
+        default: return section.items[safe: index]
+        }
+    }
+
     /// Start the focused tile's Ways to Watch lookup once focus has rested on
     /// it, so a long press finds it ready. Not on every tile focus passes.
     private func prefetchWaysToWatch(_ item: MediaItem?) {
@@ -7143,6 +7175,50 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let work = DispatchWorkItem { WaysToWatchLookup.prefetch(item) }
         waysToWatchPrefetch = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    /// Ways to Watch on a Watchlist or Discover tile, a title the tile does
+    /// not hold on any server: every server that has it, each row with its
+    /// quality and the label Play would show there ("Resume · 42 min left",
+    /// "Play S2 · E3"), or "Not on your servers". Picking a row opens the
+    /// title's detail page (`open`, the tile's own way in) on that copy.
+    private func presentServerChoices(forTitle item: MediaItem, from tileFrame: CGRect?,
+                                      open: @escaping () -> Void) {
+        guard waysToWatchPopup == nil, WaysToWatchLookup.offersWaysToWatch(item) else { return }
+        let lookup = WaysToWatchLookup.lookup(for: item)
+        presentLookupPopup(lookup, title: "Ways to Watch", sourceFrame: tileFrame) {
+            Self.titleChoiceRows(lookup, open: open)
+        }
+    }
+
+    private static func titleChoiceRows(_ lookup: WaysToWatchLookup,
+                                        open: @escaping () -> Void) -> [TileMenuAction] {
+        var actions: [TileMenuAction] = []
+        for entry in lookup.entries {
+            guard case .copy(let copy) = entry else {
+                actions.append(checkingRow(entry))
+                continue
+            }
+            let parts = copy.isSeries
+                ? DetailCopySelection.seriesSummary(copy)
+                : [DetailCopySelection.qualityText(copy.sources.first), EpisodePicker.playTitle(for: copy.item)]
+                    .compactMap { $0 }
+            let label = ([copy.serverName] + parts).joined(separator: " · ")
+            actions.append(TileMenuAction(title: label, systemImage: "play.rectangle", id: copy.id) {
+                // The detail page opens on this copy (read, never consumed;
+                // the next pick replaces it).
+                if let guid = lookup.guid { DetailCopySelection.pendingServer[guid] = copy }
+                if let (tmdbId, type) = TMDBMediaMapper.decodeItemID(lookup.item.ref.itemID) {
+                    DetailCopySelection.pendingServer["tmdb:\(type.rawValue):\(tmdbId)"] = copy
+                }
+                open()
+            })
+        }
+        if lookup.isFinished, actions.isEmpty {
+            return [TileMenuAction(title: "Not on your servers", systemImage: "xmark.circle", isEnabled: false,
+                                   id: "none") {}]
+        }
+        return withCheckingRow(actions, lookup)
     }
 
     /// Redraw every tile of `ref` after it changed copy: a visible row is
@@ -7493,8 +7569,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         let kind: HomeSectionKind? = sectionsSnapshot.indices.contains(nextSectionIndex)
             ? sectionsSnapshot[nextSectionIndex].kind
             : nil
-        if kind == .grid, let path = context.nextFocusedIndexPath, path.section == nextSectionIndex {
-            prefetchWaysToWatch(sectionsSnapshot[nextSectionIndex].items[safe: path.item])
+        if kind == .grid || kind == .watchlistGrid, let path = context.nextFocusedIndexPath,
+           path.section == nextSectionIndex {
+            prefetchWaysToWatch(Self.waysToWatchTitle(in: sectionsSnapshot[nextSectionIndex], at: path.item))
         }
         // The staged Menu back has landed; stop routing focus to the top. A
         // directional move clears it too — if the top cell never took focus the
