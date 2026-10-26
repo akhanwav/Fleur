@@ -167,20 +167,32 @@ final class TileMenuPopupViewController: UIViewController {
         // The header stays put above the rows; the rows scroll once there
         // are more than fit (`maximumVisibleRows`), the focus engine bringing
         // the focused one into view.
-        let top = UIStackView(arrangedSubviews: headerView.map { [$0, DividerView()] } ?? [])
-        top.axis = .vertical
-        top.translatesAutoresizingMaskIntoConstraints = false
+        // A menu without a header has nothing above the rows: no empty stack
+        // there, whose unconstrained height Auto Layout could resolve to the
+        // whole panel and leave the rows a zero-height box.
         rowScroller.translatesAutoresizingMaskIntoConstraints = false
         rowScroller.showsVerticalScrollIndicator = false
         rowScroller.clipsToBounds = true
+        rowScroller.contentInsetAdjustmentBehavior = .never
         rowScroller.addSubview(stack)
-        panel.contentView.addSubview(top)
         panel.contentView.addSubview(rowScroller)
+        let rowsTop: NSLayoutConstraint
+        if let headerView {
+            let top = UIStackView(arrangedSubviews: [headerView, DividerView()])
+            top.axis = .vertical
+            top.translatesAutoresizingMaskIntoConstraints = false
+            panel.contentView.addSubview(top)
+            NSLayoutConstraint.activate([
+                top.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: panelInset),
+                top.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: panelInset),
+                top.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -panelInset),
+            ])
+            rowsTop = rowScroller.topAnchor.constraint(equalTo: top.bottomAnchor)
+        } else {
+            rowsTop = rowScroller.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: panelInset)
+        }
         NSLayoutConstraint.activate([
-            top.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: panelInset),
-            top.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: panelInset),
-            top.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -panelInset),
-            rowScroller.topAnchor.constraint(equalTo: top.bottomAnchor),
+            rowsTop,
             rowScroller.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: panelInset),
             rowScroller.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -panelInset),
             rowScroller.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -panelInset),
