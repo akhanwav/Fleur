@@ -72,6 +72,12 @@ final class DetailCopySelection {
     /// page does the same: it is read, never consumed. The tile clears it.
     static var pendingServer: [String: DetailCopy] = [:]
 
+    /// Items whose page opens on exactly their own copy, whatever was picked
+    /// or last watched elsewhere: a Continue Watching card names the copy it
+    /// resumes (its tag is that copy's quality), so its page must not land on
+    /// another library's or server's. Server switching stays on the page.
+    static var pinnedToOwnCopy: Set<MediaItemRef> = []
+
     /// The pending pick for a page's title, from what the page knows now.
     static func pendingCopy(for item: MediaItem, mainDetail: MediaItemDetail?) -> DetailCopy? {
         if let guid = mainDetail?.plexGuid, let copy = pendingServer[guid] { return copy }
@@ -119,12 +125,13 @@ final class DetailCopySelection {
         reset()
         let current = token
         let main = Self.mainMachineId ?? "main"
+        let pinned = Self.pinnedToOwnCopy.contains(item.ref)
         if !item.isMetadataOnly {
             let name = item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil
             copies = [DetailCopy(machineId: main, serverName: name ?? "This Server", isMainServer: true,
                                  item: item, detail: mainDetail, remote: nil)]
             selectedIndex = 0
-            if let pending = Self.pendingCopy(for: item, mainDetail: mainDetail), !pending.isMainServer,
+            if !pinned, let pending = Self.pendingCopy(for: item, mainDetail: mainDetail), !pending.isMainServer,
                pending.id != copies[0].id {
                 copies.append(pending)
                 selectedIndex = 1
@@ -162,16 +169,23 @@ final class DetailCopySelection {
             }
             let ownIDs = Set(own.map(\.id))
             var found = remote.filter { !ownIDs.contains($0.id) }
-            let pendingCopy = Self.pendingServer[guid] ?? tmdbKey.flatMap { Self.pendingServer[$0] }
+            let pendingCopy = pinned ? nil : Self.pendingServer[guid] ?? tmdbKey.flatMap { Self.pendingServer[$0] }
             // The tile's pick wins even when this lookup missed its server.
             if let pendingCopy, !ownIDs.contains(pendingCopy.id), !found.contains(where: { $0.id == pendingCopy.id }) {
                 found.append(pendingCopy)
             }
             let all = Self.ordered(own + found)
-            let preferred = [pendingCopy?.id, ServerPreferences.lastWatchedServer(forGuid: guid)].compactMap { $0 }
-            // A pending pick names a copy; last watched names a server.
+            let preferred = pinned
+                ? own.map(\.id)
+                : [pendingCopy?.id, ServerPreferences.lastWatchedServer(forGuid: guid)].compactMap { $0 }
+            // A pending pick names a copy; last watched names a server. On
+            // that server the page's own copy comes first: the server's best
+            // copy is another library's file (a 1080p tile opened the 4K DV
+            // copy beside it).
             let index = preferred.lazy.compactMap { id in
-                all.firstIndex { $0.id == id } ?? all.firstIndex { $0.machineId == id }
+                all.firstIndex { $0.id == id }
+                    ?? all.firstIndex { $0.machineId == id && ownIDs.contains($0.id) }
+                    ?? all.firstIndex { $0.machineId == id }
             }.first
             // No pending pick and never watched: the first server in the
             // Settings order, its best copy first (`ordered`).

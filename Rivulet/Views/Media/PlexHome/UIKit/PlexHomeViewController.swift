@@ -4127,6 +4127,18 @@ final class PlexHomeViewController: UIViewController {
         chosenCopies[item.ref]?.copy.item ?? item
     }
 
+    /// Continue Watching cards open on exactly their own copy: any pick made
+    /// for one from another row is dropped, and the page is told to ignore
+    /// picks and last-watched servers for it.
+    private func pinOwnCopies(of items: [MediaItem]) {
+        for item in items {
+            if let chosen = chosenCopies.removeValue(forKey: item.ref) {
+                DetailCopySelection.pendingServer[chosen.guid] = nil
+            }
+            DetailCopySelection.pinnedToOwnCopy.insert(item.ref)
+        }
+    }
+
     /// The page reads a chosen copy once, so every open names them all again:
     /// the carousel can page to any of them.
     private func nameChosenCopies() {
@@ -4268,13 +4280,8 @@ final class PlexHomeViewController: UIViewController {
             let cell = innerCV.dequeueReusableCell(withReuseIdentifier: ContinueWatchingCell.reuseID, for: indexPath) as! ContinueWatchingCell
             let item = section.items[indexPath.item]
             Perf.interval(.cellPrepare, key: perfKey) {
-                if let chosen = chosenCopies[item.ref] {
-                    // That server's artwork, resume point and versions.
-                    cell.configure(item: chosen.copy.item,
-                                   knownQuality: .some(DetailCopySelection.qualityText(chosen.copy.sources.first)))
-                } else {
-                    cell.configure(item: item)
-                }
+                // Always its own copy: the card's tag names the file it resumes.
+                cell.configure(item: item)
             }
             return cell
         case .recentlyAdded, .recommendations, .discoverList, .searchGrid:
@@ -4308,10 +4315,7 @@ final class PlexHomeViewController: UIViewController {
         case .continueWatching:
             // Instant Resume on: a CW tile resumes straight away. Off: it
             // behaves like every other shelf row and opens the preview carousel.
-            // A card switched to another server opens on that copy instead:
-            // resuming would play this server's.
-            if SettingsStore.bool("continueWatchingInstantResume", default: false),
-               chosenCopies[section.items[itemIndex].ref] == nil {
+            if SettingsStore.bool("continueWatchingInstantResume", default: false) {
                 playItem(section.items[itemIndex])
             } else {
                 presentPreview(forSection: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
@@ -5809,6 +5813,7 @@ final class PlexHomeViewController: UIViewController {
     }
 
     private func presentPreview(forSection section: HomeSectionData, indexPath: IndexPath) {
+        if section.kind == .continueWatching { pinOwnCopies(of: section.items) }
         nameChosenCopies()
         guard indexPath.item < section.items.count else { return }
         // Grid taps, every shelf row (handleShelfTap) and search
@@ -6956,6 +6961,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // Go to Show] | [watched state] |
             // [Refresh Metadata]. CW adds Remove from Continue Watching to
             // the middle group.
+            pinOwnCopies(of: [item])
             var cwFirst = [
                 TileMenuAction(title: "Watch from Beginning",
                                systemImage: "arrow.counterclockwise") { [weak self] in
@@ -6966,12 +6972,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                     self?.selectMediaItem(item)
                 },
             ]
+            // No Ways to Watch: a card is the copy it resumes. Switching
+            // servers is the detail page's.
             cwFirst += goToEntries(for: item)
-            if item.kind == .movie || item.kind == .episode {
-                cwFirst.insert(TileMenuAction(title: "Ways to Watch…", systemImage: "server.rack") { [weak self] in
-                    self?.presentServerChoices(for: item, from: tileFrame)
-                }, at: 1)
-            }
 
             let cwMiddle = [
                 TileMenuAction(title: "Mark as Watched",
