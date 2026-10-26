@@ -23,6 +23,7 @@
 
 import AVFoundation
 import Combine
+import CoreImage
 import Foundation
 import SwiftUI
 import UIKit
@@ -147,12 +148,33 @@ final class AetherPlayer: PlayerProtocol {
     /// presses queue behind the rebuild instead of cancelling and restarting
     /// it. Cleared on every exit, including the deadline path.
     private var foregroundReloadInFlight = false
+    /// The running rebuild was started paused (see `stateSubject`'s sink).
+    private var pausedRebuildInFlight = false
 
-    /// Non-nil when the app returned from background with the user PAUSED:
-    /// the torn-down session stays parked (clock intact, so the paused UI
-    /// shows the true position) and play() performs the reload. Holds the
+    /// Non-nil while a torn-down session still needs its rebuild: the paused
+    /// rebuild on return failed or timed out, so play() retries it. Holds the
     /// background timestamp so the teardown-drain wait still applies.
     private var pendingReloadSince: Date?
+
+    /// The picture on screen when the app left, shown over the video from
+    /// background until the rebuilt session presents (`AetherVideoSurfaceView`).
+    /// The teardown releases the item, so without it the paused screen came
+    /// back black for the whole rebuild. VOD only: a live return rejoins the
+    /// edge, where the old picture is not what plays next.
+    @Published private(set) var heldFrame: CGImage?
+    /// The frame read on resign-active, published only if the app actually
+    /// backgrounds (the screensaver and Control Center resign without one).
+    private var capturedFrame: CGImage?
+    private var frameCaptureTask: Task<Void, Never>?
+    /// The startup generation the held frame and position belong to; the
+    /// next one that reaches `.presenting` takes both down.
+    private var heldFrameGeneration: UInt64?
+
+    /// The playhead the app left at. A rebuild's load zeroes the engine clock
+    /// until the new session anchors it, so the paused UI reads this instead
+    /// for that window rather than jumping to 0:00.
+    private var heldPosition: TimeInterval?
+    private var heldDuration: TimeInterval = 0
 
     /// Warm the opening bytes of a source the engine is not playing yet, so a
     /// later `load()` of that URL skips the cold open's two-to-three sequential
@@ -183,6 +205,7 @@ final class AetherPlayer: PlayerProtocol {
         engine.videoGravity = VideoZoomAdjustment.mode.gravity
         wireUpPublishers()
         observeAppLifecycle()
+        observeHeldFrameRelease()
     }
 
     private func wireUpPublishers() {
@@ -201,6 +224,13 @@ final class AetherPlayer: PlayerProtocol {
                 // ".playing while still buffering" reconciliation sees the
                 // combined flag the moment a seek lands.
                 self.recomputeIsBuffering()
+                // A paused rebuild is invisible to the user: the session reads
+                // paused throughout, not as a new load (which resets the
+                // progress bar to its skeleton and drops the paused dim).
+                if self.pausedRebuildInFlight, aetherState == .loading {
+                    self.stateSubject.send(.paused)
+                    return
+                }
                 self.stateSubject.send(Self.translate(aetherState, errorInfo: errorInfo))
             }
             .store(in: &cancellables)
@@ -211,7 +241,8 @@ final class AetherPlayer: PlayerProtocol {
         engine.clock.$currentTime
             .receive(on: DispatchQueue.main)
             .sink { [weak self] t in
-                self?.timeSubject.send(t)
+                guard let self else { return }
+                self.timeSubject.send(self.heldPosition ?? t)
             }
             .store(in: &cancellables)
 
@@ -420,7 +451,8 @@ final class AetherPlayer: PlayerProtocol {
         // hostPlayerWaiting only counts while the ENGINE believes it is
         // playing: during loads/seeks the engine state already communicates,
         // and a paused AVPlayer never reports waiting anyway.
-        let combined = engineReportsBuffering || (engineIsPlaying && hostPlayerWaiting)
+        let combined = !pausedRebuildInFlight
+            && (engineReportsBuffering || (engineIsPlaying && hostPlayerWaiting))
         if combined != isBuffering { isBuffering = combined }
     }
 
@@ -554,14 +586,30 @@ final class AetherPlayer: PlayerProtocol {
     /// reload the session stays torn down forever and playback can never
     /// resume (issue #215).
     private func observeAppLifecycle() {
+        // Read the picture while the item still exists: the engine releases it
+        // on didEnterBackground. tvOS has already paused the AVPlayer here.
+        NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.captureFrameBeforeTeardown()
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.backgroundedAt = Date()
+                guard let self else { return }
+                self.backgroundedAt = Date()
                 // A reload landing while backgrounded would rebuild the decode
                 // session right before suspension — the wedge the engine's
                 // teardown exists to prevent. Foreground return re-arms it.
-                self?.foregroundReloadTask?.cancel()
+                self.foregroundReloadTask?.cancel()
+                if !self.engine.isLive, self.engine.state == .playing || self.engine.state == .paused {
+                    self.heldPosition = self.engine.currentTime
+                    self.heldDuration = self.engine.duration
+                    self.heldFrameGeneration = self.engine.startupProgress?.generation ?? 0
+                    self.publishCapturedFrame()
+                }
             }
             .store(in: &cancellables)
 
@@ -582,22 +630,24 @@ final class AetherPlayer: PlayerProtocol {
     }
 
     private func reloadAfterBackgroundReturn() {
-        guard let backgroundedAt else { return }
-        self.backgroundedAt = nil
-        if userIntendsToPlay {
-            startForegroundReload(since: backgroundedAt)
-        } else {
-            // Paused user: leave the session parked and reload on play()
-            // instead. The engine preserves the playback clock through its
-            // teardown, so the paused UI keeps the true position; an eager
-            // rebuild-then-pause showed 0 (load's stopInternal zeroes the
-            // clock and nothing re-anchors it until playback starts) and paid
-            // for a pipeline the user might never resume. Scrubs while parked
-            // still work: the engine defers pre-ready seeks and updates the
-            // clock optimistically (#127), so the reload resumes at the
-            // scrubbed position.
-            pendingReloadSince = backgroundedAt
+        guard let backgroundedAt else {
+            // Resign-active only (screensaver, Control Center): nothing was
+            // torn down, so the frame read on the way out is not needed.
+            dropCapturedFrame()
+            return
         }
+        self.backgroundedAt = nil
+        guard engine.needsForegroundVideoRestore else {
+            // Nothing was torn down (a load was in flight, or nothing loaded).
+            releaseHeldFrame()
+            return
+        }
+        // Rebuild now, in the transport the user left in (the host pauses on
+        // background, so normally paused). Parking the session until Play,
+        // as this used to, made every return wait for a full reload behind
+        // a black screen; a paused rebuild costs the same reload once, while
+        // the held frame is up, and leaves Play instant.
+        startForegroundReload(since: backgroundedAt, resumePlaying: userIntendsToPlay)
     }
 
     /// Rebuild the torn-down session at the preserved playhead.
@@ -610,12 +660,18 @@ final class AetherPlayer: PlayerProtocol {
     /// consumed, every later Play press just called `engine.play()` on a session
     /// with no player item. Exiting the player and replaying from the library
     /// was the only way out.
-    private func startForegroundReload(since: Date) {
+    private func startForegroundReload(since: Date, resumePlaying: Bool) {
         guard !foregroundReloadInFlight else { return }
         foregroundReloadTask?.cancel()
         foregroundReloadInFlight = true
+        pausedRebuildInFlight = !resumePlaying
         foregroundReloadTask = Task { [weak self] in
-            defer { self?.foregroundReloadInFlight = false }
+            defer {
+                self?.foregroundReloadInFlight = false
+                self?.pausedRebuildInFlight = false
+                self?.recomputeIsBuffering()
+                self?.reconcileTransportAfterReload()
+            }
             // The engine's teardown holds a background task through a 3.5s
             // loopback socket drain after its synchronous stopInternal. It
             // exposes no handle to await, so on a quick app switch wait out
@@ -624,13 +680,11 @@ final class AetherPlayer: PlayerProtocol {
             let drain = max(0, 4.0 - Date().timeIntervalSince(since))
             if drain > 0 { try? await Task.sleep(for: .seconds(drain)) }
             guard let self, !Task.isCancelled else { return }
-            print("[AetherPlayer] foreground reload: pos=\(self.engine.currentTime)")
+            print("[AetherPlayer] foreground reload: pos=\(self.engine.currentTime) playing=\(resumePlaying)")
             do {
                 // No-ops if nothing is loaded or the session was stopped while
-                // we waited (public stop() clears the engine's loadedURL). The
-                // load auto-plays, which is correct: this path only runs when
-                // the user intends playback.
-                try await self.reloadWithDeadline()
+                // we waited (public stop() clears the engine's loadedURL).
+                try await self.reloadWithDeadline(resumePlaying: resumePlaying)
                 self.pendingReloadSince = nil
                 print("[AetherPlayer] foreground reload done: state=\(self.engine.state) pos=\(self.engine.currentTime)")
             } catch {
@@ -647,11 +701,21 @@ final class AetherPlayer: PlayerProtocol {
     /// `reloadAtCurrentPosition` under the same deadline the startup load uses.
     /// Same operation, same failure mode: a load that never returns has to
     /// become a thrown error, or the retry can never be reached.
-    private func reloadWithDeadline() async throws {
+    ///
+    /// A torn-down session replays its MOUNT's autoplay flag (true), so a
+    /// paused rebuild names `autoplay = false`: the engine applies that field
+    /// exactly when it is resuming a background teardown, and mounts the
+    /// session paused at the preserved playhead (#124) instead of playing it
+    /// for the moment it takes to pause again.
+    private func reloadWithDeadline(resumePlaying: Bool = true) async throws {
         let deadline = AetherLoadTimeoutPolicy.startupLoadDeadline
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor [engine] in
-                try await engine.reloadAtCurrentPosition()
+                if resumePlaying {
+                    try await engine.reloadAtCurrentPosition()
+                } else {
+                    try await engine.reloadAtCurrentPosition { $0.autoplay = false }
+                }
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(deadline))
@@ -667,17 +731,135 @@ final class AetherPlayer: PlayerProtocol {
         }
     }
 
+    /// Play/pause presses during a rebuild only record intent (see play());
+    /// the rebuilt session takes the latest one here.
+    private func reconcileTransportAfterReload() {
+        // Not into a session still torn down (a cancelled or failed rebuild).
+        guard !engine.needsForegroundVideoRestore,
+              engine.state == .playing || engine.state == .paused else { return }
+        if userIntendsToPlay, engine.state == .paused {
+            engine.play()
+        } else if !userIntendsToPlay, engine.state == .playing {
+            engine.pause()
+        }
+    }
+
+    // MARK: - Held frame
+
+    private func captureFrameBeforeTeardown() {
+        frameCaptureTask?.cancel()
+        capturedFrame = nil
+        guard !engine.isLive, engine.state == .playing || engine.state == .paused else { return }
+        frameCaptureTask = Task { [weak self] in
+            guard let self else { return }
+            let frame = await self.readDisplayedFrame()
+            print("[AetherPlayer] held frame read: \(frame.map { "\($0.width)x\($0.height)" } ?? "none")")
+            guard !Task.isCancelled else { return }
+            self.capturedFrame = frame
+            // Read after the app already went: show it now.
+            self.publishCapturedFrame()
+        }
+    }
+
+    /// The paused picture, exact to the frame. The native path reads the item
+    /// the way the engine holds a picture over an audio switch (an output
+    /// added to the paused item vends its frame in ~20 ms); the software path
+    /// decodes it out of the session's packet cache, or from the source when
+    /// the cache has moved on. nil for Dolby Vision without a displayable
+    /// base layer, whose output frame is not its colour.
+    private func readDisplayedFrame() async -> CGImage? {
+        if let item = engine.currentAVPlayerItem {
+            guard engine.sourceDVProfile != 5 else { return nil }
+            guard let buffer = await Self.displayedPixelBuffer(of: item, playing: (currentAVPlayer?.rate ?? 0) != 0)
+            else { return nil }
+            return Self.image(from: buffer)
+        }
+        let seconds = engine.currentTime
+        if let still = await engine.scrubThumbnail(atSeconds: seconds, maxWidth: 1920) { return still }
+        // The packet cache no longer holds the playhead (paused a while):
+        // decode it from the source on the extractor's own reader.
+        if frameExtractor == nil { frameExtractor = engine.makeFrameExtractor() }
+        return await frameExtractor?.snapshot(at: seconds, maxSize: CGSize(width: 1920, height: 1080))
+    }
+
+    private static func displayedPixelBuffer(of item: AVPlayerItem, playing: Bool) async -> CVPixelBuffer? {
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
+            kCVPixelBufferIOSurfacePropertiesKey as String: [String: String]()
+        ])
+        item.add(output)
+        defer { item.remove(output) }
+        let deadline = ContinuousClock.now + .milliseconds(500)
+        repeat {
+            // A paused item vends only the time it holds.
+            let time = playing ? output.itemTime(forHostTime: CACurrentMediaTime()) : item.currentTime()
+            if time.isNumeric, let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
+                return buffer
+            }
+            try? await Task.sleep(for: .milliseconds(8))
+        } while ContinuousClock.now < deadline
+        return nil
+    }
+
+    /// 1920 wide at most, in extended sRGB so an HDR frame keeps its highlights.
+    private static func image(from buffer: CVPixelBuffer) -> CGImage? {
+        var image = CIImage(cvPixelBuffer: buffer)
+        let scale = min(1, 1920 / max(image.extent.width, 1))
+        if scale < 1 { image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
+        guard let space = CGColorSpace(name: CGColorSpace.extendedSRGB) else { return nil }
+        return frameContext.createCGImage(image, from: image.extent, format: .RGBAh, colorSpace: space)
+    }
+
+    private static let frameContext = CIContext()
+
+    private func publishCapturedFrame() {
+        guard let frame = capturedFrame, heldFrameGeneration != nil else { return }
+        capturedFrame = nil
+        heldFrame = frame
+    }
+
+    private func dropCapturedFrame() {
+        frameCaptureTask?.cancel()
+        frameCaptureTask = nil
+        capturedFrame = nil
+    }
+
+    /// Takes the still down: the rebuilt picture is up, or it is no longer the
+    /// picture (a seek, a stop, another load).
+    private func releaseHeldFrame() {
+        dropCapturedFrame()
+        heldFrame = nil
+        heldFrameGeneration = nil
+        heldPosition = nil
+    }
+
+    private func observeHeldFrameRelease() {
+        engine.$startupProgress
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] progress in
+                guard let self, let progress, let held = self.heldFrameGeneration,
+                      progress.generation > held, progress.stage == .presenting else { return }
+                self.releaseHeldFrame()
+            }
+            .store(in: &cancellables)
+    }
+
     // MARK: - PlayerProtocol state
 
     var isPlaying: Bool { engine.state == .playing }
-    var currentTime: TimeInterval { engine.currentTime }
-    var duration: TimeInterval { engine.duration }
+    var currentTime: TimeInterval { heldPosition ?? engine.currentTime }
+    var duration: TimeInterval {
+        engine.duration > 0 || heldPosition == nil ? engine.duration : heldDuration
+    }
 
     /// Duration updates. The engine publishes `duration` once the source is
     /// probed; the VM needs this (not just `timePublisher`) so Plex progress
     /// reports carry a real duration (viewOffset + watched threshold).
     var durationPublisher: AnyPublisher<TimeInterval, Never> {
-        engine.$duration.eraseToAnyPublisher()
+        // A rebuild's load zeroes the duration with the clock; the paused UI
+        // keeps the one it had until the new session reports its own.
+        engine.$duration
+            .filter { [weak self] duration in duration > 0 || MainActor.assumeIsolated { self?.heldPosition == nil } }
+            .eraseToAnyPublisher()
     }
     var bufferedTime: TimeInterval { engine.bufferedPosition }
     var playbackRate: Float {
@@ -1132,6 +1314,7 @@ final class AetherPlayer: PlayerProtocol {
         assFonts = []
         assTrack = nil
         dropFrameExtractor()
+        releaseHeldFrame()
         userIntendsToPlay = true
         pendingReloadSince = nil
         do {
@@ -1211,22 +1394,25 @@ final class AetherPlayer: PlayerProtocol {
 
     func play() {
         userIntendsToPlay = true
+        // A rebuild is running: it plays on completion (reconcileTransportAfterReload).
+        // Playing into the torn-down session would flip its state with no item.
+        if foregroundReloadInFlight { return }
         if let since = pendingReloadSince {
-            // Parked since a paused background return: rebuild the torn-down
-            // session (auto-plays at the preserved clock position) instead of
-            // playing into a session with no player item. The flag stays armed
-            // until the rebuild succeeds, so a Play press after a failed or
-            // timed-out one retries rather than no-opping forever.
-            startForegroundReload(since: since)
+            // The paused rebuild on return failed: retry it, playing. The flag
+            // stays armed until a rebuild succeeds, so every Play press after a
+            // failed or timed-out one retries rather than no-opping forever.
+            startForegroundReload(since: since, resumePlaying: true)
             return
         }
         engine.play()
     }
     func pause() {
         userIntendsToPlay = false
+        if foregroundReloadInFlight { return }
         engine.pause()
     }
     func stop() {
+        releaseHeldFrame()
         foregroundReloadTask?.cancel()
         pendingReloadSince = nil
         userIntendsToPlay = false
@@ -1318,7 +1504,11 @@ final class AetherPlayer: PlayerProtocol {
         set { engine.videoGravity = newValue }
     }
 
-    func seek(to time: TimeInterval) async { await engine.seek(to: time) }
+    func seek(to time: TimeInterval) async {
+        // The picture moves; the still and the held clock must not outlive it.
+        releaseHeldFrame()
+        await engine.seek(to: time)
+    }
 
     // MARK: - Live timeshift
 

@@ -1129,18 +1129,22 @@ final class UniversalPlayerViewModel: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.cancelAetherStallWatchdog()
             }
-            // The Aether route self-manages background: the engine tears the video pipeline down on
-            // background, and AetherPlayer reloads it + restores play state on foreground (upstream's
-            // tvOS build has no foreground recovery of its own — see observeAppLifecycle in
-            // AetherPlayer). Pausing here would flip AetherPlayer.userIntendsToPlay so a watching
-            // user always returned paused. This host pause covers the HLS/AVPlayer route only.
-            if self.aetherPlayer != nil { return }
-            if self.playbackState == .playing {
-                self.pausedDueToAppInactive = true
-                print("[Player] App entering background — pausing")
-                Task { @MainActor in
+            // Leaving the app pauses on both routes, and the exact position goes to the server
+            // now rather than at the next 10s tick. On the Aether route the engine tears the video
+            // pipeline down here and AetherPlayer rebuilds it, paused, on the way back (see
+            // observeAppLifecycle there), so Play on return is immediate.
+            //
+            // Aether is judged by intent, not by `playbackState`: tvOS pauses the engine's AVPlayer
+            // on resign-active, so the state already reads paused for a user who was watching.
+            let wasPlaying = self.aetherPlayer?.intendsToPlay ?? (self.playbackState == .playing)
+            Task { @MainActor in
+                if wasPlaying {
+                    self.pausedDueToAppInactive = true
+                    print("[Player] App entering background — pausing")
                     self.pause()
                 }
+                // Reported as paused explicitly: the state publisher has not caught up yet.
+                self.reportPlaybackState(.paused)
             }
         }
 
