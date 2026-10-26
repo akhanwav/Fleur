@@ -169,15 +169,9 @@ final class HeroSlideView: UIView {
         // Tagline
         taglineLabel.text = tagline(for: item)
 
-        // Logo / fallback title. Loaded LAST so `onReady` fires only after every
-        // piece of content (metadata, tagline, logo) is final. Callers gate a
-        // fade-in on it so the slide never flashes the fallback text and then
-        // jumps to the logo mid-fade.
-        let logoURL: URL? = {
-            guard let path = item.clearLogoPath else { return nil }
-            return URL(string: "\(serverURL)\(path)?X-Plex-Token=\(authToken)")
-        }()
-        loadLogo(from: logoURL, fallbackTitle: item.seriesTitleForDisplay ?? item.title ?? "",
+        // The title as text (the show's for a season or episode), never the
+        // title logo. Set LAST so `onReady` fires once every piece is final.
+        loadLogo(from: nil, fallbackTitle: item.seriesTitleForDisplay ?? item.title ?? "",
                  animated: animated, completion: onReady)
 
         if let snapshot {

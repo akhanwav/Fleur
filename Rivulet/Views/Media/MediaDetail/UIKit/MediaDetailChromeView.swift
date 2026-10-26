@@ -150,17 +150,6 @@ final class MediaDetailChromeView: UIView {
     /// repopulate genre + quality rows + cast label with richer fields.
     private var detail: MediaItemDetail?
 
-    /// Per-item aspect-ratio constraint on the logo image view. Plex
-    /// logo assets are typically wide PNGs with the visible glyphs at
-    /// natural aspect (no transparent padding) — but `.scaleAspectFit`
-    /// in a UIImageView CENTERS the content inside the view bounds,
-    /// which would offset the visible glyphs right of the metadata's
-    /// leading edge. Installing a width = height * imageAspect
-    /// constraint when the image lands sizes the view exactly to the
-    /// visible pixels, so leading-aligned constraint to the metadata
-    /// edge lines up the glyphs flush left.
-    private var logoAspectConstraint: NSLayoutConstraint?
-
     // MARK: - Subviews
 
     /// Outer vertical stack — bottom-leading aligned by the host. Contains
@@ -444,10 +433,6 @@ final class MediaDetailChromeView: UIView {
         loadToken &+= 1
         item = nil
         detail = nil
-        if let prev = logoAspectConstraint {
-            prev.isActive = false
-            logoAspectConstraint = nil
-        }
         titleLogoImageView.image = nil
         titleFallbackLabel.text = nil
         titleLogoImageView.isHidden = false
@@ -458,23 +443,6 @@ final class MediaDetailChromeView: UIView {
         actionButtonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         playButton = nil
         castLabel.text = nil
-    }
-
-    /// Install a width = height × imageAspect constraint on
-    /// `titleLogoImageView` so the view bounds tightly wrap the
-    /// visible image pixels. Without this, `.scaleAspectFit` would
-    /// center the scaled image inside an artificially-wide view and
-    /// the glyphs would float right of the metadata's leading edge.
-    private func installLogoAspectConstraint(for image: UIImage) {
-        guard image.size.height > 0 else { return }
-        let aspect = image.size.width / image.size.height
-        let c = titleLogoImageView.widthAnchor.constraint(
-            equalTo: titleLogoImageView.heightAnchor,
-            multiplier: aspect
-        )
-        c.priority = .required
-        c.isActive = true
-        logoAspectConstraint = c
     }
 
     // MARK: - Apply / load
@@ -538,66 +506,13 @@ final class MediaDetailChromeView: UIView {
         copySelection.reset()
         if item.isMetadataOnly { copySelection.load(item: item, mainDetail: nil) }
 
-        // Clear any aspect constraint from the previous item — a stale
-        // ratio would size the new image wrong while it's loading.
-        if let prev = logoAspectConstraint {
-            prev.isActive = false
-            logoAspectConstraint = nil
-        }
-
-        // Logo: probe the memory cache synchronously first. If the
-        // logo is already cached (which it nearly always is when the
-        // chrome is being shown in the expanded detail — the carousel
-        // cell underneath has already loaded it), render the image on
-        // frame 0 with no fallback-text flash. Otherwise show the
-        // fallback label and start the async load.
-        let cachedLogo = item.artwork.logo.flatMap { ImageCacheManager.shared.cachedImage(for: $0) }
-        if let cachedLogo {
-            titleLogoImageView.image = cachedLogo
-            titleLogoImageView.isHidden = false
-            titleFallbackLabel.isHidden = true
-            titleFallbackLabel.text = nil
-            installLogoAspectConstraint(for: cachedLogo)
-        } else {
-            // An episode or season stands in for its show here: the logo is
-            // the show's, so the words must be too ("Formula 1", not
-            // "Episode 99", on a show with no logo).
-            titleFallbackLabel.text = item.seriesTitle ?? item.title
-            titleFallbackLabel.isHidden = false
-            titleLogoImageView.isHidden = true
-            titleLogoImageView.image = nil
-            if let logoURL = item.artwork.logo {
-                Task { [weak self] in
-                    let image = await ImageCacheManager.shared.image(for: logoURL)
-                    await MainActor.run {
-                        guard let self else { return }
-                        guard self.loadToken == token else { return }
-                        guard let image else { return }
-                        self.titleLogoImageView.image = image
-                        self.titleLogoImageView.isHidden = false
-                        self.titleFallbackLabel.isHidden = true
-                        self.installLogoAspectConstraint(for: image)
-                    }
-                }
-            } else if let tmdbID = item.tmdbID {
-                // TMDB-mapped items carry no logo in artwork — resolve one
-                // from the TMDB images API via the shared cache.
-                let type: TMDBMediaType = item.kind == .movie ? .movie : .tv
-                Task { [weak self] in
-                    guard let logoURL = await TMDBLogoCache.shared.logoURL(tmdbId: tmdbID, type: type) else { return }
-                    let image = await ImageCacheManager.shared.image(for: logoURL)
-                    await MainActor.run {
-                        guard let self else { return }
-                        guard self.loadToken == token else { return }
-                        guard let image else { return }
-                        self.titleLogoImageView.image = image
-                        self.titleLogoImageView.isHidden = false
-                        self.titleFallbackLabel.isHidden = true
-                        self.installLogoAspectConstraint(for: image)
-                    }
-                }
-            }
-        }
+        // The title as text, never the title logo. An episode or season
+        // stands in for its show here, so the words are the show's ("Formula
+        // 1", not "Episode 99").
+        titleFallbackLabel.text = item.seriesTitle ?? item.title
+        titleFallbackLabel.isHidden = false
+        titleLogoImageView.isHidden = true
+        titleLogoImageView.image = nil
 
         // Detail fetch — populates richer genre / rating / quality / cast.
         loadDetail(for: item, token: token)

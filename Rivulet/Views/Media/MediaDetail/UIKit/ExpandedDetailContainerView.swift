@@ -107,7 +107,9 @@ final class ExpandedDetailContainerView: UIView {
     private let spacer = UIView()
     private let belowFoldPage = UIView()
 
-    private let smallTitleLogo = UIImageView()
+    /// The title, top-centered once the page scrolls below the fold. Text,
+    /// not the title logo: the app shows titles as words everywhere.
+    private let smallTitleLogo = UILabel()
     /// Season pill bar — the scrolled-in header. Lives in the reserve gap above
     /// the episodes; fades in with `scrollProgress` (invisible at rest).
     private let seasonsHeader = UIView()
@@ -239,7 +241,6 @@ final class ExpandedDetailContainerView: UIView {
     private var episodesLeadingConstraint: NSLayoutConstraint!
     private var episodesTrailingConstraint: NSLayoutConstraint!
 
-    private var logoLoadToken: UInt64 = 0
     /// Bumped on every `setCurrent`; in-flight cascade blocks no-op if stale.
     private var cascadeToken: UInt64 = 0
     /// Width constraints of the 6 episode thumbs (animated on expand).
@@ -279,7 +280,12 @@ final class ExpandedDetailContainerView: UIView {
         // episodes/related/cast scroll under it (Apple TV+). Brought to front
         // after the collection is added.
         smallTitleLogo.translatesAutoresizingMaskIntoConstraints = false
-        smallTitleLogo.contentMode = .scaleAspectFit
+        smallTitleLogo.font = .systemFont(ofSize: 44, weight: .bold)
+        smallTitleLogo.textColor = .white
+        smallTitleLogo.textAlignment = .center
+        smallTitleLogo.numberOfLines = 2
+        smallTitleLogo.adjustsFontSizeToFitWidth = true
+        smallTitleLogo.minimumScaleFactor = 0.6
         smallTitleLogo.alpha = 0
         addSubview(smallTitleLogo)
 
@@ -718,18 +724,7 @@ final class ExpandedDetailContainerView: UIView {
         // them before then.
         applySeasons([], selectedIndex: 0)
 
-        logoLoadToken &+= 1
-        let token = logoLoadToken
-        smallTitleLogo.image = nil
-
-        guard let item, let logoURL = item.artwork.logo else { return }
-        Task { [weak self] in
-            let image = await ImageCacheManager.shared.image(for: logoURL)
-            await MainActor.run {
-                guard let self, self.logoLoadToken == token, let image else { return }
-                self.smallTitleLogo.image = image
-            }
-        }
+        smallTitleLogo.text = item.map { $0.seriesTitle ?? $0.title }
     }
 
     // MARK: - Peek episode thumbnails

@@ -900,39 +900,11 @@ private final class MediaItemSlideView: UIView {
         // Tagline: overview first sentence.
         taglineLabel.text = tagline(for: item)
 
-        // Logo / fallback title. TMDB-mapped items carry no logo URL in
-        // their artwork (the list endpoints don't include images) — resolve
-        // one from the TMDB images API via the shared cache, then load.
-        if item.artwork.logo == nil, let tmdbID = item.tmdbID {
-            // Prepare the fallback (hidden behind the caller's alpha hold)
-            // but don't signal ready until the resolve completes — the hero
-            // fades the whole slide in only once the logo outcome is known.
-            loadLogo(from: nil, fallbackTitle: item.seriesTitle ?? item.title)
-            let itemID = item.ref.itemID
-            currentResolveItemID = itemID
-            let type: TMDBMediaType = item.kind == .movie ? .movie : .tv
-            logoResolveTask?.cancel()
-            logoResolveTask = Task { [weak self] in
-                let url = await TMDBLogoCache.shared.logoURL(tmdbId: tmdbID, type: type)
-                guard !Task.isCancelled, let self else { return }
-                await MainActor.run {
-                    guard self.currentResolveItemID == itemID else { return }
-                    if let url {
-                        self.loadLogo(from: url, fallbackTitle: item.seriesTitle ?? item.title, onReady: onReady)
-                    } else {
-                        onReady?()  // no logo exists — fallback title is final
-                    }
-                }
-            }
-        } else {
-            logoResolveTask?.cancel()
-            currentResolveItemID = nil
-            loadLogo(from: item.artwork.logo, fallbackTitle: item.seriesTitle ?? item.title, onReady: onReady)
-        }
+        // The title as text (the show's for a season or episode), never the
+        // title logo.
+        loadLogo(from: nil, fallbackTitle: item.seriesTitle ?? item.title, onReady: onReady)
     }
 
-    private var logoResolveTask: Task<Void, Never>?
-    private var currentResolveItemID: String?
 
     // MARK: - Logo loader
 
