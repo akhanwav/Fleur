@@ -319,12 +319,14 @@ final class DetailCopySelection {
         return parts
     }
 
-    /// The card / row line for any copy: a series' summary, else the best
-    /// version's quality led by the server's resume time.
+    /// The card / row line for any copy, the same in every Ways to Watch: a
+    /// series' summary, else Play's label on that server ("Resume · 42 min
+    /// left", "Play S2 · E5", "Play") and the best file in full.
     static func summary(_ copy: DetailCopy) -> String? {
         let parts = copy.isSeries
             ? seriesSummary(copy)
-            : [resumeText(copy.item), copy.sources.first.map(VersionPicker.rowLabel)].compactMap { $0 }
+            : [EpisodePicker.playTitle(for: copy.item), copy.sources.first.map(VersionPicker.rowLabel)]
+                .compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 

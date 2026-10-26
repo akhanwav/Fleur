@@ -7198,14 +7198,9 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 actions.append(checkingRow(entry))
                 continue
             }
-            // The library rows' line: Play's label, then the best file in
-            // full (resolution, range, bitrate, codec, audio, size), which
-            // scrolls when focused.
-            let parts = copy.isSeries
-                ? DetailCopySelection.seriesSummary(copy)
-                : [EpisodePicker.playTitle(for: copy.item), copy.sources.first.map(VersionPicker.rowLabel)]
-                    .compactMap { $0 }
-            let label = ([copy.serverName] + parts).joined(separator: " · ")
+            // The library rows' line (`summary`), which scrolls when focused.
+            let label = [copy.serverName, DetailCopySelection.summary(copy)].compactMap { $0 }
+                .joined(separator: " · ")
             actions.append(TileMenuAction(title: label, systemImage: "play.rectangle", id: copy.id) {
                 // The detail page opens on this copy (read, never consumed;
                 // the next pick replaces it).
