@@ -111,6 +111,10 @@ final class TileMenuPopupViewController: UIViewController {
     private var firstRow: MenuRowButton?
     private var rows: [MenuRowButton] = []
     private var stack: UIStackView!
+    private let rowScroller = UIScrollView()
+    /// Rows shown before the list scrolls: five, and half of the sixth so it
+    /// reads as more below (Ways to Watch on a title with eight copies).
+    private static let maximumVisibleRows: CGFloat = 5.5
     private var headerView: UIView?
     private var panel: UIVisualEffectView!
     /// The dim the backdrop animates to.
@@ -160,12 +164,31 @@ final class TileMenuPopupViewController: UIViewController {
         panel.layer.cornerRadius = 38
         panel.layer.cornerCurve = .continuous
         panel.clipsToBounds = true
-        panel.contentView.addSubview(stack)
+        // The header stays put above the rows; the rows scroll once there
+        // are more than fit (`maximumVisibleRows`), the focus engine bringing
+        // the focused one into view.
+        let top = UIStackView(arrangedSubviews: headerView.map { [$0, DividerView()] } ?? [])
+        top.axis = .vertical
+        top.translatesAutoresizingMaskIntoConstraints = false
+        rowScroller.translatesAutoresizingMaskIntoConstraints = false
+        rowScroller.showsVerticalScrollIndicator = false
+        rowScroller.clipsToBounds = true
+        rowScroller.addSubview(stack)
+        panel.contentView.addSubview(top)
+        panel.contentView.addSubview(rowScroller)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: panelInset),
-            stack.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: panelInset),
-            stack.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -panelInset),
-            stack.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -panelInset),
+            top.topAnchor.constraint(equalTo: panel.contentView.topAnchor, constant: panelInset),
+            top.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: panelInset),
+            top.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -panelInset),
+            rowScroller.topAnchor.constraint(equalTo: top.bottomAnchor),
+            rowScroller.leadingAnchor.constraint(equalTo: panel.contentView.leadingAnchor, constant: panelInset),
+            rowScroller.trailingAnchor.constraint(equalTo: panel.contentView.trailingAnchor, constant: -panelInset),
+            rowScroller.bottomAnchor.constraint(equalTo: panel.contentView.bottomAnchor, constant: -panelInset),
+            stack.topAnchor.constraint(equalTo: rowScroller.contentLayoutGuide.topAnchor),
+            stack.leadingAnchor.constraint(equalTo: rowScroller.contentLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: rowScroller.contentLayoutGuide.trailingAnchor),
+            stack.bottomAnchor.constraint(equalTo: rowScroller.contentLayoutGuide.bottomAnchor),
+            stack.widthAnchor.constraint(equalTo: rowScroller.frameLayoutGuide.widthAnchor),
         ])
 
         // Placed in viewDidLayoutSubviews, once the view has its real size.
@@ -267,10 +290,6 @@ final class TileMenuPopupViewController: UIViewController {
         var arranged: [UIView] = []
         rows = []
         firstRow = nil
-        if let headerView {
-            arranged.append(headerView)
-            if !sections.isEmpty { arranged.append(divider()) }
-        }
         for (sectionIndex, section) in sections.enumerated() {
             if sectionIndex > 0 { arranged.append(divider()) }
             for action in section {
@@ -310,7 +329,6 @@ final class TileMenuPopupViewController: UIViewController {
     private func panelFrame() -> (CGRect, growsFromLeftEdge: Bool) {
         // A header asks for a wider panel so its description reads as prose.
         let actionCount = sections.reduce(0) { $0 + $1.count }
-        let dividerCount = max(0, sections.count - 1) + (headerView != nil && !sections.isEmpty ? 1 : 0)
         let minimumWidth: CGFloat = headerView == nil ? 440 : 620
         let panelWidth = growsWhileOpen ? Self.maximumPanelWidth
             : min(max(Self.widestRowWidth(for: sections) + panelInset * 2, minimumWidth), Self.maximumPanelWidth)
@@ -322,10 +340,10 @@ final class TileMenuPopupViewController: UIViewController {
                 verticalFittingPriority: .fittingSizeLevel
             ).height)
         }
-        let panelHeight = CGFloat(actionCount) * rowHeight
-            + CGFloat(dividerCount) * (1 + dividerVerticalPad * 2)
-            + headerHeight
-            + panelInset * 2
+        let rowsHeight = CGFloat(actionCount) * rowHeight
+            + CGFloat(max(0, sections.count - 1)) * (1 + dividerVerticalPad * 2)
+        let headerBlock = headerView == nil ? 0 : headerHeight + 1 + dividerVerticalPad * 2
+        let panelHeight = min(rowsHeight, Self.maximumVisibleRows * rowHeight) + headerBlock + panelInset * 2
 
         let safe = view.bounds.insetBy(dx: 80, dy: 50)
         let gap: CGFloat = 16
