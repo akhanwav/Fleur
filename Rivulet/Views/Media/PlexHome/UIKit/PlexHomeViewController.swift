@@ -4282,9 +4282,9 @@ final class PlexHomeViewController: UIViewController {
             Perf.interval(.cellPrepare, key: perfKey) {
                 let item = section.items[indexPath.item]
                 cell.configure(item: displayed(item))
-                if section.kind == .searchGrid {
-                    cell.setSourceBadge(Self.sourceBadge(for: item.ref,
-                                                         labelsServers: JellyfinDataStore.shared.labelsServers))
+                // The tags name the server, so search drops the source badge.
+                if section.kind == .searchGrid, item.isMusic != true {
+                    cell.showVersionTags(for: item)
                 }
             }
             return cell

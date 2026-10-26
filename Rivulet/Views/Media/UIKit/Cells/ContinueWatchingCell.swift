@@ -237,13 +237,13 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
     /// The tag for the version this card would play, fetched once per title.
     private func loadQuality(for ref: MediaItemRef) {
-        if let known = ContinueWatchingQuality.known(for: ref) {
+        if let known = TitleQuality.known(for: ref) {
             showQuality(known)
             return
         }
         showQuality(nil)
         qualityTask = Task { [weak self] in
-            let label = await ContinueWatchingQuality.label(for: ref)
+            let label = await TitleQuality.label(for: ref)
             guard !Task.isCancelled, let self else { return }
             self.qualityTag.text = label
             self.qualityTag.isHidden = label == nil
@@ -381,13 +381,14 @@ enum ContinueWatchingArtwork {
     }
 }
 
-/// The quality of the version a Continue Watching card would play: the title's
+/// The quality of the version a card would play (Continue Watching, and the
+/// Search result and Recently Searched tags): the title's
 /// best version (`VersionRanking`), worded like the detail page's copies
 /// (`DetailCopySelection.qualityText`: "4K DV", "1080p HDR", "1080p"). Hub listings carry no HDR or Dolby Vision
 /// detail, so each title's full detail is read once, when its card first
 /// shows, and kept for the session.
 @MainActor
-enum ContinueWatchingQuality {
+enum TitleQuality {
     private static var labels: [MediaItemRef: String?] = [:]
     private static var inFlight: [MediaItemRef: Task<String?, Never>] = [:]
 

@@ -52,6 +52,8 @@ final class PosterCell: UICollectionViewCell {
 
     private let watchedBadge = PosterWatchedBadge()
     private let sourceBadge = SourceBadgeView(style: .onArtwork)
+    /// Search only: the result's quality and server, bottom-leading.
+    private let versionTags = VersionTagsView()
     /// Title and year under the frame (see `PosterCaptionView`).
     private let caption = PosterCaptionView()
     private let failureIcon = UIImageView()
@@ -143,6 +145,9 @@ final class PosterCell: UICollectionViewCell {
         sourceBadge.translatesAutoresizingMaskIntoConstraints = false
         overlayContainer.addSubview(sourceBadge)
 
+        versionTags.translatesAutoresizingMaskIntoConstraints = false
+        overlayContainer.addSubview(versionTags)
+
         // Failure icon: centred. Hidden by default; visible only when the
         // image load fails or the source URL is missing.
         failureIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -175,6 +180,9 @@ final class PosterCell: UICollectionViewCell {
             watchedBadge.trailingAnchor.constraint(equalTo: overlayContainer.trailingAnchor, constant: -10),
             sourceBadge.topAnchor.constraint(equalTo: overlayContainer.topAnchor, constant: 10),
             sourceBadge.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 10),
+            versionTags.bottomAnchor.constraint(equalTo: overlayContainer.bottomAnchor, constant: -10),
+            versionTags.leadingAnchor.constraint(equalTo: overlayContainer.leadingAnchor, constant: 10),
+            versionTags.trailingAnchor.constraint(lessThanOrEqualTo: overlayContainer.trailingAnchor, constant: -10),
 
             failureIcon.centerXAnchor.constraint(equalTo: overlayContainer.centerXAnchor),
             failureIcon.centerYAnchor.constraint(equalTo: overlayContainer.centerYAnchor),
@@ -201,6 +209,7 @@ final class PosterCell: UICollectionViewCell {
         let nowFocused = context.nextFocusedView === self
                       || context.nextFocusedView?.isDescendant(of: self) == true
         FocusRim.remove(in: posterView, focused: nowFocused, coordinator: coordinator)
+        versionTags.setFocused(nowFocused)
         let artSize = posterView.imageView.bounds.size
         let longSide = max(artSize.width, artSize.height)
         let scale = longSide > 0 ? 1 + MediaRowMetrics.focusGrowth / longSide : 1.1
@@ -245,6 +254,7 @@ final class PosterCell: UICollectionViewCell {
 
     func configure(item: PlexMetadata) {
         sourceBadge.text = nil
+        versionTags.clear()
         setSquare(["artist", "album", "track"].contains(item.type ?? ""))
         setFallbackQuery(ArtworkFallback.Query(item))
         let isAudio = ["artist", "album", "track"].contains(item.type ?? "")
@@ -258,6 +268,7 @@ final class PosterCell: UICollectionViewCell {
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
     func configure(item: MediaItem) {
         sourceBadge.text = nil
+        versionTags.clear()
         setSquare(item.isMusic == true)
         setFallbackQuery(item.isMusic == true ? nil : ArtworkFallback.Query(item))
         caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
@@ -271,6 +282,10 @@ final class PosterCell: UICollectionViewCell {
 
     /// Names the item's server; call after `configure` (which never adds one).
     func setSourceBadge(_ text: String?) { sourceBadge.text = text }
+
+    /// Tags a search result with its quality and server; call after
+    /// `configure`, which clears them.
+    func showVersionTags(for item: MediaItem) { versionTags.show(item: item) }
 
     /// The badge's text while it shows (tests).
     var sourceBadgeText: String? { sourceBadge.isHidden ? nil : sourceBadge.text }
@@ -350,6 +365,7 @@ final class PosterCell: UICollectionViewCell {
         clearArtwork()
         watchedBadge.isHidden = true
         sourceBadge.text = nil
+        versionTags.clear()
         fallbackQuery = nil
         triedFallback = false
         caption.configure(title: nil, year: nil)
