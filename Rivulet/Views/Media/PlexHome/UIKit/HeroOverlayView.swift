@@ -907,7 +907,7 @@ private final class MediaItemSlideView: UIView {
             // Prepare the fallback (hidden behind the caller's alpha hold)
             // but don't signal ready until the resolve completes — the hero
             // fades the whole slide in only once the logo outcome is known.
-            loadLogo(from: nil, fallbackTitle: item.title)
+            loadLogo(from: nil, fallbackTitle: item.seriesTitle ?? item.title)
             let itemID = item.ref.itemID
             currentResolveItemID = itemID
             let type: TMDBMediaType = item.kind == .movie ? .movie : .tv
@@ -918,7 +918,7 @@ private final class MediaItemSlideView: UIView {
                 await MainActor.run {
                     guard self.currentResolveItemID == itemID else { return }
                     if let url {
-                        self.loadLogo(from: url, fallbackTitle: item.title, onReady: onReady)
+                        self.loadLogo(from: url, fallbackTitle: item.seriesTitle ?? item.title, onReady: onReady)
                     } else {
                         onReady?()  // no logo exists — fallback title is final
                     }
@@ -927,7 +927,7 @@ private final class MediaItemSlideView: UIView {
         } else {
             logoResolveTask?.cancel()
             currentResolveItemID = nil
-            loadLogo(from: item.artwork.logo, fallbackTitle: item.title, onReady: onReady)
+            loadLogo(from: item.artwork.logo, fallbackTitle: item.seriesTitle ?? item.title, onReady: onReady)
         }
     }
 

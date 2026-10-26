@@ -559,7 +559,10 @@ final class MediaDetailChromeView: UIView {
             titleFallbackLabel.text = nil
             installLogoAspectConstraint(for: cachedLogo)
         } else {
-            titleFallbackLabel.text = item.title
+            // An episode or season stands in for its show here: the logo is
+            // the show's, so the words must be too ("Formula 1", not
+            // "Episode 99", on a show with no logo).
+            titleFallbackLabel.text = item.seriesTitle ?? item.title
             titleFallbackLabel.isHidden = false
             titleLogoImageView.isHidden = true
             titleLogoImageView.image = nil
