@@ -1227,13 +1227,23 @@ final class PlexHomeViewController: UIViewController {
         isSearchLoading = true
         searchError = nil
 
+        // The shows' begins-with read is the slow one on a large server
+        // (~6 s against ~0.5 s for movies), so it fills the TV Shows row in
+        // after the rest has shown rather than holding every row back.
+        let showMatches = Task { await plexTitleMatches(query, type: 2) }
         async let plex = plexSearch(query)
+        async let movieMatches = plexTitleMatches(query, type: 1)
         async let jellyfin = jellyfinSearch(query)
-        let (plexResult, jellyfinResult) = await (plex, jellyfin)
-        guard token == searchToken else { return }
+        let (plexResult, movies, jellyfinResult) = await (plex, movieMatches, jellyfin)
+        guard token == searchToken else { showMatches.cancel(); return }
 
         let filteredPlex = plexResult.map { filterSearchResults($0) }
-        searchResults = (try? plexResult.get()) ?? []
+        // Begin-with matches first: they are what a typed title start means,
+        // and `/search` alone loses them on a large server (see
+        // `PlexNetworkManager.searchTitles`). The filter keeps the first of
+        // any duplicate, so each title sits at its better rank.
+        let general = (try? plexResult.get()) ?? []
+        searchResults = movies + general
         jellyfinSearchResults = (try? jellyfinResult.get()) ?? []
         isSearchLoading = false
         searchError = Self.searchErrorMessage(plex: filteredPlex, jellyfin: jellyfinResult)
@@ -1246,6 +1256,32 @@ final class PlexHomeViewController: UIViewController {
         shelfOffsets = shelfOffsets.filter { !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) }
         applySnapshot(animated: false)
         reconfigureVisibleSearchCells()
+
+        let shows = await showMatches.value
+        guard token == searchToken, !shows.isEmpty else { return }
+        // Only the TV Shows row changes, so a Movies row being browsed keeps
+        // its place.
+        searchResults = movies + shows + general
+        applySnapshot(animated: false)
+    }
+
+    /// Plex titles of one type beginning with the query, then with "the "
+    /// before it when it has no article of its own: "never" finds "The
+    /// NeverEnding Story", as it would sorted under N. Failures read as no
+    /// matches; the general search still answers.
+    private func plexTitleMatches(_ query: String, type: Int) async -> [PlexMetadata] {
+        guard let serverURL = authManager.selectedServerURL,
+              let authToken = authManager.selectedServerToken else { return [] }
+        let lowered = query.lowercased()
+        let hasArticle = ["the ", "a ", "an "].contains { lowered.hasPrefix($0) }
+        let prefixes = hasArticle ? [query] : [query, "The \(query)"]
+        var matches: [PlexMetadata] = []
+        for prefix in prefixes {
+            guard !Task.isCancelled else { break }
+            matches += (try? await PlexNetworkManager.shared.searchTitles(
+                serverURL: serverURL, authToken: authToken, beginningWith: prefix, type: type)) ?? []
+        }
+        return matches
     }
 
     /// Dedupe + restrict to known types + pinned/visible libraries.

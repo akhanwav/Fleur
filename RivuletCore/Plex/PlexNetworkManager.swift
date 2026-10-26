@@ -2034,6 +2034,41 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return container.MediaContainer.Metadata ?? []
     }
 
+    /// Titles of one type (1 movie, 2 show) BEGINNING with `prefix`, across
+    /// every library, in sort-title order.
+    ///
+    /// `/search` caps each type at 15 and returns them alphabetically by full
+    /// title, so on a large server a query like "the never" fills its 15
+    /// movie slots with "A Thousand Clouds…", "All the Songs We Never Sang"
+    /// and never reaches "The NeverEnding Story". A begins-with filter is what
+    /// a typed title start means. Measured on a large remote server: movies
+    /// answer in ~0.5 s, shows in ~6 s. (`title<` is Plex's begins-with
+    /// operator; the same filter on `titleSort` is not served.)
+    func searchTitles(
+        serverURL: String,
+        authToken: String,
+        beginningWith prefix: String,
+        type: Int,
+        limit: Int = 40
+    ) async throws -> [PlexMetadata] {
+        guard var components = URLComponents(string: "\(serverURL)/library/all") else {
+            throw PlexAPIError.invalidURL
+        }
+        components.queryItems = [
+            URLQueryItem(name: "type", value: "\(type)"),
+            URLQueryItem(name: "title<", value: prefix),
+            URLQueryItem(name: "sort", value: "titleSort"),
+            URLQueryItem(name: "X-Plex-Container-Start", value: "0"),
+            URLQueryItem(name: "X-Plex-Container-Size", value: "\(limit)")
+        ]
+        guard let url = components.url else { throw PlexAPIError.invalidURL }
+        let container: PlexMediaContainerWrapper = try await request(
+            url,
+            headers: plexHeaders(authToken: authToken)
+        )
+        return container.MediaContainer.Metadata ?? []
+    }
+
     // MARK: - Live TV
 
     /// Check if the Plex server supports Live TV
