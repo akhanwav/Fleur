@@ -27,14 +27,19 @@ import SwiftUI
 
 struct AetherVideoSurfaceView: UIViewRepresentable {
     let player: AetherPlayer
+    /// The title's background art, held over the video for an HDR or Dolby
+    /// Vision title on a background return (`AetherPlayer.HeldPicture.artwork`).
+    var artwork: UIImage?
 
     func makeUIView(context: Context) -> AetherSurfaceContainerView {
         let view = AetherSurfaceContainerView()
+        view.artwork = artwork
         view.attach(player)
         return view
     }
 
     func updateUIView(_ uiView: AetherSurfaceContainerView, context: Context) {
+        uiView.artwork = artwork
         uiView.attach(player)
     }
 
@@ -49,6 +54,7 @@ final class AetherSurfaceContainerView: UIView {
     private let stillView = UIImageView()
     private weak var boundPlayer: AetherPlayer?
     private var heldFrameCancellable: AnyCancellable?
+    var artwork: UIImage?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -60,9 +66,7 @@ final class AetherSurfaceContainerView: UIView {
         }
         stillView.isUserInteractionEnabled = false
         stillView.isHidden = true
-        // The frame is read in extended range, so an HDR picture keeps its
-        // highlights on a panel that is in HDR.
-        stillView.preferredImageDynamicRange = .high
+        stillView.clipsToBounds = true
     }
 
     @available(*, unavailable)
@@ -87,14 +91,23 @@ final class AetherSurfaceContainerView: UIView {
         showHeldFrame(nil, gravity: .resizeAspect)
     }
 
-    private func showHeldFrame(_ frame: CGImage?, gravity: AVLayerVideoGravity) {
-        stillView.image = frame.map(UIImage.init(cgImage:))
-        stillView.isHidden = frame == nil
-        switch gravity {
-        case .resizeAspectFill: stillView.contentMode = .scaleAspectFill
-        case .resize: stillView.contentMode = .scaleToFill
-        default: stillView.contentMode = .scaleAspectFit
+    private func showHeldFrame(_ picture: AetherPlayer.HeldPicture?, gravity: AVLayerVideoGravity) {
+        switch picture {
+        case .frame(let frame):
+            stillView.image = UIImage(cgImage: frame)
+            switch gravity {
+            case .resizeAspectFill: stillView.contentMode = .scaleAspectFill
+            case .resize: stillView.contentMode = .scaleToFill
+            default: stillView.contentMode = .scaleAspectFit
+            }
+        case .artwork:
+            // Art is not the video's frame: it fills the screen, as on the
+            // player's loading screen.
+            stillView.image = artwork
+            stillView.contentMode = .scaleAspectFill
+        case nil:
+            stillView.image = nil
         }
-        stillView.clipsToBounds = true
+        stillView.isHidden = stillView.image == nil
     }
 }

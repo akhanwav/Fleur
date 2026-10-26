@@ -150,21 +150,35 @@ final class AetherPlayer: PlayerProtocol {
     private var foregroundReloadInFlight = false
     /// The running rebuild was started paused (see `stateSubject`'s sink).
     private var pausedRebuildInFlight = false
+    /// Waits for a rebuilt session to settle (`reconcileTransportAfterReload`).
+    private var settleCancellable: AnyCancellable?
+    /// Play was pressed during a paused rebuild; the session reads as a wait,
+    /// not paused, until it plays.
+    private var playAwaitsRebuild = false
 
     /// Non-nil while a torn-down session still needs its rebuild: the paused
     /// rebuild on return failed or timed out, so play() retries it. Holds the
     /// background timestamp so the teardown-drain wait still applies.
     private var pendingReloadSince: Date?
 
-    /// The picture on screen when the app left, shown over the video from
-    /// background until the rebuilt session presents (`AetherVideoSurfaceView`).
-    /// The teardown releases the item, so without it the paused screen came
-    /// back black for the whole rebuild. VOD only: a live return rejoins the
-    /// edge, where the old picture is not what plays next.
-    @Published private(set) var heldFrame: CGImage?
-    /// The frame read on resign-active, published only if the app actually
+    /// What covers the video from background until the rebuilt session
+    /// presents (`AetherVideoSurfaceView`). The teardown releases the item, so
+    /// without it the paused screen came back black for the whole rebuild.
+    /// VOD only: a live return rejoins the edge, where the old picture is not
+    /// what plays next.
+    enum HeldPicture {
+        /// The exact paused frame. SDR only.
+        case frame(CGImage)
+        /// The title's background art. HDR and Dolby Vision: a frame read
+        /// back from those comes out in the wrong colours (measured on a 4K
+        /// DV title: purple and green), so the picture is not attempted.
+        case artwork
+    }
+
+    @Published private(set) var heldFrame: HeldPicture?
+    /// The picture read on resign-active, published only if the app actually
     /// backgrounds (the screensaver and Control Center resign without one).
-    private var capturedFrame: CGImage?
+    private var capturedFrame: HeldPicture?
     private var frameCaptureTask: Task<Void, Never>?
     /// The startup generation the held frame and position belong to; the
     /// next one that reaches `.presenting` takes both down.
@@ -230,6 +244,14 @@ final class AetherPlayer: PlayerProtocol {
                 if self.pausedRebuildInFlight, aetherState == .loading {
                     self.stateSubject.send(.paused)
                     return
+                }
+                // Play was pressed during that rebuild: a wait until it plays.
+                if self.playAwaitsRebuild {
+                    if aetherState == .loading || aetherState == .paused {
+                        self.stateSubject.send(.buffering)
+                        return
+                    }
+                    self.playAwaitsRebuild = false
                 }
                 self.stateSubject.send(Self.translate(aetherState, errorInfo: errorInfo))
             }
@@ -694,6 +716,14 @@ final class AetherPlayer: PlayerProtocol {
                 // wedges the session just as badly.
                 print("[AetherPlayer] foreground reload failed: \(error)")
                 self.pendingReloadSince = since
+                // Superseded by a stop, another load, or a second trip to the
+                // background: not a failure the user has to act on.
+                guard !(error is CancellationError), !Task.isCancelled else { return }
+                // Otherwise say so, with Try Again, rather than leave a picture
+                // that no press can start.
+                self.releaseHeldFrame()
+                self.playAwaitsRebuild = false
+                self.stateSubject.send(.failed(.loadFailed("Resuming after the app returned: \(error)")))
             }
         }
     }
@@ -733,14 +763,29 @@ final class AetherPlayer: PlayerProtocol {
 
     /// Play/pause presses during a rebuild only record intent (see play());
     /// the rebuilt session takes the latest one here.
+    ///
+    /// On the native path the rebuild's load returns while the engine is still
+    /// `.loading`: a paused mount settles to `.paused` only when the item is
+    /// ready, moments later. Reconciling at the return and ignoring `.loading`
+    /// dropped every Play pressed during the rebuild (measured on an Apple TV
+    /// against a remote server: Play recorded, the session still paused 12 s
+    /// later). So an unsettled session is reconciled once it settles.
     private func reconcileTransportAfterReload() {
+        settleCancellable = nil
         // Not into a session still torn down (a cancelled or failed rebuild).
-        guard !engine.needsForegroundVideoRestore,
-              engine.state == .playing || engine.state == .paused else { return }
-        if userIntendsToPlay, engine.state == .paused {
+        guard !engine.needsForegroundVideoRestore else { return }
+        switch engine.state {
+        case .loading:
+            settleCancellable = engine.$state
+                .first { $0 != .loading }
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.reconcileTransportAfterReload() }
+        case .paused where userIntendsToPlay:
             engine.play()
-        } else if !userIntendsToPlay, engine.state == .playing {
+        case .playing where !userIntendsToPlay:
             engine.pause()
+        default:
+            break
         }
     }
 
@@ -750,26 +795,28 @@ final class AetherPlayer: PlayerProtocol {
         frameCaptureTask?.cancel()
         capturedFrame = nil
         guard !engine.isLive, engine.state == .playing || engine.state == .paused else { return }
+        guard engine.sourceVideoFormat == .sdr else {
+            capturedFrame = .artwork
+            return
+        }
         frameCaptureTask = Task { [weak self] in
             guard let self else { return }
             let frame = await self.readDisplayedFrame()
             print("[AetherPlayer] held frame read: \(frame.map { "\($0.width)x\($0.height)" } ?? "none")")
             guard !Task.isCancelled else { return }
-            self.capturedFrame = frame
+            self.capturedFrame = frame.map(HeldPicture.frame) ?? .artwork
             // Read after the app already went: show it now.
             self.publishCapturedFrame()
         }
     }
 
-    /// The paused picture, exact to the frame. The native path reads the item
-    /// the way the engine holds a picture over an audio switch (an output
+    /// The paused SDR picture, exact to the frame. The native path reads the
+    /// item the way the engine holds a picture over an audio switch (an output
     /// added to the paused item vends its frame in ~20 ms); the software path
     /// decodes it out of the session's packet cache, or from the source when
-    /// the cache has moved on. nil for Dolby Vision without a displayable
-    /// base layer, whose output frame is not its colour.
+    /// the cache has moved on.
     private func readDisplayedFrame() async -> CGImage? {
         if let item = engine.currentAVPlayerItem {
-            guard engine.sourceDVProfile != 5 else { return nil }
             guard let buffer = await Self.displayedPixelBuffer(of: item, playing: (currentAVPlayer?.rate ?? 0) != 0)
             else { return nil }
             return Self.image(from: buffer)
@@ -800,13 +847,13 @@ final class AetherPlayer: PlayerProtocol {
         return nil
     }
 
-    /// 1920 wide at most, in extended sRGB so an HDR frame keeps its highlights.
+    /// 1920 wide at most.
     private static func image(from buffer: CVPixelBuffer) -> CGImage? {
         var image = CIImage(cvPixelBuffer: buffer)
         let scale = min(1, 1920 / max(image.extent.width, 1))
         if scale < 1 { image = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) }
-        guard let space = CGColorSpace(name: CGColorSpace.extendedSRGB) else { return nil }
-        return frameContext.createCGImage(image, from: image.extent, format: .RGBAh, colorSpace: space)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        return frameContext.createCGImage(image, from: image.extent, format: .RGBA8, colorSpace: space)
     }
 
     private static let frameContext = CIContext()
@@ -1396,7 +1443,16 @@ final class AetherPlayer: PlayerProtocol {
         userIntendsToPlay = true
         // A rebuild is running: it plays on completion (reconcileTransportAfterReload).
         // Playing into the torn-down session would flip its state with no item.
-        if foregroundReloadInFlight { return }
+        if foregroundReloadInFlight {
+            // Show the press was taken: the rebuild stops reading as a paused
+            // session and shows as a wait, the way a buffering stall does.
+            if pausedRebuildInFlight {
+                pausedRebuildInFlight = false
+                playAwaitsRebuild = true
+                stateSubject.send(.buffering)
+            }
+            return
+        }
         if let since = pendingReloadSince {
             // The paused rebuild on return failed: retry it, playing. The flag
             // stays armed until a rebuild succeeds, so every Play press after a
@@ -1408,11 +1464,19 @@ final class AetherPlayer: PlayerProtocol {
     }
     func pause() {
         userIntendsToPlay = false
+        if playAwaitsRebuild {
+            // Paused again before the rebuild played: back to reading paused.
+            playAwaitsRebuild = false
+            pausedRebuildInFlight = foregroundReloadInFlight
+            stateSubject.send(.paused)
+        }
         if foregroundReloadInFlight { return }
         engine.pause()
     }
     func stop() {
         releaseHeldFrame()
+        settleCancellable = nil
+        playAwaitsRebuild = false
         foregroundReloadTask?.cancel()
         pendingReloadSince = nil
         userIntendsToPlay = false

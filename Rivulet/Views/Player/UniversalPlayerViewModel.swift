@@ -1732,6 +1732,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Playback Controls
 
     func retryPlayback() async {
+        // Pick up where it stopped, not at the item's original start: a
+        // failure mid-session (a rebuild after returning to the app) has a
+        // real position to return to.
+        if currentTime > 1 { startOffset = currentTime }
         // Reset error state and retry
         errorMessage = nil
         playbackState = .loading
