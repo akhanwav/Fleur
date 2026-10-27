@@ -39,6 +39,26 @@ struct PreviewEntrySnapshot {
     }
 }
 
+extension UIView {
+    /// The band of the window, full height, that this view's content can show
+    /// in across: the window's width cut by every clipping view from here up.
+    /// Nil when nothing narrows it, the full-screen case.
+    func horizontalClipInWindow() -> CGRect? {
+        guard let window else { return nil }
+        var band = window.bounds
+        var current: UIView? = self
+        while let view = current, view !== window {
+            if view.clipsToBounds {
+                let frame = view.convert(view.bounds, to: window)
+                band.origin.x = max(band.minX, frame.minX)
+                band.size.width = max(0, min(band.maxX, frame.maxX) - band.minX)
+            }
+            current = view.superview
+        }
+        return band.width < window.bounds.width ? band : nil
+    }
+}
+
 /// A tile that flies into the preview carousel as its artwork alone.
 @MainActor
 protocol PreviewSourceTile: UICollectionViewCell {

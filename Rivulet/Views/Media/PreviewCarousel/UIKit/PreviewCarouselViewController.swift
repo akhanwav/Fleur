@@ -52,6 +52,9 @@ final class PreviewCarouselViewController: UIViewController {
     private var dismissSourceTarget: PreviewSourceTarget?
     /// The source row's tiles as they are now, for the exit after paging.
     var freshEntrySnapshots: ((PreviewSourceTarget?) -> [PreviewEntrySnapshot])?
+    /// The window band the source row draws in, when something clips it across
+    /// (Search beside the grid keyboard). See `neighbourFlights`.
+    var sourceClip: (() -> CGRect?)?
     /// Runs once however the carousel goes away: the presenter un-hides its tiles.
     var onTeardown: (() -> Void)?
 
@@ -127,6 +130,12 @@ final class PreviewCarouselViewController: UIViewController {
     /// the hidden live carousel during entry, animate to carousel card frames,
     /// then fade out as the real backdrop plane + cells fade in.
     private let entrySnapshotContainer = UIView()
+
+    /// The neighbours' flying windows, masked to `sourceClip`. A neighbour flies
+    /// between a tile inside that band and a card off to one side, so beside the
+    /// grid keyboard it crossed the keys as a stray poster. The centred card
+    /// stays unmasked: it starts full width, as the whole carousel does.
+    private let neighbourFlights = UIView()
 
     /// Below-fold detail surface. Sits ABOVE the collection view (which holds
     /// the hero chrome) and wakes up only after the expand morph completes.
@@ -316,6 +325,16 @@ final class PreviewCarouselViewController: UIViewController {
             entrySnapshotContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             entrySnapshotContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             entrySnapshotContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        neighbourFlights.translatesAutoresizingMaskIntoConstraints = false
+        // Above the tileless peeks, below the centred card (zPosition 100).
+        neighbourFlights.layer.zPosition = 50
+        entrySnapshotContainer.addSubview(neighbourFlights)
+        NSLayoutConstraint.activate([
+            neighbourFlights.topAnchor.constraint(equalTo: entrySnapshotContainer.topAnchor),
+            neighbourFlights.leadingAnchor.constraint(equalTo: entrySnapshotContainer.leadingAnchor),
+            neighbourFlights.trailingAnchor.constraint(equalTo: entrySnapshotContainer.trailingAnchor),
+            neighbourFlights.bottomAnchor.constraint(equalTo: entrySnapshotContainer.bottomAnchor)
         ])
 
         // Below-fold detail surface above the collection view (chrome). Hidden
@@ -732,12 +751,31 @@ final class PreviewCarouselViewController: UIViewController {
                     ? 100
                     : CGFloat(50 - abs(entry.itemIndex - selectedIndex))
                 entryMorphWindows.append((window, entry.itemIndex, entry.sourceFrame))
-                entrySnapshotContainer.addSubview(window)
+                flightParent(for: entry.itemIndex).addSubview(window)
             }
+            applySourceClip()
         }
         for entry in entryMorphWindows {
             entry.window.setWindow(view.convert(entry.sourceFrame, from: nil))
         }
+    }
+
+    private func flightParent(for index: Int) -> UIView {
+        index == selectedIndex ? entrySnapshotContainer : neighbourFlights
+    }
+
+    /// Mask the neighbours to the source row's band, read now: the presenter's
+    /// layout is the one the tiles fly from or land on.
+    private func applySourceClip() {
+        guard let band = sourceClip?() else {
+            neighbourFlights.mask = nil
+            return
+        }
+        let inView = view.convert(band, from: nil)
+        let mask = neighbourFlights.mask ?? UIView()
+        mask.backgroundColor = .black
+        mask.frame = CGRect(x: inView.minX, y: 0, width: inView.width, height: view.bounds.height)
+        neighbourFlights.mask = mask
     }
 
     /// The card's artwork for a flying window, placed as the backdrop plane
@@ -1902,9 +1940,10 @@ final class PreviewCarouselViewController: UIViewController {
             window.setWindow(carouselFrameInView(for: tile.itemIndex))
             window.tileAlpha = 0
             window.dimAlpha = flightDim(for: tile.itemIndex)
-            entrySnapshotContainer.addSubview(window)
+            flightParent(for: tile.itemIndex).addSubview(window)
             windows.append((window, tile))
         }
+        applySourceClip()
         let peeks = tilelessPeekWindows(flying: Set(windows.map(\.tile.itemIndex)))
 
         backdropPlane.alpha = 0

@@ -6160,6 +6160,8 @@ final class PlexHomeViewController: UIViewController {
             }
         )
         carouselVC.onTeardown = { [weak self] in self?.showPreviewTiles() }
+        // Nil everywhere but Search beside the grid keyboard.
+        carouselVC.sourceClip = { [weak self] in self?.collectionView.horizontalClipInWindow() }
         // The row's tiles as they are now, for the exit after paging: shown
         // for the capture, hidden again under the still-opaque carousel.
         carouselVC.freshEntrySnapshots = { [weak self] target in
@@ -6273,7 +6275,19 @@ final class PlexHomeViewController: UIViewController {
                 // screen before the modal disappears so focus does not flash
                 // on the old source tile or visibly jump to the new one.
                 let rowPath = IndexPath(item: 0, section: indexPath.section)
-                collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
+                // Search rows rest where its minimal reveal left them, not
+                // centred, so centring here moved the page under the exit
+                // flight. The row the carousel opened from is still on screen:
+                // leave it there.
+                let keepsPlace: Bool
+                if case .search = mode {
+                    keepsPlace = collectionView.indexPathsForVisibleItems.contains(rowPath)
+                } else {
+                    keepsPlace = false
+                }
+                if !keepsPlace {
+                    collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
+                }
                 collectionView.layoutIfNeeded()
                 if let row = collectionView.cellForItem(at: rowPath) as? ShelfRowCell {
                     if routeFocus {
@@ -7687,6 +7701,10 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // row's height (~84pt drift). Deeper rows centre as usual.
             if let heroIndex = heroSectionIndex, nextSectionIndex == heroIndex + 1 {
                 scrollFirstRowToHeroCollapsed(heroSectionIndex: heroIndex)
+            } else if case .search = mode, pendingPreviewRestore != nil {
+                // Back from the carousel onto a row Search left where its
+                // minimal reveal put it: centring it scrolled the page just
+                // after the return.
             } else {
                 scrollSectionIntoView(sectionIndex: nextSectionIndex)
             }
