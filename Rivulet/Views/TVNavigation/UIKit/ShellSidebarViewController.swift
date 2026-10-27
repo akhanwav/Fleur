@@ -445,11 +445,20 @@ final class ShellSidebarViewController: UIViewController {
     /// Collapsed-state pill visibility, driven by the below-top focus signal.
     func setPillHidden(_ hidden: Bool) {
         pillHidden = hidden
-        guard state == .collapsed, transitionAnimator == nil else { return }
-        UIView.animate(withDuration: 0.18) {
+        guard state == .collapsed else { return }
+        let apply = {
             self.cardView.alpha = hidden ? 0 : 1
+            self.pillStack.alpha = hidden ? 0 : 1
             self.pillChevron.alpha = hidden ? 0 : 1
         }
+        // Mid-collapse (the page posts below-top as focus lands in it): join
+        // the morph rather than wait for its end, or the pill shows for the
+        // whole spring and then vanishes.
+        if let transitionAnimator, transitionAnimator.state == .active {
+            transitionAnimator.addAnimations(apply)
+            return
+        }
+        UIView.animate(withDuration: 0.18, animations: apply)
     }
 
     // MARK: Lifecycle
@@ -541,7 +550,12 @@ final class ShellSidebarViewController: UIViewController {
             self.cardView.layer.cornerRadius = targetRadius
             self.dimmingView.alpha = expanded ? Metrics.dimAlpha : 0
             self.collectionView.alpha = expanded ? 1 : 0
-            self.pillStack.alpha = expanded ? 0 : 1
+            // Collapsing onto a page with no pill (Search, Music, Live TV, or
+            // one scrolled below its top): the panel fades as it shrinks. The
+            // pill's icon and title faded IN here and the card only hid at
+            // completion, so the page name flashed for the length of the spring.
+            self.pillStack.alpha = expanded || self.pillHidden ? 0 : 1
+            if !expanded, self.pillHidden { self.cardView.alpha = 0 }
             self.pillChevron.alpha = chevronTarget
         }
         animator.addCompletion { _ in
@@ -551,12 +565,13 @@ final class ShellSidebarViewController: UIViewController {
             if self.state == .collapsed {
                 // A hidden list is invisible to the focus engine; alpha 0 is not.
                 self.collectionView.isHidden = true
-                // pillHidden can flip mid-morph: a below-top focus change posts
-                // while this animator is in flight, and setPillHidden bails on a
-                // live transition. Reconcile BOTH the card and its chevron here,
-                // or the chevron is left stranded visible over a hidden pill.
+                // pillHidden can flip mid-morph (a below-top focus change posts
+                // while this animator is in flight). setPillHidden joins a
+                // running collapse, but not an expand that is reversed into
+                // one, so settle the card, its title and its chevron here.
                 let pillAlpha: CGFloat = self.pillHidden ? 0 : 1
                 self.cardView.alpha = pillAlpha
+                self.pillStack.alpha = pillAlpha
                 self.pillChevron.alpha = pillAlpha
             }
             self.setNeedsFocusUpdate()
