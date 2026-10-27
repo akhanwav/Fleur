@@ -287,6 +287,65 @@ actor LibraryGUIDIndex {
         sections[position >> 32].entries[position & 0xFFFF_FFFF].metadata
     }
 
+    // MARK: - Title search (Search suggestions)
+
+    private struct TitleRecord: Sendable {
+        let position: Int
+        let keys: TitleMatcher.Keys
+        let tmdbId: Int?
+        let isMovie: Bool
+    }
+
+    /// Match keys for every title, built on the first search after a rebuild.
+    private var titleRecords: [TitleRecord] = []
+    private var titleRecordsGeneration = -1
+
+    struct TitleHit: Sendable {
+        let metadata: PlexMetadata
+        let tmdbId: Int?
+        let match: TitleMatch
+    }
+
+    /// The titles answering `query`, best first, at most `limit`. A title in
+    /// two libraries (a 4K and a 1080p copy) counts once.
+    func titleMatches(_ query: TitleMatcher.Query, limit: Int) -> [TitleHit] {
+        if titleRecordsGeneration != generation {
+            titleRecords = sections.enumerated().flatMap { sectionIndex, section in
+                section.entries.enumerated().compactMap { entryIndex, entry -> TitleRecord? in
+                    guard let title = entry.title, entry.type == "movie" || entry.type == "show" else { return nil }
+                    return TitleRecord(
+                        position: sectionIndex << 32 | entryIndex,
+                        keys: TitleMatcher.Keys(title: title),
+                        tmdbId: entry.externalGuids.lazy.compactMap(Self.tmdbId(from:)).first,
+                        isMovie: entry.type == "movie")
+                }
+            }
+            titleRecordsGeneration = generation
+        }
+        var hits: [(record: TitleRecord, match: TitleMatch)] = []
+        for record in titleRecords {
+            if let match = TitleMatcher.match(record.keys, query) { hits.append((record, match)) }
+        }
+        // The closer title first within a kind of match: "Alien" before
+        // "Alien: Romulus" for "alien".
+        hits.sort {
+            $0.match.rank != $1.match.rank
+                ? $0.match.rank < $1.match.rank
+                : $0.record.keys.full.count < $1.record.keys.full.count
+        }
+        var seen = Set<String>()
+        var out: [TitleHit] = []
+        for hit in hits {
+            let id = hit.record.tmdbId.map { "\(hit.record.isMovie ? "movie" : "tv"):\($0)" }
+                ?? hit.record.keys.full
+            guard seen.insert(id).inserted else { continue }
+            out.append(TitleHit(metadata: metadata(at: hit.record.position),
+                                tmdbId: hit.record.tmdbId, match: hit.match))
+            if out.count == limit { break }
+        }
+        return out
+    }
+
     // MARK: - Ingestion
 
     private func ingest(_ item: Entry, at position: Int) {

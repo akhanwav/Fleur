@@ -65,6 +65,10 @@ nonisolated struct HomeSectionID: Hashable, Sendable {
     static let searchPrompt = HomeSectionID(raw: "search.prompt")
     static let searchState = HomeSectionID(raw: "search.state")
     static func searchGroup(_ key: String) -> HomeSectionID { .init(raw: "search.group:\(key)") }
+    /// Search's suggestions row while typing, and its Trending row under
+    /// Recently Searched while the field is empty.
+    static let searchSuggestions = searchGroup("suggestions")
+    static let searchTrending = searchGroup("trending")
     static func hub(_ hubID: String) -> HomeSectionID { .init(raw: "hub:\(hubID)") }
 }
 
@@ -1083,6 +1087,16 @@ final class PlexHomeViewController: UIViewController {
     /// (artist/album → music detail, track → play now).
     private var searchGroupMetas: [HomeSectionID: [PlexMetadata]] = [:]
 
+    /// The suggestions row (`SearchSuggestions`): your library's titles at
+    /// once, TMDB's merged in when they arrive.
+    private var suggestionItems: [MediaItem] = []
+    private var suggestionTask: Task<Void, Never>?
+    private var suggestionToken = 0
+    private static let suggestionDebounceNs: UInt64 = 250_000_000
+    /// TMDB's trending this week, under Recently Searched while the field is empty.
+    private var trendingItems: [MediaItem] = []
+    private var trendingTask: Task<Void, Never>?
+
     private static let searchMinQueryLength = 2
     /// The Apple TV app has none; this spares a remote server a request per key.
     private static let searchDebounceNs: UInt64 = 100_000_000
@@ -1153,6 +1167,8 @@ final class PlexHomeViewController: UIViewController {
         // that is actually visible.
         scrollToContentTop()
 
+        scheduleSuggestions(for: trimmed)
+
         guard trimmed.count >= Self.searchMinQueryLength else {
             searchTask?.cancel()
             searchToken += 1
@@ -1175,6 +1191,78 @@ final class PlexHomeViewController: UIViewController {
             if Task.isCancelled { return }
             await self?.performSearch(query: trimmed, token: currentToken)
         }
+    }
+
+    /// Suggestions for `query` after a pause in typing. The library's arrive
+    /// first; TMDB's are merged in after. A newer keystroke drops both.
+    private func scheduleSuggestions(for query: String) {
+        suggestionTask?.cancel()
+        suggestionToken += 1
+        guard query.count >= Self.searchMinQueryLength else {
+            suggestionItems = []
+            loadTrendingIfNeeded()
+            return
+        }
+        let token = suggestionToken
+        suggestionTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.suggestionDebounceNs)
+            guard !Task.isCancelled else { return }
+            let matcherQuery = SearchSuggestions.query(for: query)
+            let library = await SearchSuggestions.library(matcherQuery)
+            guard let self, token == self.suggestionToken else { return }
+            self.showSuggestions(SearchSuggestions.rank(library))
+            let tmdb = await SearchSuggestions.tmdb(matcherQuery)
+            guard token == self.suggestionToken else { return }
+            self.showSuggestions(SearchSuggestions.rank(SearchSuggestions.merge(library, tmdb)))
+        }
+    }
+
+    private func showSuggestions(_ suggestions: [SearchSuggestion]) {
+        let items = suggestions.compactMap(suggestionItem)
+        guard items.map(\.ref) != suggestionItems.map(\.ref) else { return }
+        suggestionItems = items
+        applySnapshot(animated: false)
+    }
+
+    /// The copy you have, so the page offers Play and Ways to Watch; the TMDB
+    /// title otherwise.
+    private func suggestionItem(_ suggestion: SearchSuggestion) -> MediaItem? {
+        if let owned = suggestion.owned { return mediaItemMapper()(owned) }
+        return suggestion.tmdb.map(TMDBMediaMapper.item)
+    }
+
+    /// Trending this week, read once per visit to the empty page (TMDB's list
+    /// is cached for the hour).
+    private func loadTrendingIfNeeded() {
+        guard case .search = mode, trendingItems.isEmpty, trendingTask == nil else { return }
+        trendingTask = Task { [weak self] in
+            let trending = await TMDBDiscoverService.shared.trendingThisWeek()
+            var items: [MediaItem] = []
+            for entry in trending.prefix(20) {
+                if let owned = await LibraryGUIDIndex.shared.lookup(tmdbId: entry.id, type: entry.mediaType) {
+                    items.append(self?.mediaItemMapper()(owned) ?? TMDBMediaMapper.item(entry))
+                } else {
+                    items.append(TMDBMediaMapper.item(entry))
+                }
+            }
+            guard let self else { return }
+            self.trendingTask = nil
+            guard !items.isEmpty else { return }
+            self.trendingItems = items
+            self.applySnapshot(animated: false)
+        }
+    }
+
+    /// The second line under a suggestion or trending poster: "1984 · Movie".
+    static func suggestionDetail(for item: MediaItem) -> String {
+        let kind = item.kind == .show ? "TV Show" : "Movie"
+        return item.year.map { "\($0) · \(kind)" } ?? kind
+    }
+
+    /// Suggestion and Trending tiles: title, year and kind, and whether it is
+    /// on your servers, in place of the results' quality and server tags.
+    static func isSuggestionRow(_ id: HomeSectionID) -> Bool {
+        id == .searchSuggestions || id == .searchTrending
     }
 
     /// Immediate search on keyboard submit (skips the debounce).
@@ -1337,17 +1425,27 @@ final class PlexHomeViewController: UIViewController {
         searchGroupMetas = [:]
 
         if trimmedSearchQuery.count < Self.searchMinQueryLength {
-            return [.searchPrompt()]
+            // Trending sits under the grid, one Down from its last row: the
+            // grid keeps the whole page beside the keyboard.
+            guard !trendingItems.isEmpty else { return [.searchPrompt()] }
+            return [.searchPrompt(), .searchGrid(id: .searchTrending, title: "Trending", items: trendingItems)]
+        }
+        // Suggestions lead, above the servers' own results.
+        var leading: [HomeSectionData] = []
+        if !suggestionItems.isEmpty {
+            leading.append(.searchGrid(id: .searchSuggestions, title: "Suggestions", items: suggestionItems))
         }
         // A request in flight keeps the previous results on screen, as the
         // Apple TV app does; the state cell shows only with nothing to keep.
         if searchError != nil {
-            return [.searchState()]
+            return leading + [.searchState()]
         }
 
         let filtered = filteredSearchResults
         let jellyfin = jellyfinSearchResults
-        guard !filtered.isEmpty || !jellyfin.isEmpty else { return [.searchState()] }
+        // With suggestions showing, "Searching" and "No Results" would only
+        // push them about.
+        guard !filtered.isEmpty || !jellyfin.isEmpty else { return leading.isEmpty ? [.searchState()] : leading }
 
         // One row per kind, each mixing both servers (Jellyfin music is not
         // browsable yet, so Music is Plex's). Movies and shows are separate
@@ -1362,7 +1460,7 @@ final class PlexHomeViewController: UIViewController {
             ("music", "Music", filtered.filter { $0.type == "artist" || $0.type == "album" || $0.type == "track" }, [])
         ]
 
-        var sections: [HomeSectionData] = []
+        var sections = leading
         for group in groups where !(group.metas.isEmpty && group.jellyfin.isEmpty) {
             let id = HomeSectionID.searchGroup(group.key)
             sections.append(.searchGrid(id: id, title: group.title,
@@ -1424,7 +1522,8 @@ final class PlexHomeViewController: UIViewController {
         // Recently Searched is written HERE, on open, not on submit: the row
         // shows what you went to, not what you typed (#292). Music returns
         // above, so its 1:1 artwork never lands in a 2:3 card.
-        if indexPath.item < section.items.count {
+        // Trending was not searched for.
+        if indexPath.item < section.items.count, section.id != .searchTrending {
             saveRecentSearchItem(section.items[indexPath.item])
         }
         presentPreview(forSection: section, indexPath: indexPath)
@@ -2908,6 +3007,7 @@ final class PlexHomeViewController: UIViewController {
         // up. Wiring it means our own scroll-to-top restores the field.
         if case .search = mode {
             setContentScrollView(collectionView, for: .top)
+            loadTrendingIfNeeded()
         }
         // SwiftUI: `.padding(.top, heroActive ? 0 : 48)` on the content
         // VStack. When the hero is off, the first row (Continue Watching)
@@ -4383,8 +4483,11 @@ final class PlexHomeViewController: UIViewController {
             Perf.interval(.cellPrepare, key: perfKey) {
                 let item = section.items[indexPath.item]
                 cell.configure(item: displayed(item))
-                // The tags name the server, so search drops the source badge.
-                if section.kind == .searchGrid, item.isMusic != true {
+                if Self.isSuggestionRow(section.id) {
+                    cell.setCaptionDetail(Self.suggestionDetail(for: item))
+                    if !item.isMetadataOnly { cell.showTag("On your servers") }
+                } else if section.kind == .searchGrid, item.isMusic != true {
+                    // The tags name the server, so search drops the source badge.
                     cell.showVersionTags(for: item)
                     if item.kind == .show { cell.showSeasonCount(for: item) }
                 }
@@ -4487,6 +4590,8 @@ final class PlexHomeViewController: UIViewController {
                 return
             }
             let item = section.items[itemIndex]
+            // A TMDB title has none of the Plex actions.
+            if item.isMetadataOnly { return }
             // No Ways to Watch: the result's tags already name its quality and
             // servers, and switching copies is the detail page's.
             presentTileMenu(for: item, isContinueWatching: false, offersWaysToWatch: false)

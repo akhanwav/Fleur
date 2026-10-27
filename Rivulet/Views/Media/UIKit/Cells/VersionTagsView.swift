@@ -63,6 +63,12 @@ final class VersionTagsView: UIStackView {
         }
     }
 
+    /// A fixed label in the quality tag's place, nothing looked up.
+    func showLabel(_ text: String) {
+        clear()
+        setQuality(text)
+    }
+
     func clear() {
         qualityTask?.cancel()
         qualityTask = nil

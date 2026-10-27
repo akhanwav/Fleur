@@ -87,6 +87,9 @@ final class SearchRecentsCell: UICollectionViewCell {
     private let emptyLabel = UILabel()
     private let grid = UIStackView()
     private var cards: [FocusableActionButton] = []
+    /// The card focus last left from, so coming back (Up from Trending)
+    /// lands where it was rather than on the first card.
+    private weak var lastFocusedCard: FocusableActionButton?
     /// One per visible card, cancelled on reconfigure/reuse.
     private var artworkTasks: [Task<Void, Never>] = []
     private var recentItems: [MediaItem] = []
@@ -193,13 +196,18 @@ final class SearchRecentsCell: UICollectionViewCell {
     /// (A collection view enumerates focus items as CELLS, so a non-focusable
     /// cell would hide the cards from the engine entirely.)
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        grid.isHidden ? super.preferredFocusEnvironments : cards + [clearButton]
+        guard !grid.isHidden else { return super.preferredFocusEnvironments }
+        let remembered = lastFocusedCard.map { [$0 as UIFocusEnvironment] } ?? []
+        return remembered + cards + [clearButton]
     }
 
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         headerGuide.isEnabled = context.nextFocusedView !== clearButton
+        if let card = context.nextFocusedView as? FocusableActionButton, cards.contains(card) {
+            lastFocusedCard = card
+        }
     }
 
     override func prepareForReuse() {

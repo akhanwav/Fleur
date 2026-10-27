@@ -197,10 +197,33 @@ final class SearchContainerViewController: UIViewController {
         if !inResults { keyboardFrame = next.convert(next.bounds, to: view) }
     }
 
+    /// Down from a results row the engine could not leave: the row below is
+    /// off screen (Trending under a full Recently Searched grid), and the
+    /// engine will not move to what it cannot see. Bring it in and focus it.
+    private func correctDownward(from section: Int, engineMoved: Bool) {
+        let before = UIFocusSystem.focusSystem(for: view)?.focusedItem
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !engineMoved,
+                  UIFocusSystem.focusSystem(for: self.view)?.focusedItem === before,
+                  self.results.focusRow(section + 1)
+            else { return }
+            self.move(to: .results)
+        }
+    }
+
     /// Left from Clear All goes to the keyboard. Beside the grid keyboard the
     /// engine gets there itself; under the linear one the only thing to the
     /// left is the shell's edge, which opened the sidebar.
     override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        // Beside the grid keyboard, Up from a lower row leaves for the keys
+        // when the row above is scrolled away. Refused here, so the press
+        // reaches `pressesBegan` as a decline and the row above is brought in.
+        if resultsBesideKeyboard, context.focusHeading == .up,
+           context.previouslyFocusedView?.isDescendant(of: results.view) == true,
+           context.nextFocusedView?.isDescendant(of: results.view) != true,
+           let section = results.focusedSectionForHandoff, section > 0 {
+            return false
+        }
         if context.focusHeading == .left,
            SearchRecentsCell.isClearAllButton(context.previouslyFocusedView),
            context.nextFocusedView?.isDescendant(of: view) != true {
@@ -279,8 +302,16 @@ final class SearchContainerViewController: UIViewController {
         // highlight, so every key-to-key Down there looked like a decline and
         // was "rescued" into the results: from "a" there was no way down to
         // the other letters.
-        if resultsBesideKeyboard {
-            // Up/Down inside the results still need the reveal below.
+        if types.contains(.downArrow), let from = results.focusedSectionForHandoff {
+            correctDownward(from: from, engineMoved: engineMoved)
+        } else if resultsBesideKeyboard {
+            // Up into a row scrolled off the top (Recently Searched above
+            // Trending). Leaving for the keyboard is refused in
+            // `shouldUpdateFocus`, so focus is still here when the engine
+            // declines.
+            if types.contains(.upArrow), let from = results.focusedSectionForHandoff {
+                correctUpward(from: from, engineMoved: engineMoved)
+            }
         } else if types.contains(.downArrow), !focusIsInResults {
             rescue(to: .results)
         } else if types.contains(.upArrow),

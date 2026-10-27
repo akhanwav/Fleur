@@ -289,6 +289,12 @@ final class PosterCell: UICollectionViewCell {
     /// `configure`, which clears them.
     func showVersionTags(for item: MediaItem) { versionTags.show(item: item) }
 
+    /// One fixed tag ("On your servers"); call after `configure`.
+    func showTag(_ text: String) { versionTags.showLabel(text) }
+
+    /// The caption's second line in place of the year; call after `configure`.
+    func setCaptionDetail(_ detail: String?) { caption.setDetail(detail) }
+
     /// The badge's text while it shows (tests).
     var sourceBadgeText: String? { sourceBadge.isHidden ? nil : sourceBadge.text }
 

@@ -83,6 +83,9 @@ struct TMDBListItem: Codable, Identifiable, Hashable, Sendable {
     let releaseDate: String?
     let voteAverage: Double?
     let mediaType: TMDBMediaType
+    /// TMDB's popularity score: Search ranks suggestions by it. Absent from
+    /// lists cached before it was read.
+    var popularity: Double?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -95,9 +98,10 @@ struct TMDBListItem: Codable, Identifiable, Hashable, Sendable {
         case firstAirDate = "first_air_date"
         case voteAverage = "vote_average"
         case mediaType = "media_type"
+        case popularity
     }
 
-    init(id: Int, title: String, overview: String?, posterPath: String?, backdropPath: String?, releaseDate: String?, voteAverage: Double?, mediaType: TMDBMediaType) {
+    init(id: Int, title: String, overview: String?, posterPath: String?, backdropPath: String?, releaseDate: String?, voteAverage: Double?, mediaType: TMDBMediaType, popularity: Double? = nil) {
         self.id = id
         self.title = title
         self.overview = overview
@@ -106,6 +110,7 @@ struct TMDBListItem: Codable, Identifiable, Hashable, Sendable {
         self.releaseDate = releaseDate
         self.voteAverage = voteAverage
         self.mediaType = mediaType
+        self.popularity = popularity
     }
 
     init(from decoder: Decoder) throws {
@@ -120,6 +125,7 @@ struct TMDBListItem: Codable, Identifiable, Hashable, Sendable {
         releaseDate = (try? c.decode(String.self, forKey: .releaseDate))
             ?? (try? c.decode(String.self, forKey: .firstAirDate))
         voteAverage = try? c.decode(Double.self, forKey: .voteAverage)
+        popularity = try? c.decode(Double.self, forKey: .popularity)
         if c.contains(.mediaType) {
             let raw = try c.decode(String.self, forKey: .mediaType)
             guard let parsed = TMDBMediaType(rawValue: raw) else {
@@ -146,6 +152,7 @@ struct TMDBListItem: Codable, Identifiable, Hashable, Sendable {
         try c.encodeIfPresent(releaseDate, forKey: .releaseDate)
         try c.encodeIfPresent(voteAverage, forKey: .voteAverage)
         try c.encode(mediaType.rawValue, forKey: .mediaType)
+        try c.encodeIfPresent(popularity, forKey: .popularity)
     }
 }
 

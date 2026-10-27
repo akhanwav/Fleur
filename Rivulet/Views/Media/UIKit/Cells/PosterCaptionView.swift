@@ -58,6 +58,11 @@ final class PosterCaptionView: UIStackView {
         detailLabel.text = detail ?? " "
     }
 
+    /// Replaces the second line only (Search's "1984 · Movie").
+    func setDetail(_ detail: String?) {
+        detailLabel.text = detail ?? " "
+    }
+
     /// Continue Watching's caption: the title (an episode: its show) over the
     /// Play button's own title (`EpisodePicker.playTitle`), "Resume S5 · E3 ·
     /// 12 min left", "Play S5 · E3", "Resume · 42 min left". A movie with no

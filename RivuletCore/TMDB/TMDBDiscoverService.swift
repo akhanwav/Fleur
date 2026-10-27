@@ -209,6 +209,92 @@ actor TMDBDiscoverService {
             + "|\(withKeywords.sorted().map(String.init).joined(separator: ","))"
     }
 
+    // MARK: - Search and Trending (Search page)
+
+    /// Lists that mix movies, shows and people (`search/multi`,
+    /// `trending/all`): each result decodes on its own, and a person or any
+    /// other unreadable entry is skipped instead of failing the whole page.
+    private struct MixedListResponse: Decodable {
+        let results: [TMDBListItem]
+
+        private enum CodingKeys: String, CodingKey { case results }
+        private struct Skipped: Decodable {}
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            var array = try c.nestedUnkeyedContainer(forKey: .results)
+            var items: [TMDBListItem] = []
+            while !array.isAtEnd {
+                if let item = try? array.decode(TMDBListItem.self) {
+                    items.append(item)
+                } else {
+                    _ = try? array.decode(Skipped.self)
+                }
+            }
+            results = items
+        }
+    }
+
+    /// Queries already asked, for the hour. Suggestions ask on every pause in
+    /// typing, and one title's variants recur keystroke to keystroke.
+    private var searchCache: [String: ListCacheEntry] = [:]
+
+    /// Movies and shows for `query` from `search/multi`, people left out.
+    /// Empty on any failure: suggestions still have the library's own.
+    func searchMulti(_ query: String) async -> [TMDBListItem] {
+        let key = query.lowercased()
+        if let cached = searchCache[key], Date().timeIntervalSince(cached.fetchedAt) < listCacheTTL {
+            return cached.items
+        }
+        guard let data = try? await fetchData(path: "search/multi", queryItems: [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "include_adult", value: "false")
+        ]), let response = try? JSONDecoder().decode(MixedListResponse.self, from: data) else {
+            return []
+        }
+        searchCache[key] = ListCacheEntry(fetchedAt: Date(), items: response.results)
+        return response.results
+    }
+
+    private static let trendingWeekName = "searchTrendingWeek"
+    private var trendingWeek: ListCacheEntry?
+
+    /// This week's trending movies and shows, cached as the Discover lists are:
+    /// an hour fresh, a week as the fallback when TMDB cannot be reached.
+    func trendingThisWeek() async -> [TMDBListItem] {
+        if let trendingWeek, Date().timeIntervalSince(trendingWeek.fetchedAt) < listCacheTTL {
+            return trendingWeek.items
+        }
+        if let cached = loadListFromDisk(name: Self.trendingWeekName, maxAge: listCacheTTL) {
+            trendingWeek = ListCacheEntry(fetchedAt: cached.savedAt, items: cached.items)
+            return cached.items
+        }
+        guard let data = try? await fetchData(path: "trending/all/week"),
+              let response = try? JSONDecoder().decode(MixedListResponse.self, from: data) else {
+            return loadListFromDisk(name: Self.trendingWeekName, maxAge: listDiskFallbackTTL)?.items ?? []
+        }
+        trendingWeek = ListCacheEntry(fetchedAt: Date(), items: response.results)
+        saveListToDisk(response.results, name: Self.trendingWeekName)
+        return response.results
+    }
+
+    /// Other titles TMDB knows a movie or show by, as TMDB writes them.
+    /// Cached for the session: a title is asked about at most once.
+    private var alternativeTitleCache: [String: [String]] = [:]
+
+    func alternativeTitles(tmdbId: Int, type: TMDBMediaType) async -> [String] {
+        let key = "\(type.rawValue)_\(tmdbId)"
+        if let cached = alternativeTitleCache[key] { return cached }
+        struct Entry: Decodable { let title: String }
+        // Movies answer under `titles`, shows under `results`.
+        struct Response: Decodable { let titles: [Entry]?; let results: [Entry]? }
+        guard let data = try? await fetchData(path: "\(type.rawValue)/\(tmdbId)/alternative_titles"),
+              let response = try? JSONDecoder().decode(Response.self, from: data) else { return [] }
+        let titles = (response.titles ?? response.results ?? []).map(\.title)
+        alternativeTitleCache[key] = titles
+        return titles
+    }
+
     // MARK: - Networking
 
     private func fetchData(path: String, queryItems: [URLQueryItem] = []) async throws -> Data {
@@ -230,12 +316,16 @@ actor TMDBDiscoverService {
         let items: [TMDBListItem]
     }
 
-    private func listCacheURL(section: TMDBDiscoverSection) -> URL {
-        listCacheDirectory.appendingPathComponent("\(section.rawValue).json")
+    private func listCacheURL(name: String) -> URL {
+        listCacheDirectory.appendingPathComponent("\(name).json")
     }
 
     private func loadListFromDisk(section: TMDBDiscoverSection, maxAge: TimeInterval) -> CachedList? {
-        let url = listCacheURL(section: section)
+        loadListFromDisk(name: section.rawValue, maxAge: maxAge)
+    }
+
+    private func loadListFromDisk(name: String, maxAge: TimeInterval) -> CachedList? {
+        let url = listCacheURL(name: name)
         guard let data = try? Data(contentsOf: url),
               let cached = try? JSONDecoder().decode(CachedList.self, from: data),
               Date().timeIntervalSince(cached.savedAt) < maxAge else { return nil }
@@ -243,9 +333,13 @@ actor TMDBDiscoverService {
     }
 
     private func saveListToDisk(_ items: [TMDBListItem], section: TMDBDiscoverSection) {
+        saveListToDisk(items, name: section.rawValue)
+    }
+
+    private func saveListToDisk(_ items: [TMDBListItem], name: String) {
         let cached = CachedList(savedAt: Date(), items: items)
         guard let data = try? JSONEncoder().encode(cached) else { return }
-        try? data.write(to: listCacheURL(section: section), options: [.atomic])
+        try? data.write(to: listCacheURL(name: name), options: [.atomic])
     }
 
     // MARK: - Disk Cache (Detail)
