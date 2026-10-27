@@ -44,7 +44,8 @@ final class SearchRecentsCellTests: XCTestCase {
         ])
         cell.layoutIfNeeded()
 
-        XCTAssertEqual(cell.preferredFocusEnvironments.count, 2)
+        // Two cards, then Clear All.
+        XCTAssertEqual(cell.preferredFocusEnvironments.count, 3)
         for card in cell.preferredFocusEnvironments {
             XCTAssertTrue(
                 (card as? UIView)?.canBecomeFocused == true,
@@ -76,7 +77,7 @@ final class SearchRecentsCellTests: XCTestCase {
         cell.configure(recentItems: [item("3", title: "Dune", kind: .movie, year: 2021)])
         cell.layoutIfNeeded()
 
-        XCTAssertEqual(cell.preferredFocusEnvironments.count, 1)
+        XCTAssertEqual(cell.preferredFocusEnvironments.count, 2)
     }
 
     /// The grid beside the grid keyboard (884pt of page) shows all ten recents
@@ -99,7 +100,24 @@ final class SearchRecentsCellTests: XCTestCase {
         })
         cell.layoutIfNeeded()
 
-        XCTAssertEqual(cell.preferredFocusEnvironments.count, SearchRecentsCell.maxItems)
+        XCTAssertEqual(cell.preferredFocusEnvironments.count, SearchRecentsCell.maxItems + 1)
         XCTAssertEqual(SearchRecentsCell.maxItems, 10)
+    }
+
+    /// Clear All is offered after the cards (Right from the keyboard enters at
+    /// the first card) and only while there is something to clear.
+    @MainActor
+    func test_clearAll_followsTheCardsAndHidesWhenEmpty() {
+        let cell = SearchRecentsCell(frame: CGRect(x: 0, y: 0, width: 1330, height: 884))
+        cell.configure(recentItems: [item("1", title: "Alien", kind: .movie, year: 1979)])
+        cell.layoutIfNeeded()
+
+        let environments = cell.preferredFocusEnvironments
+        XCTAssertEqual(environments.count, 2)
+        XCTAssertFalse(SearchRecentsCell.isClearAllButton(environments.first as? UIView))
+        XCTAssertTrue(SearchRecentsCell.isClearAllButton(environments.last as? UIView))
+
+        cell.configure(recentItems: [])
+        XCTAssertTrue((environments.last as? UIView)?.isHidden == true)
     }
 }

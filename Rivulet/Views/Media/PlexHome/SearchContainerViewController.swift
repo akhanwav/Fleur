@@ -91,7 +91,7 @@ final class SearchContainerViewController: UIViewController {
         results.onSelectMusic = { [weak self] meta in
             self?.presentMusicDetail(meta)
         }
-        results.onSearchMenuBack = { [weak self] in
+        results.onReturnToKeyboard = { [weak self] in
             self?.move(to: .keyboard)
         }
 
@@ -195,6 +195,19 @@ final class SearchContainerViewController: UIViewController {
         preferredHalf = inResults ? .results : .keyboard
         if inResults { lastResultsFocus = next }
         if !inResults { keyboardFrame = next.convert(next.bounds, to: view) }
+    }
+
+    /// Left from Clear All goes to the keyboard. Beside the grid keyboard the
+    /// engine gets there itself; under the linear one the only thing to the
+    /// left is the shell's edge, which opened the sidebar.
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        if context.focusHeading == .left,
+           SearchRecentsCell.isClearAllButton(context.previouslyFocusedView),
+           context.nextFocusedView?.isDescendant(of: view) != true {
+            DispatchQueue.main.async { [weak self] in self?.move(to: .keyboard) }
+            return false
+        }
+        return super.shouldUpdateFocus(in: context)
     }
 
     /// The window frame of the last keyboard-side item focus landed on.

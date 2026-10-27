@@ -9,7 +9,8 @@
 //  in `.search` mode):
 //
 //   - SearchRecentsCell: the empty-query state — a "Recently Searched" grid
-//     of the items you last opened from search (#292), sized to fit the page.
+//     of the items you last opened from search (#292), sized to fit the page,
+//     with Clear All in its heading row and "No recent searches" when empty.
 //   - SearchStateCell: inline searching / error / no-results states.
 //     Port of PlexSearchView.loadingView / errorView / noResultsView.
 //
@@ -19,8 +20,8 @@
 //
 //  The section that hosts the recents cell is still called `.searchPrompt`
 //  (24 references). It no longer renders a prompt: the centred magnifier and
-//  "Search Your Libraries" went with the Apple TV layout, so an empty-query
-//  screen with no recents yet is deliberately blank.
+//  "Search Your Libraries" went with the Apple TV layout. With no recents it
+//  shows only the heading and "No recent searches".
 //
 
 import UIKit
@@ -32,6 +33,8 @@ final class SearchRecentsCell: UICollectionViewCell {
     static let reuseID = "SearchRecentsCell"
 
     var onRecentSelected: ((MediaItem) -> Void)?
+    /// "Clear All" in the heading row. The controller confirms first.
+    var onClearAll: (() -> Void)?
 
     /// A grid of the Apple TV app's recent-search card, sized to the space it
     /// is given so every recent shows without scrolling. Its corner radius is
@@ -62,11 +65,26 @@ final class SearchRecentsCell: UICollectionViewCell {
         static let headerToGrid: CGFloat = 16
         /// Clear of the screen's bottom edge.
         static let bottomPadding: CGFloat = 60
+        static let clearButtonHeight: CGFloat = 44
     }
 
     static var maxItems: Int { Metrics.columns * Metrics.rows }
 
+    /// True for a Recently Searched Clear All button, which lives in a cell's
+    /// content view.
+    static func isClearAllButton(_ view: UIView?) -> Bool {
+        guard let view, let cell = view.superview?.superview as? SearchRecentsCell else { return false }
+        return cell.clearButton === view
+    }
+
     private let headerLabel = UILabel()
+    private let clearButton = FocusableActionButton()
+    /// Spans the heading row and leads to Clear All, so Up from either column
+    /// reaches it (the button sits above the right one only). Off while the
+    /// button has focus, or Left from it would land back on it instead of
+    /// moving on to the keyboard.
+    private let headerGuide = UIFocusGuide()
+    private let emptyLabel = UILabel()
     private let grid = UIStackView()
     private var cards: [FocusableActionButton] = []
     /// One per visible card, cancelled on reconfigure/reuse.
@@ -99,19 +117,65 @@ final class SearchRecentsCell: UICollectionViewCell {
         headerLabel.textColor = .secondaryLabel
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
 
+        emptyLabel.text = "No recent searches"
+        emptyLabel.font = .preferredFont(forTextStyle: .body)
+        emptyLabel.textColor = .secondaryLabel
+        emptyLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let clearIcon = UIImageView(image: UIImage(systemName: "xmark")?
+            .withConfiguration(UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)))
+        clearIcon.tintColor = .white
+        let clearLabel = UILabel()
+        clearLabel.text = "Clear All"
+        clearLabel.font = .systemFont(ofSize: 24, weight: .medium)
+        clearLabel.textColor = .white
+        let clearContent = UIStackView(arrangedSubviews: [clearIcon, clearLabel])
+        clearContent.spacing = 10
+        clearContent.alignment = .center
+        clearContent.isUserInteractionEnabled = false
+        clearContent.translatesAutoresizingMaskIntoConstraints = false
+        clearButton.addSubview(clearContent)
+        clearButton.invertOnFocus = [clearIcon, clearLabel]
+        clearButton.layer.cornerRadius = Metrics.clearButtonHeight / 2
+        clearButton.translatesAutoresizingMaskIntoConstraints = false
+        clearButton.onPrimaryAction = { [weak self] in self?.onClearAll?() }
+
         grid.axis = .vertical
         grid.spacing = Metrics.rowGap
         grid.alignment = .fill
         grid.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(headerLabel)
+        contentView.addSubview(clearButton)
+        contentView.addSubview(emptyLabel)
         contentView.addSubview(grid)
+        contentView.addLayoutGuide(headerGuide)
+        headerGuide.preferredFocusEnvironments = [clearButton]
 
         NSLayoutConstraint.activate([
             headerLabel.topAnchor.constraint(
                 equalTo: contentView.topAnchor, constant: Metrics.topPadding),
             headerLabel.leadingAnchor.constraint(
                 equalTo: contentView.leadingAnchor, constant: MediaRowMetrics.rowLeading),
+
+            // The pill is taller than the heading's line: centred on it, so the
+            // grid's top (and the height it is fitted to) stay the heading's.
+            clearButton.centerYAnchor.constraint(equalTo: headerLabel.centerYAnchor),
+            clearButton.trailingAnchor.constraint(
+                equalTo: contentView.trailingAnchor, constant: -MediaRowMetrics.rowLeading),
+            clearButton.heightAnchor.constraint(equalToConstant: Metrics.clearButtonHeight),
+            clearContent.centerYAnchor.constraint(equalTo: clearButton.centerYAnchor),
+            clearContent.leadingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: 24),
+            clearContent.trailingAnchor.constraint(equalTo: clearButton.trailingAnchor, constant: -24),
+
+            headerGuide.leadingAnchor.constraint(equalTo: headerLabel.leadingAnchor),
+            headerGuide.trailingAnchor.constraint(equalTo: clearButton.trailingAnchor),
+            headerGuide.topAnchor.constraint(equalTo: clearButton.topAnchor),
+            headerGuide.bottomAnchor.constraint(equalTo: clearButton.bottomAnchor),
+
+            emptyLabel.topAnchor.constraint(
+                equalTo: headerLabel.bottomAnchor, constant: Metrics.headerToGrid),
+            emptyLabel.leadingAnchor.constraint(equalTo: headerLabel.leadingAnchor),
 
             grid.topAnchor.constraint(
                 equalTo: headerLabel.bottomAnchor, constant: Metrics.headerToGrid),
@@ -129,7 +193,13 @@ final class SearchRecentsCell: UICollectionViewCell {
     /// (A collection view enumerates focus items as CELLS, so a non-focusable
     /// cell would hide the cards from the engine entirely.)
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        grid.isHidden ? super.preferredFocusEnvironments : cards
+        grid.isHidden ? super.preferredFocusEnvironments : cards + [clearButton]
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext,
+                                 with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        headerGuide.isEnabled = context.nextFocusedView !== clearButton
     }
 
     override func prepareForReuse() {
@@ -162,8 +232,10 @@ final class SearchRecentsCell: UICollectionViewCell {
         cards = []
         grid.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let hasRecents = !items.isEmpty
-        headerLabel.isHidden = !hasRecents
         grid.isHidden = !hasRecents
+        clearButton.isHidden = !hasRecents
+        headerGuide.isEnabled = hasRecents && !clearButton.isFocused
+        emptyLabel.isHidden = hasRecents
 
         let height = Self.cardHeight(
             fitting: availableHeight ?? Metrics.fallbackAvailableHeight,

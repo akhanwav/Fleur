@@ -444,9 +444,10 @@ final class PlexHomeViewController: UIViewController {
     /// was tapped) — the container mirrors it into the search bar.
     var onSearchQueryChangedByController: ((String) -> Void)?
 
-    /// Search mode: Menu from the results or Recently Searched. The container
-    /// moves focus to the keyboard, leaving the query and results as they are.
-    var onSearchMenuBack: (() -> Void)?
+    /// Search mode: hand focus to the keyboard, leaving the query and results
+    /// as they are. Menu from the results or Recently Searched, and Clear All,
+    /// which leaves the page nothing to focus.
+    var onReturnToKeyboard: (() -> Void)?
 
     /// Surface selector — .home (default) or .library(key:title:). All
     /// library-specific behavior branches off this; home-mode code paths are
@@ -1122,6 +1123,21 @@ final class PlexHomeViewController: UIViewController {
         UserDefaults.standard.set(
             (try? JSONEncoder().encode(items)) ?? Data(), forKey: Self.recentSearchItemsKey)
         reconfigureVisibleSearchCells()
+    }
+
+    /// Clear All in the Recently Searched heading. Menu on the alert is Cancel.
+    private func confirmClearRecentSearches() {
+        let alert = UIAlertController(
+            title: "Clear all recent searches?", message: nil, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Clear", style: .destructive) { [weak self] _ in
+            guard let self else { return }
+            UserDefaults.standard.removeObject(forKey: Self.recentSearchItemsKey)
+            self.reconfigureVisibleSearchCells()
+            // The cleared grid held focus; the keyboard is all that is left.
+            self.onReturnToKeyboard?()
+        })
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(alert, animated: true)
     }
 
     /// Query updates from `SearchContainerViewController`. Debounced search,
@@ -3445,6 +3461,7 @@ final class PlexHomeViewController: UIViewController {
             // longer re-runs a stored query, so nothing is written back into
             // the keyboard field.
             cell.onRecentSelected = { [weak self] item in self?.selectMediaItem(item) }
+            cell.onClearAll = { [weak self] in self?.confirmClearRecentSearches() }
             return cell
 
         case .searchState:
@@ -7852,8 +7869,8 @@ extension PlexHomeViewController: MenuBackHandling {
               focused.isDescendant(of: collectionView) else { return false }
         // Search: Menu goes back to the keyboard from any row, never to the
         // top row first. Only Menu from the keyboard (not ours) opens the sidebar.
-        if case .search = mode, let onSearchMenuBack {
-            onSearchMenuBack()
+        if case .search = mode, let onReturnToKeyboard {
+            onReturnToKeyboard()
             return true
         }
         guard StagedMenuBack.shouldReturnToTop(
