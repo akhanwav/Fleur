@@ -1090,6 +1090,11 @@ final class PlexHomeViewController: UIViewController {
     /// The suggestions row (`SearchSuggestions`): your library's titles at
     /// once, TMDB's merged in when they arrive.
     private var suggestionItems: [MediaItem] = []
+    /// The query `suggestionItems` answer.
+    private var suggestionQuery = ""
+    /// TMDB's answers for the query on screen, held while focus is in the row:
+    /// reordering it would reload the row under the focused tile.
+    private var heldSuggestions: [MediaItem]?
     private var suggestionTask: Task<Void, Never>?
     private var suggestionToken = 0
     private static let suggestionDebounceNs: UInt64 = 250_000_000
@@ -1198,8 +1203,10 @@ final class PlexHomeViewController: UIViewController {
     private func scheduleSuggestions(for query: String) {
         suggestionTask?.cancel()
         suggestionToken += 1
+        heldSuggestions = nil
         guard query.count >= Self.searchMinQueryLength else {
             suggestionItems = []
+            suggestionQuery = ""
             loadTrendingIfNeeded()
             return
         }
@@ -1210,17 +1217,41 @@ final class PlexHomeViewController: UIViewController {
             let matcherQuery = SearchSuggestions.query(for: query)
             let library = await SearchSuggestions.library(matcherQuery)
             guard let self, token == self.suggestionToken else { return }
-            self.showSuggestions(SearchSuggestions.rank(library))
+            self.showSuggestions(SearchSuggestions.rank(library), for: query)
             let tmdb = await SearchSuggestions.tmdb(matcherQuery)
             guard token == self.suggestionToken else { return }
-            self.showSuggestions(SearchSuggestions.rank(SearchSuggestions.merge(library, tmdb)))
+            self.showSuggestions(SearchSuggestions.rank(SearchSuggestions.merge(library, tmdb)), for: query)
         }
     }
 
-    private func showSuggestions(_ suggestions: [SearchSuggestion]) {
+    private func showSuggestions(_ suggestions: [SearchSuggestion], for query: String) {
         let items = suggestions.compactMap(suggestionItem)
-        guard items.map(\.ref) != suggestionItems.map(\.ref) else { return }
+        if query == suggestionQuery {
+            guard items.map(\.ref) != suggestionItems.map(\.ref) else { return }
+            // The same query's TMDB answers: never under the focused tile.
+            if focusIsInSuggestions {
+                heldSuggestions = items
+                return
+            }
+        } else {
+            // A new query's suggestions start at their first tile.
+            shelfOffsets[.searchSuggestions] = nil
+            suggestionQuery = query
+        }
         suggestionItems = items
+        applySnapshot(animated: false)
+    }
+
+    private var focusIsInSuggestions: Bool {
+        guard let section = focusedSectionForHandoff, sectionsSnapshot.indices.contains(section) else { return false }
+        return sectionsSnapshot[section].id == .searchSuggestions
+    }
+
+    /// Held suggestions land once focus has left their row.
+    private func releaseHeldSuggestionsIfNeeded() {
+        guard let held = heldSuggestions, !focusIsInSuggestions else { return }
+        heldSuggestions = nil
+        suggestionItems = held
         applySnapshot(animated: false)
     }
 
@@ -1362,7 +1393,9 @@ final class PlexHomeViewController: UIViewController {
         // was restored onto these: results opened mid-row, the start a Left
         // press away. (The query is also in the rows' content token, so a
         // search returning the same titles rebinds at the start too.)
-        shelfOffsets = shelfOffsets.filter { !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) }
+        shelfOffsets = shelfOffsets.filter {
+            !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) || Self.isSuggestionRow($0.key)
+        }
         applySnapshot(animated: false)
         reconfigureVisibleSearchCells()
 
@@ -2240,6 +2273,9 @@ final class PlexHomeViewController: UIViewController {
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
+        if heldSuggestions != nil {
+            DispatchQueue.main.async { [weak self] in self?.releaseHeldSuggestionsIfNeeded() }
+        }
         let prevInside = context.previouslyFocusedView?.isDescendant(of: collectionView) == true
         let nextInside = context.nextFocusedView?.isDescendant(of: collectionView) == true
         guard !prevInside, nextInside else { return }
@@ -4357,7 +4393,14 @@ final class PlexHomeViewController: UIViewController {
     /// Content identity for a shelf row — reload only when this changes.
     private func shelfContentToken(_ section: HomeSectionData) -> Int {
         var hasher = Hasher()
-        if section.kind == .searchGrid { hasher.combine(lastSubmittedQuery) }
+        // A results row rebinds at its start for each submitted query. The
+        // suggestions row follows its own query instead: keyed on the server
+        // search, it reloaded under focus whenever results arrived below it.
+        if section.id == .searchSuggestions {
+            hasher.combine(suggestionQuery)
+        } else if section.kind == .searchGrid, section.id != .searchTrending {
+            hasher.combine(lastSubmittedQuery)
+        }
         if section.kind == .watchlist {
             for item in section.watchlistItems { hasher.combine(item.id) }
         } else {
@@ -4485,7 +4528,10 @@ final class PlexHomeViewController: UIViewController {
                 cell.configure(item: displayed(item))
                 if Self.isSuggestionRow(section.id) {
                     cell.setCaptionDetail(Self.suggestionDetail(for: item))
-                    if !item.isMetadataOnly { cell.showTag("On your servers") }
+                    // Suggestions name the servers a copy is on; Trending is
+                    // about the title, not where you have it.
+                    if section.id == .searchSuggestions, !item.isMetadataOnly { cell.showServerTag(for: item) }
+                    if item.kind == .show { cell.showSeasonCount(for: item) }
                 } else if section.kind == .searchGrid, item.isMusic != true {
                     // The tags name the server, so search drops the source badge.
                     cell.showVersionTags(for: item)

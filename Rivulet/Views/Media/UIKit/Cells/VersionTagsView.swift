@@ -63,10 +63,13 @@ final class VersionTagsView: UIStackView {
         }
     }
 
-    /// A fixed label in the quality tag's place, nothing looked up.
-    func showLabel(_ text: String) {
+    /// The server tag alone ("Sesama +2"): Search's suggestions, whose
+    /// caption already says what the title is.
+    func showServer(item: MediaItem) {
+        guard item.ref != shownRef else { return }
         clear()
-        setQuality(text)
+        shownRef = item.ref
+        showServers(for: item)
     }
 
     func clear() {

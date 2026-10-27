@@ -289,8 +289,8 @@ final class PosterCell: UICollectionViewCell {
     /// `configure`, which clears them.
     func showVersionTags(for item: MediaItem) { versionTags.show(item: item) }
 
-    /// One fixed tag ("On your servers"); call after `configure`.
-    func showTag(_ text: String) { versionTags.showLabel(text) }
+    /// The server tag alone; call after `configure`.
+    func showServerTag(for item: MediaItem) { versionTags.showServer(item: item) }
 
     /// The caption's second line in place of the year; call after `configure`.
     func setCaptionDetail(_ detail: String?) { caption.setDetail(detail) }
@@ -624,6 +624,13 @@ enum TitleSeasons {
         if let known = counts[ref] { return known }
         if let task = inFlight[ref] { return await task.value }
         let task = Task<Int?, Never> {
+            // A TMDB title (Search's suggestions and Trending) has no provider
+            // to list seasons; TMDB's detail counts them, Specials excluded,
+            // and is cached on disk for the detail page anyway.
+            if show.isMetadataOnly, let decoded = TMDBMediaMapper.decodeItemID(ref.itemID) {
+                return await TMDBDiscoverService.shared.fetchDetail(tmdbId: decoded.tmdbId, type: decoded.type)?
+                    .numberOfSeasons
+            }
             guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID),
                   let seasons = try? await provider.children(of: ref) else { return nil }
             return seasons.filter { $0.kind == .season && $0.seasonNumber != 0 }.count

@@ -433,15 +433,12 @@ extension RootShellViewController: MenuBackHandling {
         let loadingPage = focused == nil && view.window?.rootViewController?.presentedViewController == nil
         guard isInsideShell(focused) || loadingPage else { return false }
         if sidebar.isExpanded {
-            // Menu in the open sidebar returns to Home (issue #192 policy);
-            // on Home it falls through so the system can exit the app.
-            guard currentTab != .home else {
-                collapseSidebar()
-                return false
-            }
-            onTabChange?(.home)
+            // Menu in the open sidebar closes it, back onto the page it was
+            // opened from (Search, Watchlist, a library); the old jump to Home
+            // lost the page. On Home it falls through so the system can exit
+            // the app.
             collapseSidebar()
-            return true
+            return currentTab != .home
         }
         guard !interactionBlocked else { return false }
         expandSidebar()
