@@ -802,7 +802,6 @@ final class AetherPlayer: PlayerProtocol {
         frameCaptureTask = Task { [weak self] in
             guard let self else { return }
             let frame = await self.readDisplayedFrame()
-            print("[AetherPlayer] held frame read: \(frame.map { "\($0.width)x\($0.height)" } ?? "none")")
             guard !Task.isCancelled else { return }
             self.capturedFrame = frame.map(HeldPicture.frame) ?? .artwork
             // Read after the app already went: show it now.
