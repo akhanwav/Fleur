@@ -153,7 +153,7 @@ struct WhatsNewView: View {
             "Search and download subtitles from the player's Subtitles menu.",
             "New Autoplay Limit setting stops autoplay after a few episodes in a row.",
             "Up Next is now a glass card beside the credits, which keep playing full size.",
-            "Updated AetherEngine to 7.42.0",
+            "Updated AetherEngine to 7.49.0",
         ]),
         ("1.1.0 (96)", [
             "Lots of improvements for Music libraries! Really happy about it.",
