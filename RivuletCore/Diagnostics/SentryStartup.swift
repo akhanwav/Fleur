@@ -40,6 +40,11 @@ public enum SentryStartup {
     /// actor it trips the Main Thread Checker on every launch.
     @MainActor
     public static func start(platform: Platform) {
+        // Unit tests run inside the app, so without this every test that hits
+        // a dead endpoint (a Live TV tune against localhost:9) became a Sentry
+        // issue tagged `debug`. XCTest sets this variable in the host process;
+        // Debug runs from Xcode do not, and keep reporting.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         SentrySDK.start { options in
             options.dsn = Secrets.sentryDSN
             options.debug = false
