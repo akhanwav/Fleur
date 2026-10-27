@@ -78,4 +78,28 @@ final class SearchRecentsCellTests: XCTestCase {
 
         XCTAssertEqual(cell.preferredFocusEnvironments.count, 1)
     }
+
+    /// The grid beside the grid keyboard (884pt of page) shows all ten recents
+    /// without scrolling.
+    @MainActor
+    func test_cardHeight_fitsFiveRowsInThePageBesideTheKeyboard() {
+        let header: CGFloat = 39
+        let height = SearchRecentsCell.cardHeight(fitting: 884, headerHeight: header)
+        let used = 17 + header + 16 + height * 5 + 24 * 4 + 60
+        XCTAssertLessThanOrEqual(used, 884)
+        XCTAssertGreaterThan(height, 100)
+    }
+
+    /// Two columns of five: the oldest recents past ten are not drawn.
+    @MainActor
+    func test_configure_showsAtMostTenRecents() {
+        let cell = SearchRecentsCell(frame: CGRect(x: 0, y: 0, width: 1330, height: 884))
+        cell.configure(recentItems: (1...12).map {
+            item("\($0)", title: "Title \($0)", kind: .movie, year: 2000)
+        })
+        cell.layoutIfNeeded()
+
+        XCTAssertEqual(cell.preferredFocusEnvironments.count, SearchRecentsCell.maxItems)
+        XCTAssertEqual(SearchRecentsCell.maxItems, 10)
+    }
 }

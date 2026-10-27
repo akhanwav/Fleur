@@ -91,6 +91,9 @@ final class SearchContainerViewController: UIViewController {
         results.onSelectMusic = { [weak self] meta in
             self?.presentMusicDetail(meta)
         }
+        results.onSearchMenuBack = { [weak self] in
+            self?.move(to: .keyboard)
+        }
 
         // NO safe-area inset here for the sidebar pill (#292). Pushing the
         // chrome down with `additionalSafeAreaInsets` DID clear the pill, but
@@ -224,7 +227,11 @@ final class SearchContainerViewController: UIViewController {
         // so the rows sat over the lower half of the re-expanded keyboard.
         // Animated on the page's shared focus-scroll curve: snapping it first
         // read as a jump ahead of the keyboard.
-        results.animateToContentTop()
+        //
+        // Beside the grid keyboard nothing sits over the keys, so the results
+        // keep their place (Menu from a lower row returns to the keyboard
+        // without moving them).
+        if !resultsBesideKeyboard { results.animateToContentTop() }
         guard !searchController.searchBar.isFirstResponder else { return }
         searchController.searchBar.becomeFirstResponder()
     }

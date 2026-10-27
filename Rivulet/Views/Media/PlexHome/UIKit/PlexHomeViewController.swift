@@ -444,6 +444,10 @@ final class PlexHomeViewController: UIViewController {
     /// was tapped) — the container mirrors it into the search bar.
     var onSearchQueryChangedByController: ((String) -> Void)?
 
+    /// Search mode: Menu from the results or Recently Searched. The container
+    /// moves focus to the keyboard, leaving the query and results as they are.
+    var onSearchMenuBack: (() -> Void)?
+
     /// Surface selector — .home (default) or .library(key:title:). All
     /// library-specific behavior branches off this; home-mode code paths are
     /// byte-identical to before the mode was introduced.
@@ -812,6 +816,7 @@ final class PlexHomeViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        refitSearchRecentsIfNeeded()
         // Diagnostic only — the embedded orthogonal scrollers are NOT
         // configured or driven in any way (the layout owns them and reverts
         // external writes; the shelf margin lives in the section contentInsets
@@ -1362,8 +1367,10 @@ final class PlexHomeViewController: UIViewController {
             let section = sectionsSnapshot[indexPath.section]
             switch section.kind {
             case .searchPrompt:
-                (collectionView.cellForItem(at: indexPath) as? SearchRecentsCell)?
-                    .configure(recentItems: recentSearchItems)
+                let resized = (collectionView.cellForItem(at: indexPath) as? SearchRecentsCell)?
+                    .configure(recentItems: recentSearchItems, availableHeight: searchPageHeight) ?? false
+                // The cell sizes itself, and the layout only asks again when told.
+                if resized { collectionView.collectionViewLayout.invalidateLayout() }
             case .searchState:
                 (collectionView.cellForItem(at: indexPath) as? SearchStateCell)?
                     .configure(state: currentSearchState)
@@ -2279,6 +2286,29 @@ final class PlexHomeViewController: UIViewController {
     /// give the first row some breathing room from the top edge. Also
     /// reserves space below the connection banner when it's visible
     /// (mirrors SwiftUI's banner positioning above the content).
+    /// The page height below the search chrome, which the Recently Searched
+    /// grid fills without scrolling. Nil before the first layout.
+    private var searchPageHeight: CGFloat? {
+        let height = collectionView.bounds.height - collectionView.contentInset.top
+        return height > 0 ? height : nil
+    }
+
+    private var fittedSearchPageHeight: CGFloat?
+
+    /// Re-fit the recents grid when the space under the chrome changes: the
+    /// page is first laid out full screen, then settles beside or below the
+    /// keyboard. Not while focus is in the page: under the linear keyboard the
+    /// chrome collapses as focus enters, and the grid would grow under it.
+    private func refitSearchRecentsIfNeeded() {
+        guard case .search = mode, let height = searchPageHeight,
+              height != fittedSearchPageHeight,
+              (UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView)?
+                .isDescendant(of: collectionView) != true
+        else { return }
+        fittedSearchPageHeight = height
+        reconfigureVisibleSearchCells()
+    }
+
     private func updateContentTopInset() {
         // Search reads the SAFE AREA, because that is how the search controller
         // hands us its chrome height. It does NOT size the results view below
@@ -2305,6 +2335,7 @@ final class PlexHomeViewController: UIViewController {
         let topInset: CGFloat = showHomeHero ? 0 : noHeroTop
         if collectionView.contentInset.top != topInset {
             collectionView.contentInset.top = topInset
+            refitSearchRecentsIfNeeded()
         }
     }
 
@@ -3409,7 +3440,7 @@ final class PlexHomeViewController: UIViewController {
 
         case .searchPrompt:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: SearchRecentsCell.reuseID, for: indexPath) as! SearchRecentsCell
-            cell.configure(recentItems: recentSearchItems)
+            cell.configure(recentItems: recentSearchItems, availableHeight: searchPageHeight)
             // A card reopens the ITEM, the way the Apple TV row does. It no
             // longer re-runs a stored query, so nothing is written back into
             // the keyboard field.
@@ -7819,6 +7850,12 @@ extension PlexHomeViewController: MenuBackHandling {
         // this page declines and Menu keeps its normal meaning there.
         guard let focused = UIFocusSystem.focusSystem(for: collectionView)?.focusedItem as? UIView,
               focused.isDescendant(of: collectionView) else { return false }
+        // Search: Menu goes back to the keyboard from any row, never to the
+        // top row first. Only Menu from the keyboard (not ours) opens the sidebar.
+        if case .search = mode, let onSearchMenuBack {
+            onSearchMenuBack()
+            return true
+        }
         guard StagedMenuBack.shouldReturnToTop(
             focusedSection: sectionIndex(forFocusedView: focused),
             topSection: topSectionIndex

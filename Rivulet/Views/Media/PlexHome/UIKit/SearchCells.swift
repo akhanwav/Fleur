@@ -8,8 +8,8 @@
 //  Full-width cells for the UIKit search surface (PlexHomeViewController
 //  in `.search` mode):
 //
-//   - SearchRecentsCell: the empty-query state — a left-aligned "Recently
-//     Searched" row of the items you last opened from search (#292).
+//   - SearchRecentsCell: the empty-query state — a "Recently Searched" grid
+//     of the items you last opened from search (#292), sized to fit the page.
 //   - SearchStateCell: inline searching / error / no-results states.
 //     Port of PlexSearchView.loadingView / errorView / noResultsView.
 //
@@ -33,17 +33,22 @@ final class SearchRecentsCell: UICollectionViewCell {
 
     var onRecentSelected: ((MediaItem) -> Void)?
 
-    /// The Apple TV app's recent-search card. Its corner radius is our own.
+    /// A grid of the Apple TV app's recent-search card, sized to the space it
+    /// is given so every recent shows without scrolling. Its corner radius is
+    /// our own.
     private enum Metrics {
-        static let cardWidth: CGFloat = MediaRowMetrics.gridWidth(columns: 3)
-        static let cardHeight: CGFloat = 160
-        static let cardSpacing: CGFloat = MediaRowMetrics.tileGap
-        /// Poster inset inside the card. The poster is the card's full height
-        /// minus this top and bottom, at the 2:3 poster ratio.
-        static let posterInset: CGFloat = 20
-        static let posterHeight: CGFloat = cardHeight - posterInset * 2
-        static let posterWidth: CGFloat = (cardHeight - posterInset * 2) * 2 / 3
-        static let posterToText: CGFloat = 20
+        static let columns = 2
+        /// Rows the grid is sized for, whatever the count: tiles keep one size
+        /// as recents are added. Columns x rows is the most it shows.
+        static let rows = 5
+        static let columnGap: CGFloat = MediaRowMetrics.tileGap
+        static let rowGap: CGFloat = 24
+        static let maxCardHeight: CGFloat = 160
+        static let minCardHeight: CGFloat = 96
+        /// The card height before the controller passes one (and in tests).
+        static let fallbackAvailableHeight: CGFloat = 774
+        static let posterInsetRatio: CGFloat = 0.125
+        static let posterToText: CGFloat = 24
         static let cardRadius: CGFloat = 20
         static let posterRadius: CGFloat = 6
         /// Gap below the keyboard's separator line.
@@ -54,21 +59,26 @@ final class SearchRecentsCell: UICollectionViewCell {
         /// now: the page's `contentInset.top` is 0 in search mode, because 48
         /// there plus 48 here stacked into a 139pt gap.
         static let topPadding: CGFloat = 17
-        static let headerToRow: CGFloat = 16
+        static let headerToGrid: CGFloat = 16
+        /// Clear of the screen's bottom edge.
+        static let bottomPadding: CGFloat = 60
     }
 
+    static var maxItems: Int { Metrics.columns * Metrics.rows }
+
     private let headerLabel = UILabel()
-    private let cardScroll = UIScrollView()
-    private let cardStack = UIStackView()
+    private let grid = UIStackView()
+    private var cards: [FocusableActionButton] = []
     /// One per visible card, cancelled on reconfigure/reuse.
     private var artworkTasks: [Task<Void, Never>] = []
     private var recentItems: [MediaItem] = []
+    private(set) var cardHeight: CGFloat = 0
 
     /// The focused card's item and window frame, for its long-press menu.
     var focusedRecent: (item: MediaItem, frame: CGRect)? {
-        guard let index = cardStack.arrangedSubviews.firstIndex(where: \.isFocused),
+        guard let index = cards.firstIndex(where: \.isFocused),
               let item = recentItems[safe: index] else { return nil }
-        let card = cardStack.arrangedSubviews[index]
+        let card = cards[index]
         return (item, card.convert(card.bounds, to: nil))
     }
 
@@ -89,22 +99,13 @@ final class SearchRecentsCell: UICollectionViewCell {
         headerLabel.textColor = .secondaryLabel
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        cardStack.axis = .horizontal
-        cardStack.spacing = Metrics.cardSpacing
-        cardStack.alignment = .center
-        cardStack.translatesAutoresizingMaskIntoConstraints = false
-
-        // clipsToBounds off so the focused card's scale is not cut off at the
-        // scroller's edges.
-        cardScroll.showsHorizontalScrollIndicator = false
-        // The stack carries the margin; the safe area would add 80 more.
-        cardScroll.contentInsetAdjustmentBehavior = .never
-        cardScroll.clipsToBounds = false
-        cardScroll.addSubview(cardStack)
-        cardScroll.translatesAutoresizingMaskIntoConstraints = false
+        grid.axis = .vertical
+        grid.spacing = Metrics.rowGap
+        grid.alignment = .fill
+        grid.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(headerLabel)
-        contentView.addSubview(cardScroll)
+        contentView.addSubview(grid)
 
         NSLayoutConstraint.activate([
             headerLabel.topAnchor.constraint(
@@ -112,25 +113,14 @@ final class SearchRecentsCell: UICollectionViewCell {
             headerLabel.leadingAnchor.constraint(
                 equalTo: contentView.leadingAnchor, constant: MediaRowMetrics.rowLeading),
 
-            // Full-bleed scroller: cards scroll past both screen edges, and the
-            // row's left margin comes from the stack's own leading inset, the
-            // way the shelf rows do it.
-            cardScroll.topAnchor.constraint(
-                equalTo: headerLabel.bottomAnchor, constant: Metrics.headerToRow),
-            cardScroll.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            cardScroll.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            cardScroll.heightAnchor.constraint(equalToConstant: Metrics.cardHeight),
-            cardScroll.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -40),
-
-            cardStack.leadingAnchor.constraint(
-                equalTo: cardScroll.contentLayoutGuide.leadingAnchor,
-                constant: MediaRowMetrics.rowLeading),
-            cardStack.trailingAnchor.constraint(
-                equalTo: cardScroll.contentLayoutGuide.trailingAnchor,
-                constant: -MediaRowMetrics.rowLeading),
-            cardStack.centerYAnchor.constraint(equalTo: cardScroll.frameLayoutGuide.centerYAnchor),
-            cardScroll.contentLayoutGuide.heightAnchor.constraint(
-                equalTo: cardScroll.frameLayoutGuide.heightAnchor)
+            grid.topAnchor.constraint(
+                equalTo: headerLabel.bottomAnchor, constant: Metrics.headerToGrid),
+            grid.leadingAnchor.constraint(
+                equalTo: contentView.leadingAnchor, constant: MediaRowMetrics.rowLeading),
+            grid.trailingAnchor.constraint(
+                equalTo: contentView.trailingAnchor, constant: -MediaRowMetrics.rowLeading),
+            grid.bottomAnchor.constraint(
+                equalTo: contentView.bottomAnchor, constant: -Metrics.bottomPadding)
         ])
     }
 
@@ -139,7 +129,7 @@ final class SearchRecentsCell: UICollectionViewCell {
     /// (A collection view enumerates focus items as CELLS, so a non-focusable
     /// cell would hide the cards from the engine entirely.)
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        cardScroll.isHidden ? super.preferredFocusEnvironments : cardStack.arrangedSubviews
+        grid.isHidden ? super.preferredFocusEnvironments : cards
     }
 
     override func prepareForReuse() {
@@ -152,44 +142,80 @@ final class SearchRecentsCell: UICollectionViewCell {
         artworkTasks.removeAll()
     }
 
-    func configure(recentItems: [MediaItem]) {
-        cancelArtwork()
-        self.recentItems = recentItems
-        cardStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let hasRecents = !recentItems.isEmpty
-        headerLabel.isHidden = !hasRecents
-        cardScroll.isHidden = !hasRecents
-        guard hasRecents else { return }
-
-        for item in recentItems {
-            let (card, poster) = Self.makeCard(for: item)
-            card.onPrimaryAction = { [weak self] in self?.onRecentSelected?(item) }
-            cardStack.addArrangedSubview(card)
-            guard let url = item.artwork.poster else { continue }
-            // @MainActor class, so the task inherits the main actor and the
-            // assignment needs no hop. Cancelled on reuse via `artworkTasks`.
-            artworkTasks.append(Task { [weak poster] in
-                let image = await ImageCacheManager.shared.image(for: url)
-                guard !Task.isCancelled else { return }
-                poster?.image = image
-            })
-        }
-        cardScroll.layoutIfNeeded()
+    /// The card height that fits `Metrics.rows` rows, the header and the
+    /// padding into `availableHeight`, the page height below the keyboard.
+    static func cardHeight(fitting availableHeight: CGFloat, headerHeight: CGFloat) -> CGFloat {
+        let gridHeight = availableHeight - Metrics.topPadding - headerHeight
+            - Metrics.headerToGrid - Metrics.bottomPadding
+        let rows = CGFloat(Metrics.rows)
+        let fitted = ((gridHeight - Metrics.rowGap * (rows - 1)) / rows).rounded(.down)
+        return min(Metrics.maxCardHeight, max(Metrics.minCardHeight, fitted))
     }
 
-    /// One Recently Searched card: poster, title, "Movie · 1977", and the
-    /// copy's quality tag.
+    /// Returns true when the card height changed, so the caller can re-measure
+    /// the cell.
+    @discardableResult
+    func configure(recentItems: [MediaItem], availableHeight: CGFloat? = nil) -> Bool {
+        cancelArtwork()
+        let items = Array(recentItems.prefix(Self.maxItems))
+        self.recentItems = items
+        cards = []
+        grid.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let hasRecents = !items.isEmpty
+        headerLabel.isHidden = !hasRecents
+        grid.isHidden = !hasRecents
+
+        let height = Self.cardHeight(
+            fitting: availableHeight ?? Metrics.fallbackAvailableHeight,
+            headerHeight: headerLabel.font.lineHeight.rounded(.up))
+        let changed = height != cardHeight
+        cardHeight = height
+        guard hasRecents else { return changed }
+
+        // Newest first, across then down.
+        for start in stride(from: 0, to: items.count, by: Metrics.columns) {
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.spacing = Metrics.columnGap
+            row.distribution = .fillEqually
+            for item in items[start..<min(start + Metrics.columns, items.count)] {
+                let (card, poster) = Self.makeCard(for: item, height: height)
+                card.onPrimaryAction = { [weak self] in self?.onRecentSelected?(item) }
+                row.addArrangedSubview(card)
+                cards.append(card)
+                guard let url = item.artwork.poster else { continue }
+                // @MainActor class, so the task inherits the main actor and the
+                // assignment needs no hop. Cancelled on reuse via `artworkTasks`.
+                artworkTasks.append(Task { [weak poster] in
+                    let image = await ImageCacheManager.shared.image(for: url)
+                    guard !Task.isCancelled else { return }
+                    poster?.image = image
+                })
+            }
+            // A short last row keeps its card at column width.
+            while row.arrangedSubviews.count < Metrics.columns {
+                row.addArrangedSubview(UIView())
+            }
+            grid.addArrangedSubview(row)
+        }
+        return changed
+    }
+
+    /// One Recently Searched card: the poster and the title, nothing else.
     ///
     /// `.glass` focus rather than the pill inversion the recents pills used:
     /// a card carries artwork, and a white fill with inverted text under a
     /// full-colour poster reads as a rendering bug.
     ///
     /// Returns the poster view so the caller can fill it asynchronously.
-    private static func makeCard(for item: MediaItem) -> (FocusableActionButton, UIImageView) {
+    private static func makeCard(for item: MediaItem, height: CGFloat) -> (FocusableActionButton, UIImageView) {
         let button = FocusableActionButton()
         button.focusStyle = .glass
         button.translatesAutoresizingMaskIntoConstraints = false
         button.layer.cornerRadius = Metrics.cardRadius
+
+        let inset = (height * Metrics.posterInsetRatio).rounded()
+        let posterHeight = height - inset * 2
 
         let poster = UIImageView()
         poster.contentMode = .scaleAspectFill
@@ -204,64 +230,28 @@ final class SearchRecentsCell: UICollectionViewCell {
         title.textColor = .white
         title.numberOfLines = 2
         title.lineBreakMode = .byTruncatingTail
-
-        let subtitle = UILabel()
-        subtitle.text = subtitleText(for: item)
-        subtitle.font = .preferredFont(forTextStyle: .caption1)
-        subtitle.textColor = UIColor.white.withAlphaComponent(0.6)
-        subtitle.numberOfLines = 2
-        subtitle.lineBreakMode = .byTruncatingTail
-
-        // Two copies of one title are two recents; the quality tells them apart.
-        let tags = VersionTagsView(showsServers: false)
-        tags.show(item: item)
-
-        let text = UIStackView(arrangedSubviews: [title, subtitle, tags])
-        text.axis = .vertical
-        text.spacing = 6
-        text.setCustomSpacing(10, after: subtitle)
-        text.alignment = .leading
-        text.isUserInteractionEnabled = false
-        text.translatesAutoresizingMaskIntoConstraints = false
+        title.isUserInteractionEnabled = false
+        title.translatesAutoresizingMaskIntoConstraints = false
 
         button.addSubview(poster)
-        button.addSubview(text)
+        button.addSubview(title)
 
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: Metrics.cardWidth),
-            button.heightAnchor.constraint(equalToConstant: Metrics.cardHeight),
+            button.heightAnchor.constraint(equalToConstant: height),
 
-            poster.leadingAnchor.constraint(
-                equalTo: button.leadingAnchor, constant: Metrics.posterInset),
+            poster.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: inset),
             poster.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-            poster.widthAnchor.constraint(equalToConstant: Metrics.posterWidth),
-            poster.heightAnchor.constraint(equalToConstant: Metrics.posterHeight),
+            poster.heightAnchor.constraint(equalToConstant: posterHeight),
+            poster.widthAnchor.constraint(equalToConstant: (posterHeight * 2 / 3).rounded()),
 
-            text.leadingAnchor.constraint(
+            title.leadingAnchor.constraint(
                 equalTo: poster.trailingAnchor, constant: Metrics.posterToText),
-            text.trailingAnchor.constraint(
-                lessThanOrEqualTo: button.trailingAnchor, constant: -Metrics.posterInset),
-            text.centerYAnchor.constraint(equalTo: button.centerYAnchor)
+            title.trailingAnchor.constraint(
+                lessThanOrEqualTo: button.trailingAnchor, constant: -inset),
+            title.centerYAnchor.constraint(equalTo: button.centerYAnchor)
         ])
 
         return (button, poster)
-    }
-
-    /// "Movie · 1977" / "TV Show". Apple puts a genre in the middle slot;
-    /// `MediaItem` carries no genre, and fetching one per card would be a
-    /// metadata round trip per recent, so the kind and year are the whole line.
-    private static func subtitleText(for item: MediaItem) -> String {
-        var parts: [String] = []
-        switch item.kind {
-        case .movie: parts.append("Movie")
-        case .show: parts.append("TV Show")
-        case .season: parts.append("Season")
-        case .episode: parts.append("Episode")
-        case .collection: parts.append("Collection")
-        case .person, .unknown: break
-        }
-        if let year = item.year { parts.append(String(year)) }
-        return parts.joined(separator: " · ")
     }
 }
 
