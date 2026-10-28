@@ -260,12 +260,13 @@ final class PosterCell: UICollectionViewCell {
         setFallbackQuery(ArtworkFallback.Query(item))
         let isAudio = ["artist", "album", "track"].contains(item.type ?? "")
         // A season (Recently Added lists one when several of its episodes
-        // land) is named by its show alone.
+        // land) or an episode is named by its show, over the season it is in.
         if item.type == "season", !isAudio {
-            caption.configure(title: item.parentTitle ?? " ", detail: nil)
+            caption.configure(title: item.parentTitle ?? " ", detail: Self.seasonLine(item.index))
+        } else if item.type == "episode" {
+            caption.configure(title: item.grandparentTitle ?? item.title, detail: Self.seasonLine(item.parentIndex))
         } else {
-            caption.configure(title: isAudio ? nil : (item.type == "episode" ? item.grandparentTitle ?? item.title : item.title),
-                              year: item.type == "episode" ? nil : item.year)
+            caption.configure(title: isAudio ? nil : item.title, year: item.year)
         }
         let url = posterURL(for: item)
         loadImage(from: url, item: item)
@@ -280,13 +281,15 @@ final class PosterCell: UICollectionViewCell {
         setSquare(item.isMusic == true)
         setFallbackQuery(item.isMusic == true ? nil : ArtworkFallback.Query(item))
         // A season (Recently Added lists one when several of its episodes
-        // land) is named by its show alone. Some hubs send a season without
-        // its show's name; it is read from the server then.
+        // land) or an episode is named by its show, over the season it is in.
+        // Some hubs send a season without its show's name; it is read from
+        // the server then.
         if item.kind == .season, item.isMusic != true {
             showSeasonShowTitle(for: item)
+        } else if item.kind == .episode {
+            caption.configure(title: item.seriesTitle ?? item.title, detail: Self.seasonLine(item.seasonNumber))
         } else {
-            caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
-                              year: item.kind == .episode ? nil : item.year)
+            caption.configure(title: item.isMusic == true ? nil : item.title, year: item.year)
         }
         // Episodes prefer the grandparent (show) poster so hub rows render
         // show art instead of letterboxed episode stills, matching the Plex path.
@@ -590,16 +593,23 @@ final class PosterCell: UICollectionViewCell {
     private var showTitleTask: Task<Void, Never>?
     private var showTitleRef: MediaItemRef?
 
+    /// "Season 4"; nothing for Specials (season 0) or an unknown season.
+    static func seasonLine(_ season: Int?) -> String? {
+        guard let season, season > 0 else { return nil }
+        return "Season \(season)"
+    }
+
     private func showSeasonShowTitle(for item: MediaItem) {
         let known = item.seriesTitle ?? SeasonShowTitles.known(for: item.ref)
-        caption.configure(title: known ?? " ", detail: nil)
+        let detail = Self.seasonLine(item.seasonNumber)
+        caption.configure(title: known ?? " ", detail: detail)
         guard known == nil else { return }
         let ref = item.ref
         showTitleRef = ref
         showTitleTask = Task { [weak self] in
             let title = await SeasonShowTitles.title(for: item)
             guard !Task.isCancelled, let self, self.showTitleRef == ref, let title else { return }
-            self.caption.configure(title: title, detail: nil)
+            self.caption.configure(title: title, detail: detail)
         }
     }
 
