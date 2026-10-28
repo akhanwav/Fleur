@@ -920,6 +920,68 @@ Most tests live in `RivuletTests/Unit/` (mirrors `Rivulet/` roughly by feature �
 
 **`Docs/` is gitignored** (untracked on purpose, `c89b52d`), though some files under it are force-added and do ship — the `superpowers/` plans and specs, and `AETHER_ENGINE_STARTUP_NOTES.md`. What is *not* in the repo is `Docs/RIVULET_PLAYER.md` and `Docs/DESIGN_GUIDE.md`, both referenced throughout this file; they live only on the maintainer's machine. The `aether-update` and `rivulet-tvos-uikit` skills referenced above are also absent — `.claude/` is gitignored with nothing force-added. If a referenced doc or skill is missing in your environment, say so and proceed carefully rather than guessing its contents.
 
+## Multiple Plex servers
+
+The selected server is the **main** one; every other enabled, reachable server
+the account can see is reached with its own token through
+`OtherServersAvailabilityChecker.enabledServers()` (`ServerAccess`: machineId,
+name, URL, token, `isMain`). Each gets its own `PlexProvider`, registered with
+`MediaProviderRegistry.registerAdditionalPlex` under `plex:<machineId>`, so an
+item's `ref.providerID` names the server it came from.
+
+- **Resolve an item's server with `PlexItemServer`** (`access(for:)`,
+  `name(for:)`, `machineId(for:)`). `access(for:)` returns nil for a
+  non-main provider that is not registered yet. It never falls back to the main
+  server: same ratingKey, different title.
+- **Continue Watching is merged across servers** (admin profile only,
+  `PlexDataStore.refreshOtherServersContinueWatching`). `mergeContinueWatching`
+  keys on title + quality: a 4K and a 1080p copy are two adjacent cards; the
+  same quality on two servers merges into the more recently watched copy.
+  `sharingResumePoints` gives every copy of one `plex://` guid the newest
+  `viewOffset`. Cached rows drop other-server cards until their provider
+  registers, which is why their quality tags are never missing.
+- **Progress goes to the server that played.** `PlexProgressReporter` takes
+  `server:`. On stop or watched, `UniversalPlayerViewModel.syncSiblingCopies`
+  writes the same position to the other copies **on the same server** only;
+  other servers keep their own watch state.
+- Cards, the long-press menu, the detail page's Ways to Watch and the carousel
+  all name and open the item's own server.
+
+## Maintainer setup (local)
+
+- **Servers**: Sesama (main), Alpha, Diamond, akhan mini. Test multi-server
+  behaviour against these; Jurassic World: Rebirth has a 4K DV and a 1080p copy
+  and is the Continue Watching per-quality check.
+- **Test device**: the Apple TV named "Living Room".
+- **Never commit `Rivulet.xcscheme`.** The maintainer keeps its Run action on
+  `Release` locally. Stage files by name, never `git add -A`.
+- **Install from the folder the build actually wrote.** Because of that scheme
+  change, a build without `-configuration` goes to `Release-appletvos` (or
+  `Release-appletvsimulator`); the `Debug-*` folder beside it is stale and
+  installing from it silently ships old code. Either pass `-configuration` and
+  install from the matching folder, or check the binary's timestamp first:
+  ```bash
+  xcodebuild -scheme Rivulet -configuration Release \
+    -destination 'platform=tvOS,name=Living Room' -derivedDataPath <dd> -allowProvisioningUpdates build
+  xcrun devicectl device install app --device "Living Room" <dd>/Build/Products/Release-appletvos/Rivulet.app
+  ```
+- **Sentry does not start under XCTest** (`SentryStartup` checks
+  `XCTestConfigurationFilePath`), so test runs send no events.
+- **AetherEngine 7.49.0** fixes our upstream issues #883 (builds on Xcode 26.3),
+  #884 (24.000 fps requests 24 Hz), #885 (software-path play gate waits for the
+  rate switch) and #886 (24p Matroska on an exact frame grid). Replies are
+  posted on all four. #884 and #885 were confirmed only on the request side,
+  because Match Content was off on Living Room.
+
+### Open follow-ups
+- **Match Frame Rate on**: rerun #884 (panel actually at 24 Hz) and #885 (the
+  software path waits for the switch) on Living Room, then report back on both
+  issues.
+- **Phase 6 speed work**: not yet started. Ask the maintainer for its scope
+  before beginning.
+- **Held episode-selection warning**: held, not yet shipped. Ask the maintainer
+  for details before acting.
+
 ## Key Files
 
 | Purpose | File |
