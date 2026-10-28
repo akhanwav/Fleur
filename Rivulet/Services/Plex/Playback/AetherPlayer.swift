@@ -591,6 +591,26 @@ final class AetherPlayer: PlayerProtocol {
     /// Read panel HDR state for LoadOptions.panelIsInHDRMode. Matches
     /// the post-handshake EDR detection pattern Aether 2.0 documents:
     /// `> 1.001` means the panel accepted HDR signaling.
+    /// Settings > Playback > Dolby Vision Output, read at each load.
+    ///
+    /// tvOS has no readout of the output mode, so Auto reads it from the two
+    /// things that put the TV in Dolby Vision: Match Content, which switches
+    /// it per title, and with that off a box Format of Dolby Vision, which is
+    /// when tvOS lists Dolby Vision among the modes it can present now.
+    private static func applyDolbyVisionOutput(to options: inout LoadOptions) {
+        switch DolbyVisionOutput.current {
+        case .always:
+            options.panelPresentsDolbyVision = true
+        case .hdr10:
+            options.dolbyVisionHandling = .baseLayerOnly
+        case .auto:
+            let matching = DisplayCriteriaManager.shared.isDisplayCriteriaMatchingEnabled
+            let presentsDV = AVPlayer.availableHDRModes.contains(.dolbyVision)
+            print("[AetherPlayer] Dolby Vision output auto: matching=\(matching) availableDV=\(presentsDV)")
+            if !matching && !presentsDV { options.dolbyVisionHandling = .baseLayerOnly }
+        }
+    }
+
     private static func panelIsInHDRMode() -> Bool {
         guard let screen = UIApplication.shared.connectedScenes
             .compactMap({ ($0 as? UIWindowScene)?.screen })
@@ -1101,6 +1121,7 @@ final class AetherPlayer: PlayerProtocol {
                 preferredDecodePath: (role == .fullscreen && !nativeRemoteHLS && Self.needsDeinterlacing(url))
                     ? .software : .automatic
             )
+            Self.applyDolbyVisionOutput(to: &options)
             if role == .multiviewSlot {
                 // A tile never scrubs and zaps often: segments cut at every
                 // keyframe join in seconds rather than waiting out the
@@ -1313,7 +1334,7 @@ final class AetherPlayer: PlayerProtocol {
         // so the engine can also serve them as native WebVTT renditions if
         // that path is ever enabled; httpHeaders nil inherits the media's
         // own LoadOptions headers (same Plex auth).
-        let options = LoadOptions(
+        var options = LoadOptions(
             suppressDisplayCriteria: false,
             httpHeaders: headers ?? [:],
             matchContentEnabled: true,
@@ -1346,6 +1367,7 @@ final class AetherPlayer: PlayerProtocol {
             // pays the engine's own re-anchor cost (see `setAudioDelay`).
             audioDelaySeconds: audioDelaySeconds
         )
+        Self.applyDolbyVisionOutput(to: &options)
         // New content, so the previous item's aspect ratio describes nothing.
         // Reset HERE rather than when `currentItem` goes nil: the engine also
         // swaps its player for SAME-content reasons (audio track switch,

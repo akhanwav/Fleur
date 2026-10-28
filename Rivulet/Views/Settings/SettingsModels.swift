@@ -130,6 +130,32 @@ enum AutoplayLimit: Int, CaseIterable, CustomStringConvertible {
     func allowsAutoplay(afterEpisodesInARow count: Int) -> Bool { self == .off || count < rawValue }
 }
 
+// MARK: - Dolby Vision Output
+
+/// What a Dolby Vision title sends to the TV. HDR10 is the title's base layer
+/// alone, which is what a player without Dolby Vision presents.
+enum DolbyVisionOutput: String, CaseIterable, CustomStringConvertible {
+    /// Dolby Vision when the TV is in Dolby Vision mode or will switch to it
+    /// (Match Dynamic Range), the HDR10 base layer otherwise.
+    case auto
+    case always
+    case hdr10
+
+    static let storageKey = "dolbyVisionOutput"
+
+    static var current: DolbyVisionOutput {
+        UserDefaults.standard.string(forKey: storageKey).flatMap(DolbyVisionOutput.init) ?? .auto
+    }
+
+    var description: String {
+        switch self {
+        case .auto: "Auto"
+        case .always: "Always Dolby Vision"
+        case .hdr10: "HDR10"
+        }
+    }
+}
+
 // MARK: - Skip Length
 
 /// Single Left/Right tap-skip length (seconds). Drives `InputConfig.tapSeekSeconds`.

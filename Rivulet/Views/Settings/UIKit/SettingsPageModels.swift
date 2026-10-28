@@ -370,6 +370,13 @@ enum SettingsContent {
                                              let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
                                              SettingsStore.setInt(AutoplayLimit.storageKey, next.rawValue)
                                          })),
+            SettingsRowItem(id: "dolbyVisionOutput", title: "Dolby Vision Output",
+                            kind: .cycle(value: { DolbyVisionOutput.current.description },
+                                         next: {
+                                             let all = DolbyVisionOutput.allCases
+                                             let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
+                                             SettingsStore.setString(DolbyVisionOutput.storageKey, next.rawValue)
+                                         })),
             SettingsRowItem(id: "skipLength", title: "Skip Forward Length",
                             kind: .navigationValue(.skipIntervalPicker, value: {
                                 SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""

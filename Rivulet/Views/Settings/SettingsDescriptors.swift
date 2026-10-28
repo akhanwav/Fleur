@@ -183,6 +183,10 @@ enum SettingsDescriptorStore {
             icon: "moon.zzz",
             description: "After this many episodes play in a row, the next one waits for you instead of starting on its own."
         ),
+        "dolbyVisionOutput": SettingDescriptor(
+            icon: "sparkles.tv",
+            description: "Auto sends Dolby Vision when the TV is in Dolby Vision mode or Match Dynamic Range is on, and HDR10 otherwise. HDR10 plays a Dolby Vision title's HDR10 layer alone. Takes effect on the next title."
+        ),
         "skipLength": SettingDescriptor(
             icon: "forward.fill",
             description: "How far a single Right press skips ahead during playback."
