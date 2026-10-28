@@ -947,41 +947,6 @@ item's `ref.providerID` names the server it came from.
 - Cards, the long-press menu, the detail page's Ways to Watch and the carousel
   all name and open the item's own server.
 
-## Maintainer setup (local)
-
-- **Servers**: Sesama (main), Alpha, Diamond, akhan mini. Test multi-server
-  behaviour against these; Jurassic World: Rebirth has a 4K DV and a 1080p copy
-  and is the Continue Watching per-quality check.
-- **Test device**: the Apple TV named "Living Room".
-- **Never commit `Rivulet.xcscheme`.** The maintainer keeps its Run action on
-  `Release` locally. Stage files by name, never `git add -A`.
-- **Install from the folder the build actually wrote.** Because of that scheme
-  change, a build without `-configuration` goes to `Release-appletvos` (or
-  `Release-appletvsimulator`); the `Debug-*` folder beside it is stale and
-  installing from it silently ships old code. Either pass `-configuration` and
-  install from the matching folder, or check the binary's timestamp first:
-  ```bash
-  xcodebuild -scheme Rivulet -configuration Release \
-    -destination 'platform=tvOS,name=Living Room' -derivedDataPath <dd> -allowProvisioningUpdates build
-  xcrun devicectl device install app --device "Living Room" <dd>/Build/Products/Release-appletvos/Rivulet.app
-  ```
-- **Sentry does not start under XCTest** (`SentryStartup` checks
-  `XCTestConfigurationFilePath`), so test runs send no events.
-- **AetherEngine 7.49.0** fixes our upstream issues #883 (builds on Xcode 26.3),
-  #884 (24.000 fps requests 24 Hz), #885 (software-path play gate waits for the
-  rate switch) and #886 (24p Matroska on an exact frame grid). Replies are
-  posted on all four. #884 and #885 were confirmed only on the request side,
-  because Match Content was off on Living Room.
-
-### Open follow-ups
-- **Match Frame Rate on**: rerun #884 (panel actually at 24 Hz) and #885 (the
-  software path waits for the switch) on Living Room, then report back on both
-  issues.
-- **Phase 6 speed work**: not yet started. Ask the maintainer for its scope
-  before beginning.
-- **Held episode-selection warning**: held, not yet shipped. Ask the maintainer
-  for details before acting.
-
 ## Key Files
 
 | Purpose | File |
@@ -1186,7 +1151,8 @@ every UIViewController appearance and HTTP request, and a saturated quota makes
 Sentry drop spans server-side (biasing the named measurements, not just thinning
 them). Add new measured transaction names to the sampler's 1.0 branch; do not
 restore a flat 1.0. Start transactions through `SentryBridge.startTransaction`,
-which no-ops until the SDK starts (no DSN, no SDK). tvOS Debug builds report
+which no-ops until the SDK starts (no DSN, no SDK). The SDK never starts under XCTest
+(`SentryStartup` checks `XCTestConfigurationFilePath`), so test runs send nothing. tvOS Debug builds report
 too, under environment `debug`.
 
 **Never send stream URLs to Sentry.** Xtream-style IPTV paths embed credentials

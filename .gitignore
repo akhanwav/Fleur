@@ -110,3 +110,6 @@ Screenshots/AppStore/*
 .mcp.json
 .vscode/mcp.json
 .vscode/extensions.json
+
+# Maintainer-local notes (server names, devices, follow-ups)
+CLAUDE.local.md
