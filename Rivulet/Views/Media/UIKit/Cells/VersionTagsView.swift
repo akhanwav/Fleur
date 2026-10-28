@@ -5,7 +5,7 @@
 //  VersionTagsView.swift
 //  Rivulet
 //
-//  The quality and servers of one search result ("4K DV", "Sesama +2"), as
+//  The quality and servers of one search result ("4K DV", "Home Server +2"), as
 //  Continue Watching tags side by side. Search lists every copy of a title as
 //  its own result, so a 4K and a 1080p copy read as duplicates without them.
 //
@@ -63,7 +63,7 @@ final class VersionTagsView: UIStackView {
         }
     }
 
-    /// The server tag alone ("Sesama +2"): Search's suggestions, whose
+    /// The server tag alone ("Home Server +2"): Search's suggestions, whose
     /// caption already says what the title is.
     func showServer(item: MediaItem) {
         guard item.ref != shownRef else { return }

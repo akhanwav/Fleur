@@ -353,7 +353,7 @@ final class PersonDetailViewController: UIViewController {
                 cell.configure(
                     item: entry.item,
                     // No badge: the On My Servers filter answers "where is it",
-                    // and a badge read as "on Diamond" for titles only on others.
+                    // and a badge read as "on <this server>" for titles only on others.
                     badge: nil,
                     caption: .init(title: entry.item.title,
                                    detail: entry.item.year.map(String.init),

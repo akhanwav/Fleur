@@ -36,6 +36,9 @@ final class WaysToWatchLookup {
         return lookup
     }
 
+    /// Forget every lookup (another profile's copies are not this one's).
+    static func clearCache() { cache.removeAll() }
+
     /// `item`'s lookup if one is cached or running, without starting one.
     static func existing(for item: MediaItem) -> WaysToWatchLookup? { cache[item.ref] }
 
@@ -77,8 +80,12 @@ final class WaysToWatchLookup {
                          serverName: PlexItemServer.name(for: item.ref) ?? "This Server",
                          isMainServer: true, item: item, detail: nil, remote: nil)
         let ownless = item.isMetadataOnly
+        // Another Home profile reaches only the main server
+        // (`OtherServersAvailabilityChecker.lookupServers`): no row waits on the rest.
+        let accountContent = PlexAuthManager.shared.accountContentToken != nil
         otherServers = ServerPreferences.knownServers.filter {
             ($0.machineId != main || ownless) && ServerPreferences.isEnabled($0.machineId)
+                && (accountContent || $0.machineId == ServerPreferences.mainMachineId)
         }
         pending = Set(otherServers.map(\.machineId))
     }

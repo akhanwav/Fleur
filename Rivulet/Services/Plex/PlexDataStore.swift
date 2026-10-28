@@ -620,6 +620,7 @@ class PlexDataStore: ObservableObject {
         // Clear user-specific caches
         clearHeroCache()
         clearNextEpisodeCache()
+        WaysToWatchLookup.clearCache()
         clearFreshnessTimestamps()
         logoMetadataCache.removeAll()
 
@@ -1878,10 +1879,12 @@ class PlexDataStore: ObservableObject {
 
     /// Fetch the other enabled servers' Continue Watching, all at once, and
     /// re-project Home when any changed. A server that does not answer keeps
-    /// its last list. The owner's only: other servers are reached with the
-    /// account's own tokens, so a managed profile would see the owner's items.
+    /// its last list. The account's own profile only: other servers are
+    /// reached with the account's tokens, so another Home profile would see
+    /// the owner's items (`lookupServers` holds every other-server feature to
+    /// the same rule).
     private func refreshOtherServersContinueWatching() {
-        guard otherServersContinueWatchingTask == nil, profileManager.isAdminUser else { return }
+        guard otherServersContinueWatchingTask == nil, authManager.accountContentToken != nil else { return }
         otherServersContinueWatchingTask = Task { [weak self] in
             let servers = await OtherServersAvailabilityChecker.shared.enabledServers().filter { !$0.isMain }
             let fetched = await withTaskGroup(of: (Int, [PlexMetadata]?).self) { group in
@@ -2023,11 +2026,13 @@ class PlexDataStore: ObservableObject {
 
     /// What makes two Continue Watching entries the same title. Plex's agent
     /// guids are the same on every server; a local guid (an unmatched file)
-    /// is that server's alone, so it never merges.
+    /// is that server's alone, so it never merges. Nor does a show without
+    /// one: two shows can share a title ("The Office"), so it is matched by
+    /// its ratingKey on its own server only.
     nonisolated static func continueWatchingKey(_ meta: PlexMetadata, list: Int, index: Int) -> String {
         if meta.type == "episode" {
             if let show = meta.grandparentGuid, show.hasPrefix("plex://") { return show }
-            if let title = meta.grandparentTitle { return "show:\(title.lowercased())" }
+            if let show = meta.grandparentRatingKey { return "\(list):show:\(show)" }
         } else if let guid = meta.guid, guid.hasPrefix("plex://") {
             return guid
         }

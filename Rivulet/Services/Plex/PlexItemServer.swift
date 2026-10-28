@@ -6,7 +6,7 @@
 //  Rivulet
 //
 //  The Plex server an item belongs to. Continue Watching lists other servers'
-//  items (Alpha's, Diamond's) beside the signed-in server's; each is minted
+//  items (a shared server's, a second owned one's) beside the signed-in server's; each is minted
 //  with its own server's provider id, and opening, playing or removing it has
 //  to talk to that server, with its own ratingKey and token.
 //

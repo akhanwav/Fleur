@@ -32,40 +32,40 @@ final class ServerPreferencesTests: XCTestCase {
 
     /// Never ordered: the main server first, the rest as given.
     func test_unorderedPutsMainFirst() {
-        ServerPreferences.setMainMachineId("diamond")
-        XCTAssertEqual(ServerPreferences.sorted(["sesame", "diamond", "alpha"], by: { $0 }),
-                       ["diamond", "sesame", "alpha"])
+        ServerPreferences.setMainMachineId("main-server")
+        XCTAssertEqual(ServerPreferences.sorted(["shared-server", "main-server", "other-server"], by: { $0 }),
+                       ["main-server", "shared-server", "other-server"])
     }
 
     func test_moveStoresTheShownOrder() {
-        ServerPreferences.setMainMachineId("diamond")
-        let shown = ["diamond", "sesame", "alpha"]
-        ServerPreferences.move("alpha", up: true, among: shown)
-        XCTAssertEqual(ServerPreferences.sorted(shown, by: { $0 }), ["diamond", "alpha", "sesame"])
-        ServerPreferences.move("alpha", up: true, among: shown)
-        XCTAssertEqual(ServerPreferences.sorted(shown, by: { $0 }), ["alpha", "diamond", "sesame"])
+        ServerPreferences.setMainMachineId("main-server")
+        let shown = ["main-server", "shared-server", "other-server"]
+        ServerPreferences.move("other-server", up: true, among: shown)
+        XCTAssertEqual(ServerPreferences.sorted(shown, by: { $0 }), ["main-server", "other-server", "shared-server"])
+        ServerPreferences.move("other-server", up: true, among: shown)
+        XCTAssertEqual(ServerPreferences.sorted(shown, by: { $0 }), ["other-server", "main-server", "shared-server"])
     }
 
     /// The main server can't be turned off; the others can.
     func test_mainServerStaysOn() {
-        ServerPreferences.setMainMachineId("diamond")
-        ServerPreferences.setEnabled("diamond", false)
-        ServerPreferences.setEnabled("sesame", false)
-        XCTAssertTrue(ServerPreferences.isEnabled("diamond"))
-        XCTAssertFalse(ServerPreferences.isEnabled("sesame"))
-        ServerPreferences.setEnabled("sesame", true)
-        XCTAssertTrue(ServerPreferences.isEnabled("sesame"))
+        ServerPreferences.setMainMachineId("main-server")
+        ServerPreferences.setEnabled("main-server", false)
+        ServerPreferences.setEnabled("shared-server", false)
+        XCTAssertTrue(ServerPreferences.isEnabled("main-server"))
+        XCTAssertFalse(ServerPreferences.isEnabled("shared-server"))
+        ServerPreferences.setEnabled("shared-server", true)
+        XCTAssertTrue(ServerPreferences.isEnabled("shared-server"))
     }
 
     /// An episode play remembers its show too, so the show page opens there.
     func test_recordWatchedCoversEpisodeAndShow() {
-        ServerPreferences.recordWatched(guids: ["plex://episode/1", "plex://show/9", nil], machineId: "sesame")
-        XCTAssertEqual(ServerPreferences.lastWatchedServer(forGuid: "plex://episode/1"), "sesame")
-        XCTAssertEqual(ServerPreferences.lastWatchedServer(forGuid: "plex://show/9"), "sesame")
-        ServerPreferences.recordWatched(guids: ["plex://show/9"], machineId: "alpha")
-        XCTAssertEqual(ServerPreferences.lastWatchedServer(forGuid: "plex://show/9"), "alpha")
+        ServerPreferences.recordWatched(guids: ["plex://episode/1", "plex://show/9", nil], machineId: "shared-server")
+        XCTAssertEqual(ServerPreferences.lastWatchedServer(forGuid: "plex://episode/1"), "shared-server")
+        XCTAssertEqual(ServerPreferences.lastWatchedServer(forGuid: "plex://show/9"), "shared-server")
+        ServerPreferences.recordWatched(guids: ["plex://show/9"], machineId: "other-server")
+        XCTAssertEqual(ServerPreferences.lastWatchedServer(forGuid: "plex://show/9"), "other-server")
         // Only Plex guids are keys.
-        ServerPreferences.recordWatched(guids: ["tmdb://5"], machineId: "alpha")
+        ServerPreferences.recordWatched(guids: ["tmdb://5"], machineId: "other-server")
         XCTAssertNil(ServerPreferences.lastWatchedServer(forGuid: "tmdb://5"))
     }
 }

@@ -43,7 +43,7 @@ actor OtherServersAvailabilityChecker {
         var id: String { "\(machineId):\(ratingKey)" }
     }
 
-    private struct Server: Sendable {
+    struct Server: Sendable {
         let machineId: String
         let name: String
         let serverURL: String
@@ -117,9 +117,8 @@ actor OtherServersAvailabilityChecker {
             return results
         }
         let start = ContinuousClock.now
-        var found: [ServerCopy] = []
+        var answers: [[ServerCopy]?] = []
         var results: [T] = []
-        var allAnswered = true
         await withTaskGroup(of: ([ServerCopy]?, [T]).self) { group in
             for server in servers {
                 group.addTask {
@@ -128,15 +127,13 @@ actor OtherServersAvailabilityChecker {
                 }
             }
             for await (copies, result) in group {
-                if let copies { found += copies } else { allAnswered = false }
+                answers.append(copies)
                 results += result
             }
         }
-        // A server that failed or timed out is asked again next time, never
-        // remembered as not holding the title.
-        if allAnswered {
-            copiesCache[plexGuid] = found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
-        }
+        let combined = Self.combine(answers)
+        if combined.cacheable { copiesCache[plexGuid] = combined.copies }
+        let found = combined.copies
         otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
         return results
     }
@@ -149,20 +146,35 @@ actor OtherServersAvailabilityChecker {
         let servers = await reachableServers()
         if let cached = copiesCache[plexGuid] { return cached }
         let start = ContinuousClock.now
-        let (found, allAnswered) = await withTaskGroup(of: [ServerCopy]?.self) { group in
+        let answers = await withTaskGroup(of: [ServerCopy]?.self) { group in
             for server in servers {
                 group.addTask { await Self.lookup(plexGuid, on: server) }
             }
-            var found: [ServerCopy] = []
-            var allAnswered = true
-            for await copies in group {
-                if let copies { found += copies } else { allAnswered = false }
-            }
-            return (found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }, allAnswered)
+            var answers: [[ServerCopy]?] = []
+            for await copies in group { answers.append(copies) }
+            return answers
         }
-        if allAnswered { copiesCache[plexGuid] = found }
+        let (found, cacheable) = Self.combine(answers)
+        if cacheable { copiesCache[plexGuid] = found }
         otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
         return found
+    }
+
+    /// Every server's answer in one list, sorted, and whether it may be
+    /// cached: a server that failed or timed out (nil) is asked again next
+    /// time, never remembered as not holding the title.
+    nonisolated static func combine(_ answers: [[ServerCopy]?]) -> (copies: [ServerCopy], cacheable: Bool) {
+        let copies = answers.compactMap { $0 }.flatMap { $0 }
+            .sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
+        return (copies, !answers.contains { $0 == nil })
+    }
+
+    /// The servers a lookup may ask. Other servers are reached with the
+    /// account's own tokens, so another Home profile (a managed user) gets
+    /// only the main server, on its own token: never the owner's copies,
+    /// progress or titles its restrictions hide.
+    nonisolated static func lookupServers(_ servers: [Server], accountContent: Bool) -> [Server] {
+        accountContent ? servers : servers.filter(\.isMain)
     }
 
     // MARK: - Lookup
@@ -195,10 +207,11 @@ actor OtherServersAvailabilityChecker {
         }
     }
 
-    /// Plex's search type for a guid's kind: movie 1, show 2, episode 4.
-    private static func plexType(of plexGuid: String) -> String? {
+    /// Plex's search type for a guid's kind: movie 1, show 2, season 3, episode 4.
+    nonisolated static func plexType(of plexGuid: String) -> String? {
         if plexGuid.hasPrefix("plex://movie/") { return "1" }
         if plexGuid.hasPrefix("plex://show/") { return "2" }
+        if plexGuid.hasPrefix("plex://season/") { return "3" }
         if plexGuid.hasPrefix("plex://episode/") { return "4" }
         return nil
     }
@@ -244,17 +257,29 @@ actor OtherServersAvailabilityChecker {
     /// The servers that answered a probe (main included), resolved once per
     /// `serversTTL`. Unreachable servers are left out until the next resolve.
     private func reachableServers() async -> [Server] {
+        let accountContent = await MainActor.run { PlexAuthManager.shared.accountContentToken != nil }
+        // Answers found for one profile are not another's.
+        if accountContent != cachedForAccount {
+            copiesCache = [:]
+            cachedForAccount = accountContent
+        }
         if let resolvedAt = serversResolvedAt, Date().timeIntervalSince(resolvedAt) > Self.serversTTL {
             serversTask = nil
             copiesCache = [:]
         }
-        if let serversTask { return await serversTask.value }
-        let task = Task { await Self.resolveServers() }
-        serversTask = task
-        let servers = await task.value
-        serversResolvedAt = Date()
-        return servers
+        let servers: [Server]
+        if let serversTask {
+            servers = await serversTask.value
+        } else {
+            let task = Task { await Self.resolveServers() }
+            serversTask = task
+            servers = await task.value
+            serversResolvedAt = Date()
+        }
+        return Self.lookupServers(servers, accountContent: accountContent)
     }
+
+    private var cachedForAccount: Bool?
 
     private static func resolveServers() async -> [Server] {
         let start = ContinuousClock.now
