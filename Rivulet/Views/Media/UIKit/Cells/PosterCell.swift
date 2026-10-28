@@ -260,9 +260,9 @@ final class PosterCell: UICollectionViewCell {
         setFallbackQuery(ArtworkFallback.Query(item))
         let isAudio = ["artist", "album", "track"].contains(item.type ?? "")
         // A season (Recently Added lists one when several of its episodes
-        // land) is named by its show, with "Season 1" beneath.
+        // land) is named by its show alone.
         if item.type == "season", !isAudio {
-            caption.configure(title: item.parentTitle ?? item.title, detail: item.title)
+            caption.configure(title: item.parentTitle ?? " ", detail: nil)
         } else {
             caption.configure(title: isAudio ? nil : (item.type == "episode" ? item.grandparentTitle ?? item.title : item.title),
                               year: item.type == "episode" ? nil : item.year)
@@ -280,9 +280,10 @@ final class PosterCell: UICollectionViewCell {
         setSquare(item.isMusic == true)
         setFallbackQuery(item.isMusic == true ? nil : ArtworkFallback.Query(item))
         // A season (Recently Added lists one when several of its episodes
-        // land) is named by its show, with "Season 1" beneath.
+        // land) is named by its show alone. Some hubs send a season without
+        // its show's name; it is read from the server then.
         if item.kind == .season, item.isMusic != true {
-            caption.configure(title: item.seriesTitle ?? item.title, detail: item.title)
+            showSeasonShowTitle(for: item)
         } else {
             caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
                               year: item.kind == .episode ? nil : item.year)
@@ -586,6 +587,22 @@ final class PosterCell: UICollectionViewCell {
         watchedBadge.isHidden = false
     }
 
+    private var showTitleTask: Task<Void, Never>?
+    private var showTitleRef: MediaItemRef?
+
+    private func showSeasonShowTitle(for item: MediaItem) {
+        let known = item.seriesTitle ?? SeasonShowTitles.known(for: item.ref)
+        caption.configure(title: known ?? " ", detail: nil)
+        guard known == nil else { return }
+        let ref = item.ref
+        showTitleRef = ref
+        showTitleTask = Task { [weak self] in
+            let title = await SeasonShowTitles.title(for: item)
+            guard !Task.isCancelled, let self, self.showTitleRef == ref, let title else { return }
+            self.caption.configure(title: title, detail: nil)
+        }
+    }
+
     private var seasonsTask: Task<Void, Never>?
 
     /// Search: a show's tag names its seasons ("3 Seasons") in place of the
@@ -615,9 +632,41 @@ final class PosterCell: UICollectionViewCell {
     }
 
     private func cancelSeasonCount() {
+        showTitleTask?.cancel()
+        showTitleTask = nil
+        showTitleRef = nil
         seasonsTask?.cancel()
         seasonsTask = nil
         seasonsRef = nil
+    }
+}
+
+/// The show a season belongs to, for a season that arrived without its
+/// show's name. Read once per season from the server and kept for the session.
+@MainActor
+enum SeasonShowTitles {
+    private static var titles: [MediaItemRef: String] = [:]
+    private static var inFlight: [MediaItemRef: Task<String?, Never>] = [:]
+
+    static func known(for ref: MediaItemRef) -> String? { titles[ref] }
+
+    static func title(for season: MediaItem) async -> String? {
+        let ref = season.ref
+        if let known = titles[ref] { return known }
+        if let task = inFlight[ref] { return await task.value }
+        let task = Task<String?, Never> {
+            guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID) else { return nil }
+            if let showRef = season.parentRef,
+               let show = try? await provider.fullDetail(for: showRef).item.title, !show.isEmpty {
+                return show
+            }
+            return try? await provider.fullDetail(for: ref).item.seriesTitle
+        }
+        inFlight[ref] = task
+        let title = await task.value
+        inFlight[ref] = nil
+        if let title { titles[ref] = title }
+        return title
     }
 }
 
