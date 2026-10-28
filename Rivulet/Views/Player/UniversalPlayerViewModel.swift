@@ -67,7 +67,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             AppHangContext.setPlaybackState(playbackState.appHangLabel)
         }
     }
-    @Published private(set) var currentTime: TimeInterval = 0
+    @Published private(set) var currentTime: TimeInterval = 0 {
+        didSet { if case .playing = playbackState { lastPlayedTime = currentTime } }
+    }
     @Published private(set) var duration: TimeInterval = 0
     @Published private(set) var isBuffering = false
     @Published private(set) var errorMessage: String?
@@ -625,6 +627,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// stream (and with it the play session) changes; nil once stopped.
     private var providerReporter: (any ProgressReporter)?
     private var providerReporterStarted = false
+    /// The playhead's last position while actually playing in this provider
+    /// session. A session that fails ends wherever the broken pipeline got
+    /// stuck, so its `stopped` goes out here instead. nil until it plays.
+    private var lastPlayedTime: TimeInterval?
     /// Provider reports run in call order: a progress must never reach the
     /// server ahead of the start it follows.
     private var providerReportTail: Task<Void, Never>?
@@ -871,6 +877,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             playSessionID: playback.stream.playSessionID
         )
         providerReporterStarted = false
+        lastPlayedTime = nil
     }
 
     /// The provider stream's first route. A direct-play stream goes to Aether
@@ -6686,22 +6693,28 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func reportFinalProgress(time: TimeInterval, duration: TimeInterval) async {
-        // A session that ended in .failed has nothing truthful to report:
-        // `time` is wherever a broken pipeline got stuck, often far short of
-        // where the user actually was (a reload storm can freeze it seconds
-        // into a session that resumed much later in the title). Reporting
-        // "stopped" there would overwrite — or fall below the resume floor
-        // and erase — the server's real position. Leave it alone.
-        guard !playbackState.isFailed else { return }
+        // A session that ended in .failed has nothing truthful at `time`: it
+        // is wherever a broken pipeline got stuck, often far short of where
+        // the user actually was (a reload storm can freeze it seconds into a
+        // session that resumed much later in the title). Reporting there would
+        // overwrite, or fall below the resume floor and erase, the server's
+        // real position.
+        let failed = playbackState.isFailed
 
         if case .provider(let playback) = source {
-            await stopProviderReporter(at: time)
-            if duration > 0 && time / duration > 0.9 {
+            // A provider session still gets its `stopped`, or the server keeps
+            // the session and its encoding open until it times them out.
+            let position = Self.finalProviderPosition(
+                time: time, failed: failed, lastPlayed: lastPlayedTime, startOffset: startOffset)
+            await stopProviderReporter(at: position)
+            if !failed, duration > 0 && time / duration > 0.9 {
                 try? await playback.provider.markPlayed(playback.item.ref)
             }
             NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
             return
         }
+
+        guard !failed else { return }
 
         // 1. Report stopped state to Plex — gated under the played-time
         // floor regardless of whether this session started fresh or
@@ -6736,6 +6749,14 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // 4. Trigger refresh after progress is confirmed
         NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+    }
+
+    /// Where a provider session's final `stopped` lands: the playhead, or for
+    /// a failed session the last position that actually played, else where it
+    /// started, so the server's resume point never moves to a stuck one.
+    static func finalProviderPosition(time: TimeInterval, failed: Bool,
+                                      lastPlayed: TimeInterval?, startOffset: TimeInterval?) -> TimeInterval {
+        failed ? lastPlayed ?? startOffset ?? 0 : time
     }
 
     private func reportProviderState(_ newState: UniversalPlaybackState) {

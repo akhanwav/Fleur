@@ -587,6 +587,11 @@ final class ContentFilterTranscriptTests: XCTestCase {
         var reads = 0
         reader.onRead = { reads += 1 }
         func settle() async { try? await Task.sleep(for: .milliseconds(100)) }
+        // Reads finish off the main thread: wait for them rather than a fixed
+        // delay, which a loaded parallel run can outlast.
+        func settle(untilReads count: Int) async {
+            for _ in 0..<150 where reads < count { try? await Task.sleep(for: .milliseconds(20)) }
+        }
 
         reader.read([a, b])
         XCTAssertNil(reader.text(for: a))
@@ -598,7 +603,7 @@ final class ContentFilterTranscriptTests: XCTestCase {
         XCTAssertEqual(reads, 0)
         gate.signal()
         gate.signal()
-        await settle()
+        await settle(untilReads: 2)
         XCTAssertEqual(reader.text(for: b), "B")
         XCTAssertEqual(reader.text(for: c), "C")
         XCTAssertEqual(reads, 2)

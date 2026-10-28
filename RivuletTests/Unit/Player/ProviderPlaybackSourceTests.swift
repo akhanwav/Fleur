@@ -286,12 +286,33 @@ final class ProviderPlaybackSourceTests: XCTestCase {
         XCTAssertFalse(provider.markedPlayed.contains(e2.ref))
         XCTAssertNil(vm.streamURL)
 
-        // The new episode reports to its own session only.
+        // The new episode reports to its own session only. Its stream has no
+        // URL, so the session failed: `stopped` still goes out, at the last
+        // position that played (none, and it started from the top), not at 10.
         let secondBefore = second.events
         vm.reportPlaybackState(.playing)
         await vm.reportFinalProgress(time: 10, duration: 100)
-        XCTAssertEqual(second.events, secondBefore + ["start", "stopped(10.0)"])
+        XCTAssertEqual(second.events, secondBefore + ["start", "stopped(0.0)"])
         XCTAssertEqual(first.events, ["start", "stopped(0.0)"])
+    }
+
+    func test_finalProviderPosition_isThePlayheadUnlessTheSessionFailed() {
+        XCTAssertEqual(UniversalPlayerViewModel.finalProviderPosition(
+            time: 600, failed: false, lastPlayed: 500, startOffset: 100), 600)
+    }
+
+    /// A failed session's playhead is wherever the pipeline got stuck.
+    func test_finalProviderPosition_failed_isTheLastPositionThatPlayed() {
+        XCTAssertEqual(UniversalPlayerViewModel.finalProviderPosition(
+            time: 3, failed: true, lastPlayed: 1500, startOffset: 1200), 1500)
+    }
+
+    /// Never played: the resume point it started from stays where it was.
+    func test_finalProviderPosition_failedBeforePlaying_isWhereItStarted() {
+        XCTAssertEqual(UniversalPlayerViewModel.finalProviderPosition(
+            time: 3, failed: true, lastPlayed: nil, startOffset: 1200), 1200)
+        XCTAssertEqual(UniversalPlayerViewModel.finalProviderPosition(
+            time: 3, failed: true, lastPlayed: nil, startOffset: nil), 0)
     }
 
     /// The current episode e1 is playing; the stub answers `children` with
