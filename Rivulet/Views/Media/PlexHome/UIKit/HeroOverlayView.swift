@@ -159,6 +159,55 @@ final class HeroOverlayView: UIView {
         updateButtonStateForCurrentItem()
         renderPagingDots()
         if switchingRows { moveFocusToVisibleRow() }
+        restartAutoAdvance()
+    }
+
+    // MARK: - Auto-advance
+
+    /// The hero moves to the next title on its own, as the Apple TV app's
+    /// does, while it is on screen and nothing covers Home. Any Next press or
+    /// focus move inside the hero starts the wait over.
+    static let autoAdvanceInterval: TimeInterval = 8
+
+    private var autoAdvanceTimer: Timer?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        restartAutoAdvance()
+    }
+
+    private func restartAutoAdvance() {
+        autoAdvanceTimer?.invalidate()
+        autoAdvanceTimer = nil
+        guard window != nil else { return }
+        let timer = Timer(timeInterval: Self.autoAdvanceInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.autoAdvanceTick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        autoAdvanceTimer = timer
+    }
+
+    private func autoAdvanceTick() {
+        guard isOnScreen else { return }
+        if let mediaItemOverlay, !mediaItemOverlay.isHidden {
+            mediaItemOverlay.advanceSlide()
+        } else {
+            advance()
+        }
+    }
+
+    /// At least half the hero inside the window, every ancestor shown (the
+    /// shell hides other tabs), the app active and nothing presented over it.
+    private var isOnScreen: Bool {
+        guard let window, UIApplication.shared.applicationState == .active,
+              window.rootViewController?.presentedViewController == nil else { return false }
+        var view: UIView? = self
+        while let v = view {
+            if v.isHidden || v.alpha < 0.01 { return false }
+            view = v.superview
+        }
+        let visible = convert(bounds, to: window).intersection(window.bounds)
+        return !visible.isNull && visible.height >= bounds.height / 2
     }
 
     // MARK: - Scroll parallax
@@ -209,6 +258,7 @@ final class HeroOverlayView: UIView {
         if nextInside, !prevInside {
             onFocusEntered?()
         }
+        if nextInside { restartAutoAdvance() }
         // Land-on-Play gate: secondary buttons are focus candidates only
         // while focus lives inside the hero (see
         // HeroButtonRowView.setSecondaryButtonsFocusable).
@@ -310,7 +360,10 @@ final class HeroOverlayView: UIView {
             guard let self, let item = self.currentItem else { return }
             self.onInfo?(item)
         }
-        buttonRow.onNext = { [weak self] in self?.advance() }
+        buttonRow.onNext = { [weak self] in
+            self?.advance()
+            self?.restartAutoAdvance()
+        }
     }
 
     private func updateButtonStateForCurrentItem() {
@@ -477,7 +530,9 @@ final class HeroOverlayView: UIView {
             onPlay: onPlay,
             onInfo: onInfo
         )
+        mediaItemOverlay?.onNextPressed = { [weak self] in self?.restartAutoAdvance() }
         if switchingRows { moveFocusToVisibleRow() }
+        restartAutoAdvance()
     }
 
     /// Forward per-item primary-action state to the MediaItem overlay
@@ -732,6 +787,14 @@ final class MediaItemHeroOverlayView: UIView {
 
     // MARK: - Paging
 
+    /// Set by the host hero, which owns the auto-advance wait.
+    var onNextPressed: (() -> Void)?
+
+    func advanceSlide() {
+        guard items.count > 1 else { return }
+        setCurrentIndex((currentIndex + 1) % items.count)
+    }
+
     private func setCurrentIndex(_ newIndex: Int) {
         guard newIndex != currentIndex else { return }
         currentIndex = newIndex
@@ -777,8 +840,8 @@ final class MediaItemHeroOverlayView: UIView {
             self.onInfo?(item)
         }
         buttonRow.onNext = { [weak self] in
-            guard let self, self.items.count > 1 else { return }
-            self.setCurrentIndex((self.currentIndex + 1) % self.items.count)
+            self?.advanceSlide()
+            self?.onNextPressed?()
         }
         buttonRow.onWatchlist = { [weak self] in
             guard let self, let item = self.currentItem else { return }
