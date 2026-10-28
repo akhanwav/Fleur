@@ -6085,17 +6085,35 @@ final class PlexHomeViewController: UIViewController {
         let allIDs = sourceItemIDs(for: section)
         let loaded = section.items.indices.filter { !section.items[$0].isGridPlaceholder }
         guard let selected = loaded.firstIndex(of: indexPath.item) else { return }
-
-        presentPreviewOverlay(
-            items: loaded.map { section.items[$0] },
-            selectedIndex: selected,
-            sourceRowID: section.id.raw,
-            sourceItemID: allIDs[indexPath.item],
-            sourceIndexPath: indexPath,
-            sourceIndexMap: section.kind == .grid ? [indexPath.item: selected] : nil,
-            sourceItemIDs: loaded.map { allIDs[$0] }
-        )
+        let items = loaded.map { section.items[$0] }
+        let open = { [weak self] (items: [MediaItem]) in
+            self?.presentPreviewOverlay(
+                items: items,
+                selectedIndex: selected,
+                sourceRowID: section.id.raw,
+                sourceItemID: allIDs[indexPath.item],
+                sourceIndexPath: indexPath,
+                sourceIndexMap: section.kind == .grid ? [indexPath.item: selected] : nil,
+                sourceItemIDs: loaded.map { allIDs[$0] }
+            )
+        }
+        // A season tile (Recently Added lists one when several of its
+        // episodes land) opens its show: the show's copies on every server,
+        // its Ways to Watch and its own background. The tile keeps its
+        // season caption; the tiles stay paired to cards by `sourceItemIDs`.
+        guard items.contains(where: { $0.kind == .season }) else { open(items); return }
+        guard !isOpeningSeasonShows else { return }
+        isOpeningSeasonShows = true
+        Task { [weak self] in
+            let shows = await SeasonShows.shows(for: items)
+            self?.isOpeningSeasonShows = false
+            open(shows)
+        }
     }
+
+    /// Set while a row's seasons are swapped for their shows, so a second
+    /// press in that moment does not open the carousel twice.
+    private var isOpeningSeasonShows = false
 
     /// Number of entries either side of the tapped one that get mapped for the
     /// preview carousel. Mapping is per-entry network (a TMDB detail for

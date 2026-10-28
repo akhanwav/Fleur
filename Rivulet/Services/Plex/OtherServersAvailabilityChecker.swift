@@ -119,19 +119,24 @@ actor OtherServersAvailabilityChecker {
         let start = ContinuousClock.now
         var found: [ServerCopy] = []
         var results: [T] = []
-        await withTaskGroup(of: ([ServerCopy], [T]).self) { group in
+        var allAnswered = true
+        await withTaskGroup(of: ([ServerCopy]?, [T]).self) { group in
             for server in servers {
                 group.addTask {
                     let copies = await Self.lookup(plexGuid, on: server)
-                    return (copies, await perServer(server.machineId, Self.enabled(copies)))
+                    return (copies, await perServer(server.machineId, Self.enabled(copies ?? [])))
                 }
             }
             for await (copies, result) in group {
-                found += copies
+                if let copies { found += copies } else { allAnswered = false }
                 results += result
             }
         }
-        copiesCache[plexGuid] = found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
+        // A server that failed or timed out is asked again next time, never
+        // remembered as not holding the title.
+        if allAnswered {
+            copiesCache[plexGuid] = found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
+        }
         otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
         return results
     }
@@ -144,23 +149,27 @@ actor OtherServersAvailabilityChecker {
         let servers = await reachableServers()
         if let cached = copiesCache[plexGuid] { return cached }
         let start = ContinuousClock.now
-        let found = await withTaskGroup(of: [ServerCopy].self) { group in
+        let (found, allAnswered) = await withTaskGroup(of: [ServerCopy]?.self) { group in
             for server in servers {
                 group.addTask { await Self.lookup(plexGuid, on: server) }
             }
             var found: [ServerCopy] = []
-            for await copies in group { found += copies }
-            return found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }
+            var allAnswered = true
+            for await copies in group {
+                if let copies { found += copies } else { allAnswered = false }
+            }
+            return (found.sorted { ($0.serverName, $0.ratingKey) < ($1.serverName, $1.ratingKey) }, allAnswered)
         }
-        copiesCache[plexGuid] = found
+        if allAnswered { copiesCache[plexGuid] = found }
         otherServersLog.info("[OtherServers] \(plexGuid, privacy: .public): \(found.count, privacy: .public) of \(servers.count, privacy: .public) server(s) in \(Self.ms(since: start), privacy: .public)ms")
         return found
     }
 
     // MARK: - Lookup
 
-    /// Every item on `server` with this guid, across all of its libraries.
-    private static func lookup(_ plexGuid: String, on server: Server) async -> [ServerCopy] {
+    /// Every item on `server` with this guid, across all of its libraries;
+    /// nil when the server failed or timed out (unknown, not "none").
+    private static func lookup(_ plexGuid: String, on server: Server) async -> [ServerCopy]? {
         let start = ContinuousClock.now
         guard var components = URLComponents(string: "\(server.serverURL)/library/all") else { return [] }
         var query = [URLQueryItem(name: "guid", value: plexGuid),
@@ -177,6 +186,7 @@ actor OtherServersAvailabilityChecker {
         // pass its other items off as this title.
         let matches = (container?.MediaContainer.Metadata ?? []).filter { $0.guid == plexGuid }
         otherServersLog.debug("[OtherServers] \(server.name, privacy: .public): \(matches.count, privacy: .public) copies in \(ms(since: start), privacy: .public)ms\(container == nil ? " (failed or timed out)" : "", privacy: .public)")
+        guard container != nil else { return nil }
         return matches.compactMap { match in
             match.ratingKey.map { ratingKey in
                 ServerCopy(serverName: server.name, serverURL: server.serverURL, token: server.token,

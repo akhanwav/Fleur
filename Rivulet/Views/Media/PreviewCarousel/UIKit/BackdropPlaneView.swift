@@ -220,7 +220,7 @@ final class BackdropPlaneView: UIView {
     /// Whether `backdropImage` has anything to load for `item`.
     static func hasBackdrop(_ item: MediaItem, artwork: MediaArtwork? = nil) -> Bool {
         let artwork = artwork ?? item.artwork
-        return artwork.backdrop != nil || artwork.poster != nil
+        return artwork.backdrop != nil || artwork.poster != nil || item.grandparentArtwork?.backdrop != nil
             || (!item.isMetadataOnly && ArtworkFallback.Query(item) != nil)
     }
 
@@ -233,7 +233,10 @@ final class BackdropPlaneView: UIView {
         let artwork = artwork ?? item.artwork
         let fallback = item.isMetadataOnly ? nil : ArtworkFallback.Query(item)
         var image: UIImage?
-        if let url = artwork.backdrop ?? (fallback == nil ? artwork.poster : nil) {
+        // An episode a hub sends without art of its own uses its show's,
+        // not its own 480 px still stretched to the screen.
+        let backdrop = artwork.backdrop ?? (item.kind == .episode ? item.grandparentArtwork?.backdrop : nil)
+        if let url = backdrop ?? (fallback == nil ? artwork.poster : nil) {
             image = await ImageCacheManager.shared.image(for: url, quality: .full)
         }
         if let fallback, ArtworkFallback.backdropNeedsFallback(image),
