@@ -1600,7 +1600,18 @@ class PlexDataStore: ObservableObject {
     /// the on-disk MediaItem cache WITHOUT re-writing it (the rail came from
     /// the cache, so re-caching would be redundant disk I/O on the launch path).
     private func setHomeItemsFromCache(_ rail: CachedHomeRail) {
-        homeItems = rail
+        // Another server's Continue Watching cards wait for that server to be
+        // reached again (`refreshOtherServersContinueWatching`): until its
+        // provider is registered, nothing could open, play or label them.
+        let registry = MediaProviderRegistry.shared
+        homeItems = rail.map { row in
+            guard row.isContinueWatching, let main = registry.plexProvider?.id else { return row }
+            var row = row
+            row.items.removeAll {
+                $0.ref.isPlex && $0.ref.providerID != main && registry.provider(for: $0.ref.providerID) == nil
+            }
+            return row
+        }
         homeItemsVersion = UUID()
     }
 
@@ -1932,42 +1943,82 @@ class PlexDataStore: ObservableObject {
             sources.append(("plex:\(other.server.machineId)", other.server.serverURL, other.server.token, other.metas))
         }
         let picks = Self.mergeContinueWatching(sources.map(\.metas))
-        let items = picks.map { pick in
+        let metas = Self.sharingResumePoints(picks.map { sources[$0.list].metas[$0.index] })
+        let items = zip(picks, metas).map { pick, meta in
             let source = sources[pick.list]
-            return PlexMediaMapper.item(source.metas[pick.index], providerID: source.providerID,
+            return PlexMediaMapper.item(meta, providerID: source.providerID,
                                         serverURL: source.serverURL, authToken: source.token)
         }
         return CachedHomeHub(id: "hub:\(cw.id)", title: cw.title ?? "", isContinueWatching: true,
                              hubKey: nil, hubIdentifier: cw.hubIdentifier, totalSize: nil, items: items)
     }
 
-    /// One pick per title across `lists` (the signed-in server's first), the
-    /// most recently watched copy, then sorted most recent first. Ties keep the
-    /// order the servers listed them in. A show is one title: its episodes on
-    /// two servers, or in two libraries of one, are one card.
+    /// One pick per title AND quality across `lists` (the signed-in server's
+    /// first): the most recently watched copy. A 4K and a 1080p copy are two
+    /// cards, side by side; the same quality on two servers is one. Titles are
+    /// sorted most recent first (by their most recent copy), and a title's
+    /// copies newest first. Ties keep the order the servers listed them in. A
+    /// show is one title: its episodes on two servers are one card per quality.
     nonisolated static func mergeContinueWatching(_ lists: [[PlexMetadata]], limit: Int = 50)
         -> [(list: Int, index: Int)] {
-        struct Pick { var list: Int; var index: Int; var viewed: Int; var arrival: Int }
+        struct Pick { var list: Int; var index: Int; var viewed: Int; var arrival: Int; var title: String }
         var picks: [String: Pick] = [:]
+        var titleViewed: [String: Int] = [:]
+        var titleArrival: [String: Int] = [:]
         var arrival = 0
         for (list, metas) in lists.enumerated() {
             for (index, meta) in metas.enumerated() {
-                let key = continueWatchingKey(meta, list: list, index: index)
+                let title = continueWatchingKey(meta, list: list, index: index)
+                let key = "\(title)|\(qualityKey(meta))"
                 let viewed = meta.lastViewedAt ?? 0
+                titleViewed[title] = max(titleViewed[title] ?? 0, viewed)
+                if titleArrival[title] == nil { titleArrival[title] = arrival }
                 if let current = picks[key] {
                     if viewed > current.viewed {
-                        picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: current.arrival)
+                        picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: current.arrival, title: title)
                     }
                 } else {
-                    picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: arrival)
-                    arrival += 1
+                    picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: arrival, title: title)
                 }
+                arrival += 1
             }
         }
         return picks.values
-            .sorted { $0.viewed != $1.viewed ? $0.viewed > $1.viewed : $0.arrival < $1.arrival }
+            .sorted { a, b in
+                let ta = titleViewed[a.title] ?? 0, tb = titleViewed[b.title] ?? 0
+                if ta != tb { return ta > tb }
+                if a.title != b.title { return (titleArrival[a.title] ?? 0) < (titleArrival[b.title] ?? 0) }
+                return a.viewed != b.viewed ? a.viewed > b.viewed : a.arrival < b.arrival
+            }
             .prefix(limit)
             .map { (list: $0.list, index: $0.index) }
+    }
+
+    /// The copy's quality for the merge: the best resolution among its files.
+    nonisolated static func qualityKey(_ meta: PlexMetadata) -> String {
+        let resolutions = (meta.Media ?? []).compactMap { $0.videoResolution?.lowercased() }
+        if resolutions.contains(where: { $0 == "4k" || $0 == "2160" }) { return "4k" }
+        let numeric = resolutions.compactMap(Int.init)
+        if let best = numeric.max() { return String(best) }
+        return resolutions.first ?? ""
+    }
+
+    /// Copies of the same item (a 4K and a 1080p file of one film or episode)
+    /// show one resume point: the most recently watched copy's position, so
+    /// either card resumes from it and both say the same time left.
+    nonisolated static func sharingResumePoints(_ metas: [PlexMetadata]) -> [PlexMetadata] {
+        var latest: [String: PlexMetadata] = [:]
+        for meta in metas {
+            guard let guid = meta.guid, guid.hasPrefix("plex://") else { continue }
+            if (meta.lastViewedAt ?? 0) > (latest[guid]?.lastViewedAt ?? -1) { latest[guid] = meta }
+        }
+        return metas.map { meta in
+            guard let guid = meta.guid, let source = latest[guid] else { return meta }
+            var shared = meta
+            shared.viewOffset = source.viewOffset
+            shared.lastViewedAt = source.lastViewedAt
+            return shared
+        }
     }
 
     /// What makes two Continue Watching entries the same title. Plex's agent

@@ -420,6 +420,9 @@ enum TitleQuality {
         let ref = item.ref
         if let known = labels[ref] { return known }
         if let task = inFlight[ref] { return await task.value }
+        // Another server's card drawn before that server is registered: no
+        // answer yet, and none remembered, so the next draw asks again.
+        guard MediaProviderRegistry.shared.provider(for: ref.providerID) != nil else { return nil }
         let task = Task<String?, Never> {
             guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID) else { return nil }
             var target = ref

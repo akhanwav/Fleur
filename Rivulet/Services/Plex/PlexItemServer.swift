@@ -17,9 +17,13 @@ import Foundation
 enum PlexItemServer {
     /// The item's own Plex server, else the signed-in one.
     static func access(for ref: MediaItemRef) -> (serverURL: String, token: String)? {
-        if let provider = MediaProviderRegistry.shared.provider(for: ref.providerID) as? PlexProvider {
+        let registry = MediaProviderRegistry.shared
+        if let provider = registry.provider(for: ref.providerID) as? PlexProvider {
             return (provider.serverURL, provider.authToken)
         }
+        // Another server not reached yet: its ratingKey means nothing on the
+        // signed-in one.
+        if let main = registry.plexProvider?.id, ref.isPlex, ref.providerID != main { return nil }
         let auth = PlexAuthManager.shared
         guard let url = auth.selectedServerURL, let token = auth.selectedServerToken else { return nil }
         return (url, token)

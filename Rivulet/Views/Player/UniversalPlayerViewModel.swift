@@ -6721,10 +6721,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // 2. Mark as watched if > 90% complete
-        if duration > 0 && time / duration > 0.9 {
+        let finished = duration > 0 && time / duration > 0.9
+        if finished {
             await PlexProgressReporter.shared.markAsWatched(
                 ratingKey: metadata.ratingKey ?? "", server: reportServer
             )
+        }
+        if finished || passesMinimumPlayedReportGate {
+            await syncSiblingCopies(time: time, watched: finished)
         }
 
         // 3. Wait for Plex server to process (2 seconds)
@@ -6801,6 +6805,25 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         // Mark as watched (episode reached post-video, so it's effectively complete)
         await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey, server: reportServer)
+        await syncSiblingCopies(time: currentTime, watched: true)
+    }
+
+    /// The same title's other copies on this server (a 4K library beside a
+    /// 1080p one) take this copy's progress, so their Continue Watching cards
+    /// stay in step. Copies on other servers keep their own progress.
+    private func syncSiblingCopies(time: TimeInterval, watched: Bool) async {
+        guard case .plex = source, let guid = metadata.guid, guid.hasPrefix("plex://"),
+              let own = metadata.ratingKey else { return }
+        let copies = await OtherServersAvailabilityChecker.shared.copies(plexGuid: guid)
+        for copy in copies where copy.serverURL == serverURL && copy.ratingKey != own {
+            if watched {
+                await PlexProgressReporter.shared.markAsWatched(ratingKey: copy.ratingKey, server: reportServer)
+            } else {
+                await PlexProgressReporter.shared.reportProgress(
+                    ratingKey: copy.ratingKey, time: time, duration: duration,
+                    state: "stopped", forceReport: true, server: reportServer)
+            }
+        }
     }
 
     /// The server this item plays from: progress and watched state go back to

@@ -5838,9 +5838,12 @@ final class PlexHomeViewController: UIViewController {
         // The item's own server: a Continue Watching card can be another one's.
         guard !ratingKey.isEmpty, let server = PlexItemServer.access(for: item.ref) else { return }
         Task { @MainActor in
-            guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
+            guard var meta = try? await PlexNetworkManager.shared.getFullMetadata(
                 serverURL: server.serverURL, authToken: server.token, ratingKey: ratingKey
             ) else { return }
+            // The card's own resume point, which Continue Watching shares
+            // between a title's copies (`PlexDataStore.sharingResumePoints`).
+            if item.userState.viewOffset > 0 { meta.viewOffset = Int(item.userState.viewOffset * 1000) }
             presentPlayer(for: meta, fromBeginning: fromBeginning, mediaID: sourceID, server: server)
         }
     }
