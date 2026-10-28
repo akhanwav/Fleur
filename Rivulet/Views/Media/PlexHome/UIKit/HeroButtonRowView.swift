@@ -25,7 +25,7 @@ import UIKit
 final class HeroButtonRowView: UIView {
 
     enum HeroButton {
-        case play, watchlist, info, next
+        case play, watchlist, info, previous, next
     }
 
     // MARK: - Buttons
@@ -33,6 +33,7 @@ final class HeroButtonRowView: UIView {
     let playButton = HeroPillButton()
     let watchlistButton = HeroCircleButton()
     let infoButton = HeroCircleButton()
+    let previousButton = HeroCircleButton()
     let nextButton = HeroCircleButton()
 
     private let stack = UIStackView()
@@ -41,6 +42,7 @@ final class HeroButtonRowView: UIView {
 
     var canAdvance: Bool = false {
         didSet {
+            previousButton.isHidden = !canAdvance
             nextButton.isHidden = !canAdvance
         }
     }
@@ -102,6 +104,7 @@ final class HeroButtonRowView: UIView {
     private var holdConsumedPress = false
     var onWatchlist: (() -> Void)?
     var onInfo: (() -> Void)?
+    var onPrevious: (() -> Void)?
     var onNext: (() -> Void)?
 
     // MARK: - Init
@@ -114,17 +117,20 @@ final class HeroButtonRowView: UIView {
         playButton.iconImage = UIImage(systemName: "play.fill")
         watchlistButton.setImage(UIImage(systemName: "plus"), for: .normal)
         infoButton.setImage(UIImage(systemName: "info.circle"), for: .normal)
+        previousButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         nextButton.setImage(UIImage(systemName: "chevron.right"), for: .normal)
 
         playButton.accessibilityLabel = "Play"
         watchlistButton.accessibilityLabel = "Toggle Watchlist"
         infoButton.accessibilityLabel = "More info"
+        previousButton.accessibilityLabel = "Previous featured item"
         nextButton.accessibilityLabel = "Next featured item"
 
         playButton.addTarget(self, action: #selector(playTapped), for: .primaryActionTriggered)
         playButton.addGestureRecognizer(TileLongPress.makeRecognizer(target: self, action: #selector(playHeld(_:))))
         watchlistButton.addTarget(self, action: #selector(watchlistTapped), for: .primaryActionTriggered)
         infoButton.addTarget(self, action: #selector(infoTapped), for: .primaryActionTriggered)
+        previousButton.addTarget(self, action: #selector(previousTapped), for: .primaryActionTriggered)
         nextButton.addTarget(self, action: #selector(nextTapped), for: .primaryActionTriggered)
 
         stack.axis = .horizontal
@@ -134,7 +140,9 @@ final class HeroButtonRowView: UIView {
         stack.addArrangedSubview(playButton)
         stack.addArrangedSubview(watchlistButton)
         stack.addArrangedSubview(infoButton)
+        stack.addArrangedSubview(previousButton)
         stack.addArrangedSubview(nextButton)
+        previousButton.isHidden = true
         nextButton.isHidden = true
         // Gated until focus actually enters the hero, so a directional entry
         // from the rows can only land on Play.
@@ -173,6 +181,7 @@ final class HeroButtonRowView: UIView {
     func setSecondaryButtonsFocusable(_ on: Bool) {
         watchlistButton.isFocusEnabled = on
         infoButton.isFocusEnabled = on
+        previousButton.isFocusEnabled = on
         nextButton.isFocusEnabled = on
     }
 
@@ -206,6 +215,7 @@ final class HeroButtonRowView: UIView {
     }
     @objc private func watchlistTapped() { onWatchlist?() }
     @objc private func infoTapped() { onInfo?() }
+    @objc private func previousTapped() { onPrevious?() }
     @objc private func nextTapped() { onNext?() }
 }
 

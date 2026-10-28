@@ -165,9 +165,9 @@ final class HeroOverlayView: UIView {
     // MARK: - Auto-advance
 
     /// The hero moves to the next title on its own, as the Apple TV app's
-    /// does, while it is on screen and nothing covers Home. Any Next press or
+    /// does, while it is on screen and nothing covers Home. Any Back or Next press or
     /// focus move inside the hero starts the wait over.
-    static let autoAdvanceInterval: TimeInterval = 8
+    static let autoAdvanceInterval: TimeInterval = 18
 
     private var autoAdvanceTimer: Timer?
 
@@ -305,6 +305,11 @@ final class HeroOverlayView: UIView {
         setCurrentIndex(next)
     }
 
+    private func goBack() {
+        guard items.count > 1 else { return }
+        setCurrentIndex((currentIndex - 1 + items.count) % items.count)
+    }
+
     private func setCurrentIndex(_ newIndex: Int) {
         guard newIndex != currentIndex else { return }
         currentIndex = newIndex
@@ -362,6 +367,10 @@ final class HeroOverlayView: UIView {
         }
         buttonRow.onNext = { [weak self] in
             self?.advance()
+            self?.restartAutoAdvance()
+        }
+        buttonRow.onPrevious = { [weak self] in
+            self?.goBack()
             self?.restartAutoAdvance()
         }
     }
@@ -787,7 +796,7 @@ final class MediaItemHeroOverlayView: UIView {
 
     // MARK: - Paging
 
-    /// Set by the host hero, which owns the auto-advance wait.
+    /// Set by the host hero, which owns the auto-advance wait (Back or Next).
     var onNextPressed: (() -> Void)?
 
     func advanceSlide() {
@@ -842,6 +851,11 @@ final class MediaItemHeroOverlayView: UIView {
         buttonRow.onNext = { [weak self] in
             self?.advanceSlide()
             self?.onNextPressed?()
+        }
+        buttonRow.onPrevious = { [weak self] in
+            guard let self, self.items.count > 1 else { return }
+            self.setCurrentIndex((self.currentIndex - 1 + self.items.count) % self.items.count)
+            self.onNextPressed?()
         }
         buttonRow.onWatchlist = { [weak self] in
             guard let self, let item = self.currentItem else { return }
