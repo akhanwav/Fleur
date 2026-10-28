@@ -74,9 +74,11 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
 
     func children(of itemRef: MediaItemRef) async throws -> [MediaItem] {
         try await plexCall {
-            let kids = try await networkManager.getChildren(
-                serverURL: serverURL, authToken: authToken, ratingKey: itemRef.itemID
-            )
+            // A season's episodes with no description on this server take TMDB's.
+            let kids = await EpisodeSummaryFill.shared.fill(
+                try await networkManager.getChildren(
+                    serverURL: serverURL, authToken: authToken, ratingKey: itemRef.itemID),
+                serverURL: serverURL, authToken: authToken)
             return kids.map {
                 PlexMediaMapper.item($0, providerID: id, serverURL: serverURL, authToken: authToken)
             }
@@ -98,9 +100,11 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
 
     func fullDetail(for itemRef: MediaItemRef) async throws -> MediaItemDetail {
         try await plexCall {
-            let meta = try await networkManager.getFullMetadata(
+            let fetched = try await networkManager.getFullMetadata(
                 serverURL: serverURL, authToken: authToken, ratingKey: itemRef.itemID
             )
+            let meta = await EpisodeSummaryFill.shared.fill(
+                [fetched], serverURL: serverURL, authToken: authToken).first ?? fetched
             return PlexMediaMapper.detail(
                 meta, providerID: id,
                 serverURL: serverURL, authToken: authToken
@@ -224,9 +228,10 @@ final class PlexProvider: MediaProvider, @unchecked Sendable {
 
     func allEpisodes(of showRef: MediaItemRef) async throws -> [MediaItem] {
         try await plexCall {
-            let episodes = try await networkManager.getAllLeaves(
-                serverURL: serverURL, authToken: authToken, ratingKey: showRef.itemID
-            )
+            let episodes = await EpisodeSummaryFill.shared.fill(
+                try await networkManager.getAllLeaves(
+                    serverURL: serverURL, authToken: authToken, ratingKey: showRef.itemID),
+                serverURL: serverURL, authToken: authToken)
             return episodes.map {
                 PlexMediaMapper.item($0, providerID: id,
                                     serverURL: serverURL, authToken: authToken)

@@ -295,6 +295,57 @@ actor TMDBDiscoverService {
         return titles
     }
 
+    // MARK: - Season episodes (episode descriptions a server lacks)
+
+    /// One episode of a TMDB season, as `tv/{id}/season/{n}` lists it.
+    struct SeasonEpisode: Codable, Sendable {
+        let episodeNumber: Int
+        let overview: String?
+        let airDate: String?
+
+        enum CodingKeys: String, CodingKey {
+            case episodeNumber = "episode_number"
+            case overview
+            case airDate = "air_date"
+        }
+    }
+
+    private struct CachedSeason: Codable {
+        let savedAt: Date
+        let episodes: [SeasonEpisode]
+    }
+
+    /// Seasons TMDB does not have, for the session: asked once each.
+    private var missingSeasons: Set<String> = []
+
+    /// A show's season from TMDB, cached on disk as long as a title's detail.
+    /// nil when TMDB has no such season or could not be reached.
+    func seasonEpisodes(tvId: Int, season: Int) async -> [SeasonEpisode]? {
+        let name = "tv_\(tvId)_season_\(season)"
+        guard !missingSeasons.contains(name) else { return nil }
+        let url = detailCacheDirectory.appendingPathComponent("\(name).json")
+        if let data = try? Data(contentsOf: url),
+           let cached = try? JSONDecoder().decode(CachedSeason.self, from: data),
+           Date().timeIntervalSince(cached.savedAt) < detailCacheTTL {
+            return cached.episodes
+        }
+        struct Response: Decodable { let episodes: [SeasonEpisode] }
+        let data: Data
+        do {
+            data = try await fetchData(path: "tv/\(tvId)/season/\(season)")
+        } catch {
+            // An error answer (almost always "no such season") is remembered for
+            // the session; a connection that failed asks again next time.
+            if (error as? URLError)?.code == .badServerResponse { missingSeasons.insert(name) }
+            return nil
+        }
+        guard let response = try? JSONDecoder().decode(Response.self, from: data) else { return nil }
+        if let encoded = try? JSONEncoder().encode(CachedSeason(savedAt: Date(), episodes: response.episodes)) {
+            try? encoded.write(to: url, options: [.atomic])
+        }
+        return response.episodes
+    }
+
     // MARK: - Networking
 
     private func fetchData(path: String, queryItems: [URLQueryItem] = []) async throws -> Data {

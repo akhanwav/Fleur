@@ -613,8 +613,9 @@ private final class UniversalPlaybackInputTarget: PlaybackInputTarget {
                 // still-playing fullscreen video — it does NOT exit the player.
                 // Matches Apple TV convention and the overlays' own
                 // .onExitCommand intent (which the UIKit press interception
-                // pre-empts, so it has to be honored here too).
-                vm.dismissPostVideo()
+                // pre-empts, so it has to be honored here too). Closing it
+                // declines autoplay for this episode.
+                vm.declineUpNext()
             } else if vm.isScrubbing {
                 let speedBefore = vm.scrubSpeed
                 PlaybackInputTelemetry.shared.recordScrubTransition(

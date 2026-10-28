@@ -400,7 +400,7 @@ class PlayerContainerViewController: UIViewController {
             // restart the episode. A second press then exits, through the
             // checks below.
             if vm.postVideoState != .hidden {
-                vm.dismissPostVideo()
+                vm.declineUpNext()
                 return
             }
             if vm.isScrubbing {
@@ -957,7 +957,7 @@ class PlayerContainerViewController: UIViewController {
                 // exiting the player (see handleInputAction(.back)). This is
                 // the target-less fallback; the primary path routes .back
                 // through the coordinator to the same behavior.
-                vm.dismissPostVideo()
+                vm.declineUpNext()
                 blockDismissTemporarily()
             } else if vm.isScrubbing {
                 vm.cancelScrub()
@@ -993,8 +993,9 @@ class PlayerContainerViewController: UIViewController {
         }
 
         // If we're consuming this menu press in-app (not dismissing), block SwiftUI fallback dismiss briefly.
-        let shouldBlockDismiss = vm.postVideoState == .hidden
-            && (vm.isScrubbing || vm.showControls)
+        // Up Next counts: the press closes it, and the system's echo dismiss
+        // that follows found the card already gone and closed the player.
+        let shouldBlockDismiss = vm.postVideoState != .hidden || vm.isScrubbing || vm.showControls
         if shouldBlockDismiss {
             blockDismissTemporarily()
         }
@@ -1183,8 +1184,11 @@ class PlayerContainerViewController: UIViewController {
         // first" checks have already been made by the caller, so route straight
         // to the fade, which ends in super.dismiss and bypasses them.
         guard !isFadingOut else { return }
+        let showPage = viewModel?.showPageAfterExit
         fadeOutThenDismiss(animated: true) { [weak self] in
             self?.onDismiss?()
+            // An episode that ended with Up Next declined returns to its show.
+            if let showPage { DeepLinkHandler.shared.handleDetail(ratingKey: showPage) }
         }
     }
 
@@ -2216,7 +2220,7 @@ class PlayerContainerViewController: UIViewController {
             if vm.countdownSeconds > 0 && !vm.isCountdownPaused {
                 vm.cancelCountdown()
             } else {
-                vm.dismissPostVideo()
+                vm.declineUpNext()
             }
         }
         overlay.onUserFocusMove = { [weak self] in

@@ -220,6 +220,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Cancels the mid-playback trivia re-check on item swaps or player teardown.
     private var insightsRecheckTask: Task<Void, Never>?
     @Published var countdownSeconds: Int = 0
+    /// The user closed Up Next on this episode: nothing autoplays, and at the
+    /// end the player closes onto the show's page. Reset per episode.
+    private var upNextDeclined = false
+    /// Set when this episode ended with Up Next declined; the player opens
+    /// the show's page once it has closed.
+    private(set) var showPageAfterExit: String?
 
     /// What `countdownSeconds` started at. The one resolved copy of the
     /// autoplay setting — read it, don't re-derive it from UserDefaults.
@@ -5551,7 +5557,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         let next = await fetchNextEpisode()
         guard let next else { return }
-        nextEpisode = next
+        nextEpisode = await withTMDBSummaries([next]).first ?? next
         Task { await preloadNextEpisode() }
         Task { await loadUpNextEpisodes() }
     }
@@ -5589,6 +5595,12 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func finishPlayback() async {
         await handlePlaybackEnded()
         if postVideoState == .hidden {
+            // The show's page is opened by ratingKey on the selected server,
+            // so only for a Plex episode from that server.
+            if upNextDeclined, case .plex = source, metadata.type == "episode",
+               serverURL == PlexAuthManager.shared.selectedServerURL {
+                showPageAfterExit = metadata.grandparentRatingKey
+            }
             shouldDismiss = true
         }
     }
@@ -5610,6 +5622,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         await markCurrentAsWatched()
         guard generation == itemGeneration else { return }
 
+        // Up Next was closed on this episode: no second offer at the end.
+        guard !upNextDeclined else { return }
+
         postVideoState = .loading
 
         // Per-user opt-out of the post-video "Up Next" chooser for TV
@@ -5629,7 +5644,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         // Fetch next episode
-        let resolvedNext = await fetchNextEpisode()
+        let resolvedNext = await withTMDBSummaries(fetchNextEpisode().map { [$0] } ?? []).first
         guard generation == itemGeneration else { return }
         nextEpisode = resolvedNext
 
@@ -5714,6 +5729,13 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// Episodes with no description on this server take TMDB's (Plex only:
+    /// a provider's episodes come with their own).
+    private func withTMDBSummaries(_ episodes: [PlexMetadata]) async -> [PlexMetadata] {
+        guard case .plex = source else { return episodes }
+        return await EpisodeSummaryFill.shared.fill(episodes, serverURL: serverURL, authToken: authToken)
+    }
+
     /// Load the current season's episode list for the Up Next panel, sorted
     /// by index. When the current episode is the season finale, appends the
     /// next season's opener (via `fetchNextEpisode()`) so the panel still has
@@ -5757,6 +5779,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                next.parentRatingKey != metadata.parentRatingKey {
                 episodes.append(next)
             }
+            episodes = await withTMDBSummaries(episodes)
             guard generation == itemGeneration else { return }
             upNextEpisodes = episodes
         } catch {
@@ -6186,11 +6209,11 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     /// Start autoplay countdown timer
     func startAutoplayCountdown() {
-        // Default to 5 seconds if not set (key doesn't exist)
+        // The default until the user picks one (key doesn't exist).
         // 0 explicitly means disabled
         let countdownSetting: Int
         if UserDefaults.standard.object(forKey: "autoplayCountdown") == nil {
-            countdownSetting = 5  // Default: 5 seconds
+            countdownSetting = AutoplayCountdown.defaultValue.rawValue
         } else {
             countdownSetting = UserDefaults.standard.integer(forKey: "autoplayCountdown")
         }
@@ -6531,6 +6554,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Safe to allow post-video detection now: the old time observer has been
         // replaced and time values reflect the new episode's actual position.
         hasTriggeredPostVideo = false
+        upNextDeclined = false
         // We started this item, so arm the end funnel here rather than waiting
         // for a `.playing` to arrive. Every stale event from the outgoing
         // episode (the replayed terminal state, its own EOF) has already been
@@ -6544,6 +6568,13 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Dismiss post-video overlay and return to fullscreen video
     /// Note: Does NOT reset hasTriggeredPostVideo - that prevents re-triggering while still in the credits.
     /// The flag is only reset when seeking backwards past the trigger point or starting new content.
+    /// The user closed Up Next (Back or Dismiss): playback continues, nothing
+    /// autoplays, and the episode plays to its end.
+    func declineUpNext() {
+        upNextDeclined = true
+        dismissPostVideo()
+    }
+
     func dismissPostVideo() {
         countdownTimer?.invalidate()
         countdownTimer = nil

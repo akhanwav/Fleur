@@ -96,13 +96,18 @@ enum AutoplayCountdown: Int, CaseIterable, CustomStringConvertible {
     case off = 0
     case fiveSeconds = 5
     case tenSeconds = 10
+    case fifteenSeconds = 15
     case twentySeconds = 20
+
+    /// Until the user picks one. Up Next stays up this long before playing on.
+    static let defaultValue: AutoplayCountdown = .fifteenSeconds
 
     var description: String {
         switch self {
         case .off: return "Off"
         case .fiveSeconds: return "5 seconds"
         case .tenSeconds: return "10 seconds"
+        case .fifteenSeconds: return "15 seconds"
         case .twentySeconds: return "20 seconds"
         }
     }

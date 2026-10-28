@@ -219,7 +219,7 @@ enum SettingsContent {
     private static var autoplayCountdownPicker: [SettingsRowItem] {
         AutoplayCountdown.allCases.map { opt in
             SettingsRowItem(id: "ac_\(opt.rawValue)", title: opt.description, kind: .option(
-                isSelected: { SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue) == opt.rawValue },
+                isSelected: { SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.defaultValue.rawValue) == opt.rawValue },
                 select: { SettingsStore.setInt("autoplayCountdown", opt.rawValue) }))
         }
     }
@@ -361,7 +361,7 @@ enum SettingsContent {
                             })),
             SettingsRowItem(id: "autoplayCountdown", title: "Autoplay Countdown",
                             kind: .navigationValue(.autoplayCountdownPicker, value: {
-                                AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.fiveSeconds.rawValue))?.description ?? ""
+                                AutoplayCountdown(rawValue: SettingsStore.int("autoplayCountdown", default: AutoplayCountdown.defaultValue.rawValue))?.description ?? ""
                             })),
             SettingsRowItem(id: "autoplayLimit", title: "Autoplay Limit",
                             kind: .cycle(value: { AutoplayLimit.current.description },
