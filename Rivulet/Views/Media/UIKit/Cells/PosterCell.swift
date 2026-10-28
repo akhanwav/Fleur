@@ -259,8 +259,14 @@ final class PosterCell: UICollectionViewCell {
         setSquare(["artist", "album", "track"].contains(item.type ?? ""))
         setFallbackQuery(ArtworkFallback.Query(item))
         let isAudio = ["artist", "album", "track"].contains(item.type ?? "")
-        caption.configure(title: isAudio ? nil : (item.type == "episode" ? item.grandparentTitle ?? item.title : item.title),
-                          year: item.type == "episode" ? nil : item.year)
+        // A season (Recently Added lists one when several of its episodes
+        // land) is named by its show, with "Season 1" beneath.
+        if item.type == "season", !isAudio {
+            caption.configure(title: item.parentTitle ?? item.title, detail: item.title)
+        } else {
+            caption.configure(title: isAudio ? nil : (item.type == "episode" ? item.grandparentTitle ?? item.title : item.title),
+                              year: item.type == "episode" ? nil : item.year)
+        }
         let url = posterURL(for: item)
         loadImage(from: url, item: item)
         configureWatchedBadge(item: item)
@@ -273,8 +279,14 @@ final class PosterCell: UICollectionViewCell {
         cancelSeasonCount()
         setSquare(item.isMusic == true)
         setFallbackQuery(item.isMusic == true ? nil : ArtworkFallback.Query(item))
-        caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
-                          year: item.kind == .episode ? nil : item.year)
+        // A season (Recently Added lists one when several of its episodes
+        // land) is named by its show, with "Season 1" beneath.
+        if item.kind == .season, item.isMusic != true {
+            caption.configure(title: item.seriesTitle ?? item.title, detail: item.title)
+        } else {
+            caption.configure(title: item.isMusic == true ? nil : (item.kind == .episode ? item.seriesTitle ?? item.title : item.title),
+                              year: item.kind == .episode ? nil : item.year)
+        }
         // Episodes prefer the grandparent (show) poster so hub rows render
         // show art instead of letterboxed episode stills, matching the Plex path.
         let url = item.grandparentArtwork?.poster ?? item.artwork.poster
