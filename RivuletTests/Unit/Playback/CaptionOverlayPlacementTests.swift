@@ -9,13 +9,15 @@ import CoreGraphics
 ///
 /// The picture fills the canvas here, so picture fractions read straight off
 /// the numbers: `sideSafeFraction` 5% is x=50/950, `bandSideFraction` 10% is
-/// x=100/900, `bandEdgeFraction` 10% is y=100/900, and `placementFloor` is 6%
-/// of 1000 = 60, so the shared floor puts an unplaced bottom-resting box's
-/// maxY at 940.
+/// x=100/900, `bandEdgeFraction` 10% is y=100/900, and the bottom margin
+/// (`SubtitleAdjustments.bottomMarginFraction`) is the shared floor an unplaced
+/// bottom-resting box rests on (`defaultFloor`).
 @MainActor
 final class CaptionOverlayPlacementTests: XCTestCase {
 
     private let canvas = CGSize(width: 1_000, height: 1_000)
+    /// The default band's bottom edge: the picture's bottom margin above the frame's foot.
+    private var defaultFloor: CGFloat { canvas.height * (1 - SubtitleAdjustments.bottomMarginFraction) }
 
     // MARK: Anchored edge
 
@@ -68,7 +70,7 @@ final class CaptionOverlayPlacementTests: XCTestCase {
         let frame = captionFrame(
             placement: .init(alignment: 1, position: CGPoint(x: 0.10, y: 0.99)))
 
-        XCTAssertEqual(frame.maxY, 940, accuracy: 0.5)
+        XCTAssertEqual(frame.maxY, defaultFloor, accuracy: 0.5)
     }
 
     /// Teletext arrives with a coarse `\an` and no percentage, so the column
@@ -99,7 +101,7 @@ final class CaptionOverlayPlacementTests: XCTestCase {
         let frame = captionFrame(placement: nil)
 
         XCTAssertEqual(frame.midX, canvas.width / 2, accuracy: 0.5)
-        XCTAssertEqual(frame.maxY, 940, accuracy: 0.5)
+        XCTAssertEqual(frame.maxY, defaultFloor, accuracy: 0.5)
     }
 
     // A track the content filter reads unseen: cues keep arriving, nothing is drawn.

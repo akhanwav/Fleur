@@ -26,17 +26,21 @@ final class CaptionSizingTests: XCTestCase {
 
     /// What AVKit actually renders at each value the system can report, on
     /// tvOS's fixed 1080-point presentation. Every one of these was measured;
-    /// none is derived from another.
+    /// none is derived from another. The default is the exception: AVKit draws
+    /// 46.2pt there, and the app deliberately draws it about 4pt smaller.
     private let avkitSizes: [(reported: CGFloat, points: CGFloat)] = [
-        (0.35, 18.5), (0.60, 31.0), (1.00, 46.2), (1.50, 78.0), (2.00, 104.1)
+        (0.35, 18.5), (0.60, 31.0), (1.00, CaptionSizingTests.defaultSize), (1.50, 78.0), (2.00, 104.1)
     ]
 
+    /// The default rung: AVKit's 46.2pt less two deliberate ~2pt reductions.
+    private static let defaultSize: CGFloat = 42.1
+
     /// The regression issue #299 reported: 57.1pt where AVKit draws 46pt.
-    func test_pointSize_atSystemDefault_matchesAVKit() {
+    func test_pointSize_atSystemDefault_isTheChosenDefault() {
         let size = CaptionOverlayView.Metrics.pointSize(
             presentationHeight: presentationHeight, fontScale: 1.0)
-        XCTAssertEqual(size, 46.2, accuracy: 0.6,
-                       "Caption size at the default setting must match AVKit. Got \(size)pt.")
+        XCTAssertEqual(size, Self.defaultSize, accuracy: 0.6,
+                       "Caption size at the default setting moved. Got \(size)pt.")
     }
 
     /// AVKit's size is NOT a linear function of the reported value — it runs
@@ -81,7 +85,7 @@ final class CaptionSizingTests: XCTestCase {
     /// A degenerate layout pass must not collapse captions to nothing.
     func test_pointSize_withZeroHeight_fallsBackToTheAssumedPresentation() {
         let size = CaptionOverlayView.Metrics.pointSize(presentationHeight: 0, fontScale: 1.0)
-        XCTAssertEqual(size, 46.2, accuracy: 0.6)
+        XCTAssertEqual(size, Self.defaultSize, accuracy: 0.6)
     }
 
     /// An unset or out-of-range system value reads as "no scaling". The API

@@ -166,9 +166,11 @@ final class JellyfinBrowseSurfaceTests: XCTestCase {
 
     func test_sourceBadge_onlyWhileBothServersAreSignedIn() {
         let jellyfin = MediaItemRef(providerID: "jellyfin:srv", itemID: "1")
+        // An unregistered Plex id reads as the signed-in Plex server, or "Plex" with none.
+        let plexName = MediaProviderRegistry.shared.plexProvider?.displayName ?? "Plex"
         XCTAssertEqual(PlexHomeViewController.sourceBadge(for: jellyfin, labelsServers: true), "Jellyfin")
         XCTAssertEqual(PlexHomeViewController.sourceBadge(for: MediaItemRef(providerID: "plex:abc", itemID: "1"),
-                                                          labelsServers: true), "Plex")
+                                                          labelsServers: true), plexName)
         XCTAssertNil(PlexHomeViewController.sourceBadge(for: jellyfin, labelsServers: false))
     }
 
