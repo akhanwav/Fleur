@@ -45,6 +45,14 @@ final class MediaProviderRegistry {
         if provider.kind == .plex { currentPlexID = provider.id }
     }
 
+    /// Another Plex server's provider (Continue Watching's items from Alpha or
+    /// Diamond), registered so its items resolve to it. Never becomes
+    /// `plexProvider`: Home and every library still mint from the signed-in one.
+    func registerAdditionalPlex(_ provider: any MediaProvider) {
+        guard provider.kind == .plex, provider.id != currentPlexID else { return }
+        providers[provider.id] = provider
+    }
+
     func unregister(providerID: String) {
         providers.removeValue(forKey: providerID)
         if providerID == currentPlexID { currentPlexID = nil }

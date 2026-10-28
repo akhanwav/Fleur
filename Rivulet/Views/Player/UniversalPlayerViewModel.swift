@@ -6633,7 +6633,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 ratingKey: self.metadata.ratingKey ?? "",
                 time: time,
                 duration: self.duration,
-                state: self.isPlaying ? "playing" : "paused"
+                state: self.isPlaying ? "playing" : "paused",
+                server: self.reportServer
             )
         }
     }
@@ -6672,7 +6673,8 @@ final class UniversalPlayerViewModel: ObservableObject {
                 time: self.currentTime,
                 duration: self.duration,
                 state: state,
-                forceReport: true
+                forceReport: true,
+                server: self.reportServer
             )
         }
     }
@@ -6713,14 +6715,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                 time: time,
                 duration: duration,
                 state: "stopped",
-                forceReport: true
+                forceReport: true,
+                server: reportServer
             )
         }
 
         // 2. Mark as watched if > 90% complete
         if duration > 0 && time / duration > 0.9 {
             await PlexProgressReporter.shared.markAsWatched(
-                ratingKey: metadata.ratingKey ?? ""
+                ratingKey: metadata.ratingKey ?? "", server: reportServer
             )
         }
 
@@ -6792,12 +6795,17 @@ final class UniversalPlayerViewModel: ObservableObject {
             ratingKey: ratingKey,
             time: currentTime,
             duration: duration,
-            state: "stopped"
+            state: "stopped",
+            server: reportServer
         )
 
         // Mark as watched (episode reached post-video, so it's effectively complete)
-        await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey)
+        await PlexProgressReporter.shared.markAsWatched(ratingKey: ratingKey, server: reportServer)
     }
+
+    /// The server this item plays from: progress and watched state go back to
+    /// it, under its own ratingKey (another server's copy included).
+    private var reportServer: (address: String, token: String) { (serverURL, authToken) }
 
     // MARK: - Cleanup
 

@@ -48,6 +48,27 @@ actor OtherServersAvailabilityChecker {
         let name: String
         let serverURL: String
         let token: String
+        var isMain = false
+    }
+
+    /// One reachable server and how to talk to it.
+    struct ServerAccess: Sendable, Hashable {
+        let machineId: String
+        let name: String
+        let serverURL: String
+        let token: String
+        /// The signed-in server, whose items Home already maps.
+        let isMain: Bool
+    }
+
+    /// The reachable servers turned on in Settings, in the user's order, main
+    /// included.
+    func enabledServers() async -> [ServerAccess] {
+        let servers = await reachableServers().filter { ServerPreferences.isEnabled($0.machineId) }
+        return ServerPreferences.sorted(servers, by: \.machineId).map {
+            ServerAccess(machineId: $0.machineId, name: $0.name, serverURL: $0.serverURL,
+                         token: $0.token, isMain: $0.isMain)
+        }
     }
 
     /// Per-server lookup limit: an asleep or slow server is skipped after this.
@@ -258,7 +279,8 @@ actor OtherServersAvailabilityChecker {
             let auth = PlexAuthManager.shared
             guard let id = selectedMachineId, let url = auth.selectedServerURL,
                   let token = auth.selectedServerToken else { return nil }
-            return Server(machineId: id, name: auth.mainServerName ?? "Main Server", serverURL: url, token: token)
+            return Server(machineId: id, name: auth.mainServerName ?? "Main Server", serverURL: url, token: token,
+                          isMain: true)
         }
         var servers = await withTaskGroup(of: Server?.self) { group in
             for device in others {

@@ -31,6 +31,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
     private let infoBar = MediaProgressInfoBar()
     /// The version that would play ("4K DV"), bottom-trailing on the card.
     private let qualityTag = QualityTagView()
+    /// The card's server ("Alpha"), beside the quality while the row mixes servers.
+    private let serverTag = QualityTagView()
+    private let tags = UIStackView()
     /// The title (an episode: its show) and the time left under the card. The
     /// card carries no title of its own, so this shows whatever Settings → Show
     /// Titles Under Posters says.
@@ -100,9 +103,18 @@ final class ContinueWatchingCell: UICollectionViewCell {
         infoBar.translatesAutoresizingMaskIntoConstraints = false
         card.contentView.addSubview(infoBar)
 
-        qualityTag.translatesAutoresizingMaskIntoConstraints = false
         qualityTag.isHidden = true
-        card.contentView.addSubview(qualityTag)
+        serverTag.isHidden = true
+        // A long server name gives way before the quality does.
+        qualityTag.setTextCompressionResistance(.required)
+        serverTag.setTextCompressionResistance(.defaultLow)
+        tags.addArrangedSubview(serverTag)
+        tags.addArrangedSubview(qualityTag)
+        tags.axis = .horizontal
+        tags.spacing = 6
+        tags.alignment = .center
+        tags.translatesAutoresizingMaskIntoConstraints = false
+        card.contentView.addSubview(tags)
 
         let pad = ContinueWatchingCardCompositor.padding
         NSLayoutConstraint.activate([
@@ -123,11 +135,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
 
             // Apple's status row: 14pt from the card's edges.
             infoBar.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad),
-            infoBar.trailingAnchor.constraint(lessThanOrEqualTo: qualityTag.leadingAnchor, constant: -8),
+            infoBar.trailingAnchor.constraint(lessThanOrEqualTo: tags.leadingAnchor, constant: -8),
             infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad),
 
-            qualityTag.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad),
-            qualityTag.centerYAnchor.constraint(equalTo: infoBar.centerYAnchor)
+            tags.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad),
+            tags.centerYAnchor.constraint(equalTo: infoBar.centerYAnchor)
         ])
     }
 
@@ -141,6 +153,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         coordinator.addCoordinatedAnimations({
             self.infoBar.setFocused(nowFocused)
             self.qualityTag.setFocused(nowFocused)
+            self.serverTag.setFocused(nowFocused)
         }, completion: nil)
     }
 
@@ -182,7 +195,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
     /// MediaItem path. All artwork URLs are already resolved — no serverURL/token needed.
     /// `knownQuality` is the tag when the caller has the versions already (another
     /// server's copy, which no provider here can look up); nil looks it up.
-    func configure(item: MediaItem, knownQuality: String?? = nil) {
+    /// `serverName` names the card's server; nil shows none.
+    func configure(item: MediaItem, knownQuality: String?? = nil, serverName: String? = nil) {
+        serverTag.text = serverName
+        serverTag.isHidden = serverName == nil
         // Backdrop > thumbnail in landscape orientation.
         let url = item.grandparentArtwork?.backdrop
             ?? item.artwork.backdrop
@@ -222,6 +238,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         qualityTask?.cancel()
         qualityTask = nil
         qualityTag.isHidden = true
+        serverTag.isHidden = true
         infoBar.reset()
         caption.configure(title: nil, detail: nil)
     }

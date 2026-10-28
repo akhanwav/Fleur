@@ -1332,7 +1332,8 @@ final class PreviewCarouselViewController: UIViewController {
         // needs an explicit 0, never nil.
         let offsetSec = item.userState.viewOffset
         let resumeOffset: Double? = fromBeginning ? 0 : (offsetSec > 0 ? offsetSec : nil)
-        presentPlayer(ratingKey: item.ref.itemID, resumeOffset: resumeOffset, mediaID: sourceID)
+        presentPlayer(ratingKey: item.ref.itemID, resumeOffset: resumeOffset, mediaID: sourceID,
+                      server: PlexItemServer.access(for: item.ref))
     }
 
     /// Resolve a Plex ratingKey → metadata → present the player. Used for the
@@ -1342,10 +1343,12 @@ final class PreviewCarouselViewController: UIViewController {
     /// metadata we fetch here is the only place a library-addressable extra's
     /// resume point appears (issue #303 — extras always restarted), and it is
     /// also fresher than a MediaItem's cached userState.
-    private func presentPlayer(ratingKey: String, resumeOffset: Double?, mediaID: String? = nil) {
+    /// `server` is the item's own (`PlexItemServer`); nil is the signed-in one.
+    private func presentPlayer(ratingKey: String, resumeOffset: Double?, mediaID: String? = nil,
+                               server: (serverURL: String, token: String)? = nil) {
         Task { [weak self] in
-            guard let serverURL = PlexAuthManager.shared.selectedServerURL,
-                  let token = PlexAuthManager.shared.selectedServerToken else {
+            guard let serverURL = server?.serverURL ?? PlexAuthManager.shared.selectedServerURL,
+                  let token = server?.token ?? PlexAuthManager.shared.selectedServerToken else {
                 previewCarouselLog.error("[PCV] play handoff: no server/token")
                 return
             }

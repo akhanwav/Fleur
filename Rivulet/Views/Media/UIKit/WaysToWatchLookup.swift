@@ -71,9 +71,10 @@ final class WaysToWatchLookup {
 
     private init(item: MediaItem) {
         self.item = item
-        let main = DetailCopySelection.mainMachineId ?? "main"
+        // The item's own server: a Continue Watching card can be another one's.
+        let main = PlexItemServer.machineId(for: item.ref) ?? "main"
         own = DetailCopy(machineId: main,
-                         serverName: PlexAuthManager.shared.mainServerName ?? "This Server",
+                         serverName: PlexItemServer.name(for: item.ref) ?? "This Server",
                          isMainServer: true, item: item, detail: nil, remote: nil)
         let ownless = item.isMetadataOnly
         otherServers = ServerPreferences.knownServers.filter {

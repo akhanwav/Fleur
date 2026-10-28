@@ -1023,7 +1023,7 @@ final class MediaDetailChromeView: UIView {
         }
         // The server the page's copy is on, following Ways to Watch.
         let server = copySelection.selected?.serverName
-            ?? (item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil)
+            ?? PlexItemServer.name(for: item.ref)
         if let server, !server.isEmpty {
             qualityRow.addArrangedSubview(Self.makeBadge(server, alpha: Self.qualityRowAlpha))
         }

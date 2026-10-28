@@ -56,7 +56,8 @@ actor PlexProgressReporter {
         time: TimeInterval,
         duration: TimeInterval,
         state: String,
-        forceReport: Bool = false
+        forceReport: Bool = false,
+        server: (address: String, token: String)? = nil
     ) async {
         guard !ratingKey.isEmpty else { return }
 
@@ -68,7 +69,7 @@ actor PlexProgressReporter {
         lastReportedTimes[ratingKey] = time
         lastReportedStates[ratingKey] = state
 
-        guard let server = await getServer() else { return }
+        guard let server = await resolve(server) else { return }
 
         let timeMs = Int(time * 1000)
         let durationMs = Int(duration * 1000)
@@ -112,9 +113,9 @@ actor PlexProgressReporter {
 
     /// Marks an item as fully watched (scrobble)
     /// - Parameter ratingKey: The Plex rating key for the media item
-    func markAsWatched(ratingKey: String) async {
+    func markAsWatched(ratingKey: String, server: (address: String, token: String)? = nil) async {
         guard !ratingKey.isEmpty else { return }
-        guard let server = await getServer() else { return }
+        guard let server = await resolve(server) else { return }
 
         let urlString = "\(server.address)/:/scrobble?identifier=com.plexapp.plugins.library&key=\(ratingKey)"
 
@@ -153,6 +154,15 @@ actor PlexProgressReporter {
     }
 
     // MARK: - Helpers
+
+    /// The server the item played from. A ratingKey belongs to one server: a
+    /// copy played from another server (Ways to Watch, Continue Watching) sent
+    /// to the signed-in one named a different title there, or none, and the
+    /// server it played from never recorded the progress.
+    private func resolve(_ server: (address: String, token: String)?) async -> (address: String, token: String)? {
+        if let server { return server }
+        return await getServer()
+    }
 
     private func getServer() async -> (address: String, token: String)? {
         await MainActor.run {

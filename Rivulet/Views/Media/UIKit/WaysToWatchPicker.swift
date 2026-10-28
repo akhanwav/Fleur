@@ -124,10 +124,10 @@ final class DetailCopySelection {
     func load(item: MediaItem, mainDetail: MediaItemDetail?) {
         reset()
         let current = token
-        let main = Self.mainMachineId ?? "main"
+        let main = PlexItemServer.machineId(for: item.ref) ?? "main"
         let pinned = Self.pinnedToOwnCopy.contains(item.ref)
         if !item.isMetadataOnly {
-            let name = item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil
+            let name = PlexItemServer.name(for: item.ref)
             copies = [DetailCopy(machineId: main, serverName: name ?? "This Server", isMainServer: true,
                                  item: item, detail: mainDetail, remote: nil)]
             selectedIndex = 0
@@ -162,9 +162,9 @@ final class DetailCopySelection {
             // `self.copies`, not a fresh copy: the main copy may already hold
             // its resolved Play target.
             var own = self.copies.filter(\.isMainServer)
-            // The lookup searches the main server too, so it finds the
+            // The lookup searches the page's own server too, so it finds the
             // page's own item again: list that one once, as the page's.
-            if let mainId = Self.mainMachineId {
+            if let mainId = PlexItemServer.machineId(for: item.ref) {
                 for index in own.indices { own[index].machineId = mainId }
             }
             let ownIDs = Set(own.map(\.id))

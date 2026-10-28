@@ -4516,9 +4516,12 @@ final class PlexHomeViewController: UIViewController {
         case .continueWatching:
             let cell = innerCV.dequeueReusableCell(withReuseIdentifier: ContinueWatchingCell.reuseID, for: indexPath) as! ContinueWatchingCell
             let item = section.items[indexPath.item]
+            // With another server's items in the row, each card names its own.
+            let mixesServers = Set(section.items.map(\.ref.providerID)).count > 1
             Perf.interval(.cellPrepare, key: perfKey) {
                 // Always its own copy: the card's tag names the file it resumes.
-                cell.configure(item: item)
+                cell.configure(item: item, serverName: mixesServers
+                    ? Self.serverName(providerID: item.ref.providerID, kind: .plex) : nil)
             }
             return cell
         case .recentlyAdded, .recommendations, .discoverList, .searchGrid:
@@ -5832,14 +5835,13 @@ final class PlexHomeViewController: UIViewController {
             return
         }
         let ratingKey = item.ref.itemID
-        guard !ratingKey.isEmpty,
-              let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return }
+        // The item's own server: a Continue Watching card can be another one's.
+        guard !ratingKey.isEmpty, let server = PlexItemServer.access(for: item.ref) else { return }
         Task { @MainActor in
             guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
-                serverURL: serverURL, authToken: token, ratingKey: ratingKey
+                serverURL: server.serverURL, authToken: server.token, ratingKey: ratingKey
             ) else { return }
-            presentPlayer(for: meta, fromBeginning: fromBeginning, mediaID: sourceID)
+            presentPlayer(for: meta, fromBeginning: fromBeginning, mediaID: sourceID, server: server)
         }
     }
 
@@ -5858,10 +5860,11 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
-    private func presentPlayer(for item: PlexMetadata, fromBeginning: Bool, mediaID: String? = nil) {
+    private func presentPlayer(for item: PlexMetadata, fromBeginning: Bool, mediaID: String? = nil,
+                               server: (serverURL: String, token: String)? = nil) {
         Task { @MainActor in
-            guard let serverURL = authManager.selectedServerURL,
-                  let token = authManager.selectedServerToken else { return }
+            guard let serverURL = server?.serverURL ?? authManager.selectedServerURL,
+                  let token = server?.token ?? authManager.selectedServerToken else { return }
 
             let request = item.heroBackdropRequest(serverURL: serverURL, authToken: token)
             let (artImage, thumbImage) = await HeroBackdropResolver.shared.playerLoadingImages(for: request)
@@ -7212,9 +7215,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
                 onGoToShow: { [weak self] in self?.openShowDetail(of: item) },
                 onPlayVersion: { [weak self] in self?.presentVersionPicker(for: item, from: tileFrame) })
         }
-        guard let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken,
-              !item.ref.itemID.isEmpty
+        guard let (serverURL, token) = PlexItemServer.access(for: item.ref), !item.ref.itemID.isEmpty
         else { return [] }
         let ratingKey = item.ref.itemID
 
@@ -7647,9 +7648,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         shelfLocation: (sectionID: HomeSectionID, itemIndex: Int)? = nil
     ) {
         let ratingKey = item.ref.itemID
-        guard !ratingKey.isEmpty,
-              let serverURL = authManager.selectedServerURL,
-              let token = authManager.selectedServerToken else { return }
+        guard !ratingKey.isEmpty, let (serverURL, token) = PlexItemServer.access(for: item.ref) else { return }
 
         pendingCWRemovals.insert(ratingKey)
         // Capture the tile's on-screen slot BEFORE the data mutates: the

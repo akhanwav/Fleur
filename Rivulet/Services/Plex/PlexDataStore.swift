@@ -24,6 +24,12 @@ class PlexDataStore: ObservableObject {
     /// endpoint — matches what Plex's own apps display (respects user dismissals and
     /// library exclusion settings). Nil until first fetch completes.
     @Published var continueWatchingHub: PlexHub?
+    /// Every other enabled server's own Continue Watching, merged into Home's
+    /// row with this server's (`continueWatchingRow`). Plex keeps watch state
+    /// per server, so a title watched on Alpha is only in Alpha's list.
+    private var otherServersContinueWatching: [(server: OtherServersAvailabilityChecker.ServerAccess,
+                                                metas: [PlexMetadata])] = []
+    private var otherServersContinueWatchingTask: Task<Void, Never>?
     /// True once a Continue Watching fetch has completed (without throwing)
     /// for the current account/profile this session. Gates the launch-ordering
     /// carry-over in `projectHomeItems()`: before the first fresh fetch, a nil
@@ -620,6 +626,7 @@ class PlexDataStore: ObservableObject {
         // Clear in-memory data (libraries may differ per user)
         hubs = []
         continueWatchingHub = nil
+        otherServersContinueWatching = []
         hasFetchedContinueWatching = false
         libraries = []
         hasLoadedLibraries = false
@@ -842,6 +849,7 @@ class PlexDataStore: ObservableObject {
                     self.continueWatchingHub = fetchedContinueWatching
                     self.hubsVersion = UUID()
                 }
+                refreshOtherServersContinueWatching()
             }
 
             // Always update Top Shelf cache after fetching (composites logo art)
@@ -915,6 +923,7 @@ class PlexDataStore: ObservableObject {
         guard authManager.selectedServerToken == token else { return }
 
         hasFetchedContinueWatching = true
+        refreshOtherServersContinueWatching()
         guard !continueWatchingHubsAreEqual(self.continueWatchingHub, fetched) else { return }
         self.continueWatchingHub = fetched
         self.hubsVersion = UUID()
@@ -1334,16 +1343,9 @@ class PlexDataStore: ObservableObject {
         // every scoped `/hubs/promoted` call returns, and PMS already scopes its
         // items to pinned libraries (measured: every item came from a
         // `hidden == 0` library).
-        if let cw = continueWatchingHub, let metas = cw.Metadata, !metas.isEmpty,
-           !HomeRowSettings.isHidden(cw.hubIdentifier) {
-            rail.append(makeCachedHub(
-                id: "hub:\(cw.id)",
-                title: cw.title ?? "",
-                isContinueWatching: true,
-                hubKey: cw.key ?? cw.hubKey,
-                hubIdentifier: cw.hubIdentifier,
-                metas: metas
-            ))
+        if let cw = continueWatchingHub, !HomeRowSettings.isHidden(cw.hubIdentifier),
+           case let row = continueWatchingRow(cw), !row.items.isEmpty {
+            rail.append(row)
         } else if let cached = homeItems.first(where: \.isContinueWatching),
                   Self.carriesOverContinueWatching(hasFetched: hasFetchedContinueWatching,
                                                    isHidden: HomeRowSettings.isHidden(cached.hubIdentifier)) {
@@ -1863,6 +1865,124 @@ class PlexDataStore: ObservableObject {
         }.value
     }
 
+    /// Fetch the other enabled servers' Continue Watching, all at once, and
+    /// re-project Home when any changed. A server that does not answer keeps
+    /// its last list. The owner's only: other servers are reached with the
+    /// account's own tokens, so a managed profile would see the owner's items.
+    private func refreshOtherServersContinueWatching() {
+        guard otherServersContinueWatchingTask == nil, profileManager.isAdminUser else { return }
+        otherServersContinueWatchingTask = Task { [weak self] in
+            let servers = await OtherServersAvailabilityChecker.shared.enabledServers().filter { !$0.isMain }
+            let fetched = await withTaskGroup(of: (Int, [PlexMetadata]?).self) { group in
+                for (index, server) in servers.enumerated() {
+                    group.addTask {
+                        let hub = try? await PlexNetworkManager.shared.getContinueWatching(
+                            serverURL: server.serverURL, authToken: server.token)
+                        return (index, hub.map { $0.Metadata ?? [] })
+                    }
+                }
+                var lists: [Int: [PlexMetadata]] = [:]
+                for await (index, metas) in group { if let metas { lists[index] = metas } }
+                return lists
+            }
+            guard let self else { return }
+            self.otherServersContinueWatchingTask = nil
+            let previous = Dictionary(self.otherServersContinueWatching.map { ($0.server.machineId, $0.metas) },
+                                      uniquingKeysWith: { first, _ in first })
+            let next = servers.enumerated().compactMap { index, server -> (OtherServersAvailabilityChecker.ServerAccess, [PlexMetadata])? in
+                guard let metas = fetched[index] ?? previous[server.machineId] else { return nil }
+                return (server, metas)
+            }
+            for (server, _) in next { Self.registerProvider(for: server) }
+            let unchanged = next.count == self.otherServersContinueWatching.count
+                && zip(next, self.otherServersContinueWatching).allSatisfy {
+                    $0.0 == $1.server && PlexHub.metadataStateEqual($0.1, $1.metas)
+                }
+            guard !unchanged else { return }
+            self.otherServersContinueWatching = next.map { (server: $0.0, metas: $0.1) }
+            self.projectHomeItems()
+        }
+    }
+
+    /// Another server's items resolve to its own provider: opening, playing
+    /// and removing one talks to that server (`PlexItemServer`).
+    private static func registerProvider(for server: OtherServersAvailabilityChecker.ServerAccess) {
+        let registry = MediaProviderRegistry.shared
+        let id = "plex:\(server.machineId)"
+        if let existing = registry.provider(for: id) as? PlexProvider,
+           existing.serverURL == server.serverURL, existing.authToken == server.token { return }
+        registry.registerAdditionalPlex(PlexProvider(
+            machineIdentifier: server.machineId, displayName: server.name,
+            serverURL: server.serverURL, authToken: server.token))
+    }
+
+    /// The ONE Continue Watching row: this server's hub and every other
+    /// enabled server's, most recently watched first, one card per show or
+    /// movie. Its items come whole from the hubs (Plex caps each list), so
+    /// the row does not paginate: a page offset into one server's hub means
+    /// nothing in the merged row.
+    private func continueWatchingRow(_ cw: PlexHub) -> CachedHomeHub {
+        let serverURL = authManager.selectedServerURL ?? ""
+        let token = authManager.selectedServerToken ?? ""
+        let mainID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
+        var sources: [(providerID: String, serverURL: String, token: String, metas: [PlexMetadata])] = [
+            (mainID, serverURL, token, cw.Metadata ?? [])
+        ]
+        for other in otherServersContinueWatching {
+            sources.append(("plex:\(other.server.machineId)", other.server.serverURL, other.server.token, other.metas))
+        }
+        let picks = Self.mergeContinueWatching(sources.map(\.metas))
+        let items = picks.map { pick in
+            let source = sources[pick.list]
+            return PlexMediaMapper.item(source.metas[pick.index], providerID: source.providerID,
+                                        serverURL: source.serverURL, authToken: source.token)
+        }
+        return CachedHomeHub(id: "hub:\(cw.id)", title: cw.title ?? "", isContinueWatching: true,
+                             hubKey: nil, hubIdentifier: cw.hubIdentifier, totalSize: nil, items: items)
+    }
+
+    /// One pick per title across `lists` (the signed-in server's first), the
+    /// most recently watched copy, then sorted most recent first. Ties keep the
+    /// order the servers listed them in. A show is one title: its episodes on
+    /// two servers, or in two libraries of one, are one card.
+    nonisolated static func mergeContinueWatching(_ lists: [[PlexMetadata]], limit: Int = 50)
+        -> [(list: Int, index: Int)] {
+        struct Pick { var list: Int; var index: Int; var viewed: Int; var arrival: Int }
+        var picks: [String: Pick] = [:]
+        var arrival = 0
+        for (list, metas) in lists.enumerated() {
+            for (index, meta) in metas.enumerated() {
+                let key = continueWatchingKey(meta, list: list, index: index)
+                let viewed = meta.lastViewedAt ?? 0
+                if let current = picks[key] {
+                    if viewed > current.viewed {
+                        picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: current.arrival)
+                    }
+                } else {
+                    picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: arrival)
+                    arrival += 1
+                }
+            }
+        }
+        return picks.values
+            .sorted { $0.viewed != $1.viewed ? $0.viewed > $1.viewed : $0.arrival < $1.arrival }
+            .prefix(limit)
+            .map { (list: $0.list, index: $0.index) }
+    }
+
+    /// What makes two Continue Watching entries the same title. Plex's agent
+    /// guids are the same on every server; a local guid (an unmatched file)
+    /// is that server's alone, so it never merges.
+    nonisolated static func continueWatchingKey(_ meta: PlexMetadata, list: Int, index: Int) -> String {
+        if meta.type == "episode" {
+            if let show = meta.grandparentGuid, show.hasPrefix("plex://") { return show }
+            if let title = meta.grandparentTitle { return "show:\(title.lowercased())" }
+        } else if let guid = meta.guid, guid.hasPrefix("plex://") {
+            return guid
+        }
+        return "\(list):\(meta.ratingKey ?? "#\(index)")"
+    }
+
     private func continueWatchingHubsAreEqual(_ lhs: PlexHub?, _ rhs: PlexHub?) -> Bool {
         // Delegate to the shared per-item comparison so this path can't drift
         // from `hubsAreEqual`. Comparing ratingKeys alone (the old behaviour)
@@ -2254,6 +2374,7 @@ class PlexDataStore: ObservableObject {
         prefetchTask = nil
         hubs = []
         continueWatchingHub = nil
+        otherServersContinueWatching = []
         hasFetchedContinueWatching = false
         libraries = []
         hasLoadedLibraries = false

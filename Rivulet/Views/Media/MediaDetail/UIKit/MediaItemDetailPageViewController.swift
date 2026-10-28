@@ -612,7 +612,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         }
         // The server the page's copy is on, following Ways to Watch.
         let server = copySelection.selected?.serverName
-            ?? (item.ref.isPlex ? PlexAuthManager.shared.mainServerName : nil)
+            ?? PlexItemServer.name(for: item.ref)
         if let server, !server.isEmpty { badgeRow.addArrangedSubview(Self.badge(server)) }
     }
 
