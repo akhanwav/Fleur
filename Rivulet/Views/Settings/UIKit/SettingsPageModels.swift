@@ -395,6 +395,7 @@ enum SettingsContent {
                                     vc.present(modal, animated: true)
                                 })),
             toggle("showPostVideoUpNext", "Show Up Next Panel", key: "showPostVideoUpNext", default: true),
+            toggle("showEndRecommendations", "Show Recommendations at End", key: "showEndRecommendations", default: true),
             SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
                             kind: .navigationValue(.contentFilter, value: {
                                 SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"

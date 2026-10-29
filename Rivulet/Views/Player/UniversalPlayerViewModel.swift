@@ -32,7 +32,10 @@ enum PostVideoState: Equatable {
 /// The end card: "You're all caught up on a show" (or a movie's end), with
 /// related titles to open and, for a show, the way back to it.
 struct EndCardContent {
-    let title: String
+    /// "You're all caught up on <show>"; nil for a movie.
+    let title: String?
+    /// Over the posters: "You May Also Like", or "More Like This" for a movie.
+    let heading: String
     let related: [MediaItem]
     /// Back to Show; nil for a movie, or when the show could not be read.
     let show: MediaItem?
@@ -5573,6 +5576,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         UserDefaults.standard.object(forKey: "showPostVideoUpNext") as? Bool ?? true
     }
 
+    /// Settings → Playback → Show Recommendations at End: the end card,
+    /// independent of the Up Next panel.
+    private var showEndRecommendations: Bool {
+        UserDefaults.standard.object(forKey: "showEndRecommendations") as? Bool ?? true
+    }
+
     /// Resolve the next episode EARLY (as soon as Aether's AVPlayer is
     /// available) so it's ready by the time handlePlaybackEnded() presents the
     /// EpisodeSummaryOverlay, rather than fetching only at end-of-episode. Runs
@@ -5602,7 +5611,7 @@ final class UniversalPlayerViewModel: ObservableObject {
     private func triggerPostVideoTransition() {
         let isEpisode = metadata.type == "episode"
 
-        if showPostVideoUpNext || !isEpisode {
+        if showPostVideoUpNext || showEndRecommendations || !isEpisode {
             Task { await handlePlaybackEnded() }
         } else {
             Task { await markCurrentAsWatched() }
@@ -5658,17 +5667,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Up Next or the end card was closed on this item: no second offer at the end.
         guard !upNextDeclined, !endCardClosed else { return }
 
-        // Per-user opt-out of the post-video panels: Up Next for episodes,
-        // the end card for both. When off, credits play uninterrupted.
-        guard showPostVideoUpNext else { return }
-
+        // Two opt-outs, one per panel: Up Next (episodes) and the end card
+        // (a movie, or a show's latest episode). With both off, credits play
+        // uninterrupted.
         // A movie has no Up Next: its end card, with related titles.
         guard isEpisode else {
-            await presentEndCard(generation: generation)
+            if showEndRecommendations { await presentEndCard(generation: generation) }
             return
         }
+        guard showPostVideoUpNext || showEndRecommendations else { return }
 
-        postVideoState = .loading
+        // Loading is Up Next's state; without it the episode after is still
+        // looked up, only to know whether the show is caught up.
+        if showPostVideoUpNext { postVideoState = .loading }
 
         // TV Show: Only show PostVideo if there's a next episode
 
@@ -5680,13 +5691,18 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Fetch next episode
         let resolvedNext = await withTMDBSummaries(fetchNextEpisode().map { [$0] } ?? []).first
         guard generation == itemGeneration else { return }
-        nextEpisode = resolvedNext
 
         // No next episode: the latest one available has been watched.
-        guard nextEpisode != nil else {
-            await presentEndCard(generation: generation)
+        guard resolvedNext != nil else {
+            if showEndRecommendations {
+                await presentEndCard(generation: generation)
+            } else {
+                postVideoState = .hidden
+            }
             return
         }
+        guard showPostVideoUpNext else { return }
+        nextEpisode = resolvedNext
 
         postVideoState = .showingEpisodeSummary
 
@@ -5741,14 +5757,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         items = Array(items.prefix(Self.endCardRelatedLimit))
         guard isEpisode else {
-            return items.isEmpty ? nil : EndCardContent(title: "More Like This", related: items, show: nil)
+            return items.isEmpty ? nil
+                : EndCardContent(title: nil, heading: "More Like This", related: items, show: nil)
         }
         let showTitle = metadata.grandparentTitle ?? detail?.item.title ?? ""
         return EndCardContent(title: showTitle.isEmpty ? "You're All Caught Up" : "You're all caught up on \(showTitle)",
-                              related: items, show: detail?.item)
+                              heading: "You May Also Like", related: items, show: detail?.item)
     }
 
-    static let endCardRelatedLimit = 12
+    /// The panel's poster row.
+    static let endCardRelatedLimit = 5
 
     /// The provider and ref the end card reads: the show for an episode, the
     /// movie itself otherwise, on the server that is playing it.

@@ -203,6 +203,10 @@ enum SettingsDescriptorStore {
             icon: "rectangle.stack",
             description: "When off, closing credits play uninterrupted and the player returns to Home at the end of the episode."
         ),
+        "showEndRecommendations": SettingDescriptor(
+            icon: "sparkles.rectangle.stack",
+            description: "When a movie ends, or the latest episode of a show you're caught up on, a panel over the credits suggests related titles for 15 seconds."
+        ),
 
         // MARK: Live TV
         "liveTVAboveLibraries": SettingDescriptor(

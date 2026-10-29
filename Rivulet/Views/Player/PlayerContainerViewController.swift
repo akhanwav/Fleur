@@ -56,6 +56,7 @@ class PlayerContainerViewController: UIViewController {
     private var postVideoOverlay: PostVideoOverlayView?
     /// The end card (`EndCardOverlayView`), up while `postVideoState == .showingEndCard`.
     private var endCardOverlay: EndCardOverlayView?
+    private var endCardScrim: SideScrimView?
     /// Darkens the video behind the Up Next card, as `chromeScrim` does behind the rail.
     private var postVideoScrim: SideScrimView?
     /// Snapshot of the last `$insightsCast` emission, read when the rail's
@@ -2236,19 +2237,33 @@ class PlayerContainerViewController: UIViewController {
                 vm.openAfterExit(show)
             }
             overlay.onUserFocusMove = { [weak self] in self?.viewModel?.holdEndCard() }
+            // The Up Next card's scrim and place: the credits stay in view beside it.
+            let scrim = SideScrimView()
+            scrim.alpha = 0
+            view.addSubview(scrim)
+            scrim.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(overlay)
             overlay.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
-                overlay.topAnchor.constraint(equalTo: view.topAnchor),
-                overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-                overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                scrim.topAnchor.constraint(equalTo: view.topAnchor),
+                scrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                scrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                scrim.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.6),
+                overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -PlayerRailView.sideInset),
+                overlay.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             ])
             endCardOverlay = overlay
-            overlay.fadeIn()
+            endCardScrim = scrim
+            view.layoutIfNeeded()
+            UIView.animate(withDuration: 0.5) { scrim.alpha = 1 }
+            overlay.slideIn()
         } else if let overlay = endCardOverlay {
             endCardOverlay = nil
-            overlay.fadeOut { [weak self] in
+            let scrim = endCardScrim
+            endCardScrim = nil
+            UIView.animate(withDuration: 0.35, animations: { scrim?.alpha = 0 },
+                           completion: { _ in scrim?.removeFromSuperview() })
+            overlay.slideOut { [weak self] in
                 self?.setNeedsFocusUpdate()
                 self?.updateFocusIfNeeded()
             }
