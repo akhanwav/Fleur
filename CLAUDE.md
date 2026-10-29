@@ -945,7 +945,8 @@ item's `ref.providerID` names the server it came from.
 - **A show watched on several servers gets one episode** (`CrossServerHistory`
   gathers, `CrossServerNextUp` decides, `PlexDataStore.applying` replaces the
   servers' own entries). Resume the most recent activity if it is a partial
-  watch; otherwise the first episode after the furthest watched on any server,
+  watch within 16 weeks (Plex's default Continue Watching window), even when
+  another server has the show finished (a rewatch); otherwise the first episode after the furthest watched on any server,
   none if there is none. One card per quality, on the most recently watched
   server holding it. It reads each server's seasons, then only the furthest
   season with progress and the next (a long show's `allLeaves` is ~1 MB),

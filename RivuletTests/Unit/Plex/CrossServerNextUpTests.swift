@@ -6,6 +6,8 @@ import XCTest
 final class CrossServerNextUpTests: XCTestCase {
 
     private let show = "plex://show/yaga"
+    /// Every activity in these tests is inside the 16-week window unless it says otherwise.
+    private let now = Date(timeIntervalSince1970: 1_000)
 
     private func ep(_ season: Int, _ number: Int, key: String, watched: Bool = false, offset: Int = 0,
                     viewed: Int? = nil, added: Int = 0, resolution: String = "1080") -> PlexMetadata {
@@ -39,7 +41,7 @@ final class CrossServerNextUpTests: XCTestCase {
             ep(1, 1, key: "a1", watched: true, viewed: 100), ep(1, 2, key: "a2", watched: true, viewed: 200)])
         let sesama = server("plex:sesama", viewed: 150, [
             ep(1, 1, key: "s1", watched: true, viewed: 150), ep(1, 2, key: "s2")])
-        guard case .caughtUp = CrossServerNextUp.outcome(showGuid: show, servers: [sesama, alpha]) else {
+        guard case .caughtUp = CrossServerNextUp.outcome(showGuid: show, servers: [sesama, alpha], now: now) else {
             return XCTFail("an episode already watched on Alpha was offered")
         }
     }
@@ -49,7 +51,7 @@ final class CrossServerNextUpTests: XCTestCase {
         let alpha = server("plex:alpha", viewed: 200, [
             ep(1, 1, key: "a1", watched: true, viewed: 100), ep(1, 2, key: "a2", watched: true, viewed: 200)])
         let sesama = server("plex:sesama", viewed: 0, [ep(1, 1, key: "s1"), ep(1, 2, key: "s2"), ep(1, 3, key: "s3")])
-        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [sesama, alpha]))
+        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [sesama, alpha], now: now))
         XCTAssertEqual(picked.map(\.providerID), ["plex:sesama"])
         XCTAssertEqual(picked.first?.meta.ratingKey, "s3")
         XCTAssertEqual(picked.first?.meta.viewOffset, 0)
@@ -62,17 +64,49 @@ final class CrossServerNextUpTests: XCTestCase {
         let a = server("plex:a", viewed: 300, [
             ep(1, 1, key: "1", watched: true, viewed: 100), ep(1, 2, key: "2"),
             ep(1, 3, key: "3", watched: true, viewed: 300), ep(1, 4, key: "4")])
-        XCTAssertEqual(cards(CrossServerNextUp.outcome(showGuid: show, servers: [a])).first?.meta.ratingKey, "4")
+        XCTAssertEqual(cards(CrossServerNextUp.outcome(showGuid: show, servers: [a], now: now)).first?.meta.ratingKey, "4")
     }
 
     /// The most recent activity is a partly watched episode: resume it, there.
     func test_resumesTheMostRecentPartlyWatchedEpisode() {
         let a = server("plex:a", viewed: 100, [ep(1, 1, key: "a1", watched: true, viewed: 100), ep(1, 2, key: "a2")])
         let b = server("plex:b", viewed: 500, [ep(1, 1, key: "b1"), ep(1, 2, key: "b2", offset: 90_000, viewed: 500)])
-        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [a, b]))
+        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [a, b], now: now))
         XCTAssertEqual(picked.map(\.providerID), ["plex:b"])
         XCTAssertEqual(picked.first?.meta.ratingKey, "b2")
         XCTAssertEqual(picked.first?.meta.viewOffset, 90_000)
+    }
+
+    /// A rewatch: the whole show watched on one server, then an earlier
+    /// episode partway through on another, most recently. Resume it.
+    func test_rewatch_resumesEvenWhenTheShowIsFinishedElsewhere() {
+        let a = server("plex:a", viewed: 300, [
+            ep(1, 1, key: "a1", watched: true, viewed: 100), ep(1, 2, key: "a2", watched: true, viewed: 300)])
+        let b = server("plex:b", viewed: 900, [ep(1, 1, key: "b1", offset: 120_000, viewed: 900), ep(1, 2, key: "b2")])
+        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [a, b], now: now))
+        XCTAssertEqual(picked.map(\.providerID), ["plex:b"])
+        XCTAssertEqual(picked.first?.meta.ratingKey, "b1")
+        XCTAssertEqual(picked.first?.meta.viewOffset, 120_000)
+    }
+
+    /// The same rewatch more than 16 weeks ago stays hidden: the show is caught up.
+    func test_rewatch_olderThanTheWindow_staysHidden() {
+        let later = Date(timeIntervalSince1970: 900 + CrossServerNextUp.window + 1)
+        let a = server("plex:a", viewed: 300, [
+            ep(1, 1, key: "a1", watched: true, viewed: 100), ep(1, 2, key: "a2", watched: true, viewed: 300)])
+        let b = server("plex:b", viewed: 900, [ep(1, 1, key: "b1", offset: 120_000, viewed: 900), ep(1, 2, key: "b2")])
+        guard case .caughtUp = CrossServerNextUp.outcome(showGuid: show, servers: [a, b], now: later) else {
+            return XCTFail("a rewatch older than the window was offered")
+        }
+    }
+
+    /// Only an old partial watch and nothing finished: Plex's own window decides.
+    func test_onlyAnOldPartialWatch_leavesPlexsOwnEntries() {
+        let later = Date(timeIntervalSince1970: 900 + CrossServerNextUp.window + 1)
+        let a = server("plex:a", viewed: 900, [ep(1, 1, key: "a1", offset: 60_000, viewed: 900), ep(1, 2, key: "a2")])
+        guard case .noHistory = CrossServerNextUp.outcome(showGuid: show, servers: [a], now: later) else {
+            return XCTFail("an old partial watch was decided")
+        }
     }
 
     /// A rewatch left partway, then later episodes finished elsewhere: the
@@ -82,14 +116,14 @@ final class CrossServerNextUpTests: XCTestCase {
         let b = server("plex:b", viewed: 900, [
             ep(1, 1, key: "b1", watched: true, viewed: 800), ep(1, 2, key: "b2", watched: true, viewed: 900),
             ep(1, 3, key: "b3")])
-        XCTAssertEqual(cards(CrossServerNextUp.outcome(showGuid: show, servers: [a, b])).first?.meta.ratingKey, "b3")
+        XCTAssertEqual(cards(CrossServerNextUp.outcome(showGuid: show, servers: [a, b], now: now)).first?.meta.ratingKey, "b3")
     }
 
     /// The last episode of a season leads to the next season's first.
     func test_crossesIntoTheNextSeason() {
         let a = server("plex:a", viewed: 100, [
             ep(1, 10, key: "1x10", watched: true, viewed: 100), ep(2, 1, key: "2x1"), ep(2, 2, key: "2x2")])
-        XCTAssertEqual(cards(CrossServerNextUp.outcome(showGuid: show, servers: [a])).first?.meta.ratingKey, "2x1")
+        XCTAssertEqual(cards(CrossServerNextUp.outcome(showGuid: show, servers: [a], now: now)).first?.meta.ratingKey, "2x1")
     }
 
     /// One card per quality, each on the server the show was watched on most
@@ -100,13 +134,13 @@ final class CrossServerNextUpTests: XCTestCase {
             ep(1, 2, key: "m2-hd", resolution: "1080")])
         let alpha = server("plex:alpha", viewed: 400, [
             ep(1, 1, key: "a1", watched: true, viewed: 400), ep(1, 2, key: "a2-hd", resolution: "1080")])
-        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [main, alpha]))
+        let picked = cards(CrossServerNextUp.outcome(showGuid: show, servers: [main, alpha], now: now))
         XCTAssertEqual(Set(picked.map { $0.meta.ratingKey ?? "" }), ["m2-4k", "a2-hd"])
     }
 
     func test_neverWatched_leavesPlexsOwnEntries() {
         let a = server("plex:a", viewed: 0, [ep(1, 1, key: "1"), ep(1, 2, key: "2")])
-        guard case .noHistory = CrossServerNextUp.outcome(showGuid: show, servers: [a]) else {
+        guard case .noHistory = CrossServerNextUp.outcome(showGuid: show, servers: [a], now: now) else {
             return XCTFail("a show never watched was decided")
         }
     }
@@ -114,7 +148,7 @@ final class CrossServerNextUpTests: XCTestCase {
     /// Specials are not part of the order.
     func test_specialsAreLeftOut() {
         let a = server("plex:a", viewed: 100, [ep(0, 1, key: "sp", watched: true, viewed: 100), ep(1, 1, key: "1")])
-        guard case .noHistory = CrossServerNextUp.outcome(showGuid: show, servers: [a]) else {
+        guard case .noHistory = CrossServerNextUp.outcome(showGuid: show, servers: [a], now: now) else {
             return XCTFail("a watched special counted as progress")
         }
     }

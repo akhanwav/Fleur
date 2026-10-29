@@ -7,7 +7,9 @@
 //  can offer an episode already watched on another (or one before it). This
 //  reads every server's history for the show and picks once:
 //
-//  - The most recent activity anywhere is a partly watched episode: resume it.
+//  - The most recent activity anywhere is a partly watched episode within
+//    `window`: resume it, even when another server has the whole show
+//    watched (a rewatch). An older one stays hidden.
 //  - Otherwise the first episode after the furthest one watched anywhere, by
 //    season and number (specials are left out). None on any server: no card.
 //
@@ -49,8 +51,12 @@ nonisolated enum CrossServerNextUp {
     /// server's own show timestamp land a few seconds apart.
     static let resumeTolerance = 60
 
+    /// Plex's default "Weeks to consider for Continue Watching" (`OnDeckWindow`).
+    /// A shared server does not show its own value to the people it is shared with.
+    static let window: TimeInterval = 16 * 7 * 86_400
+
     /// The episode to offer for one show (`showGuid`), from every server's copies.
-    static func outcome(showGuid: String, servers: [ServerShow]) -> Outcome {
+    static func outcome(showGuid: String, servers: [ServerShow], now: Date = Date()) -> Outcome {
         struct Copy { let server: Int; let meta: PlexMetadata; let order: Int }
         var copies: [Copy] = []
         for (index, server) in servers.enumerated() {
@@ -65,15 +71,21 @@ nonisolated enum CrossServerNextUp {
 
         let lastActivity = max(servers.map(\.lastViewedAt).max() ?? 0,
                                copies.map { $0.meta.lastViewedAt ?? 0 }.max() ?? 0)
-        let latestPartial = partial.max { ($0.meta.lastViewedAt ?? 0) < ($1.meta.lastViewedAt ?? 0) }
+        let windowStart = Int(now.timeIntervalSince1970 - window)
+        let resumable = partial.max { ($0.meta.lastViewedAt ?? 0) < ($1.meta.lastViewedAt ?? 0) }.flatMap { copy -> Copy? in
+            let at = copy.meta.lastViewedAt ?? 0
+            guard at >= windowStart, at + resumeTolerance >= lastActivity || watched.isEmpty else { return nil }
+            return copy
+        }
 
         let target: Int
         var resume: PlexMetadata?
-        if let latestPartial,
-           (latestPartial.meta.lastViewedAt ?? 0) + resumeTolerance >= lastActivity || watched.isEmpty {
-            target = latestPartial.order
-            resume = latestPartial.meta
+        if let resumable {
+            target = resumable.order
+            resume = resumable.meta
         } else {
+            // Only an old partial watch: Plex's own window decides.
+            guard !watched.isEmpty else { return .noHistory }
             let furthest = watched.map(\.order).max() ?? 0
             guard let next = copies.map(\.order).filter({ $0 > furthest }).min() else { return .caughtUp }
             target = next

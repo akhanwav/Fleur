@@ -35,9 +35,6 @@ final class CrossServerHistory {
     /// Called on the main actor when `outcomes` changed.
     var onChange: (() -> Void)?
 
-    /// Plex's default "Weeks to consider for Continue Watching" (`OnDeckWindow`).
-    /// A shared server does not show its own value to the people it is shared with.
-    static let window: TimeInterval = 16 * 7 * 86_400
     static let interval: TimeInterval = 15 * 60
     private static let recentShowCount = 20
     private static let maxShows = 30
@@ -99,7 +96,7 @@ final class CrossServerHistory {
     // MARK: - Pass
 
     private func run(sources: [Source], now: Date) async -> [String: CrossServerNextUp.Outcome] {
-        let cutoff = Int(now.addingTimeInterval(-Self.window).timeIntervalSince1970)
+        let cutoff = Int(now.addingTimeInterval(-CrossServerNextUp.window).timeIntervalSince1970)
         var recents: [[PlexMetadata]] = []
         for source in sources {
             recents.append(await Self.recentShows(on: source.access).filter { ($0.lastViewedAt ?? 0) >= cutoff })
@@ -133,7 +130,7 @@ final class CrossServerHistory {
                 for guid in chunk {
                     group.addTask { @MainActor in
                         (guid, await self.outcome(for: guid, sources: sources, recents: recents,
-                                                  listed: inHub.contains(guid)))
+                                                  listed: inHub.contains(guid), now: now))
                     }
                 }
                 for await (guid, outcome) in group { result[guid] = outcome }
@@ -145,7 +142,7 @@ final class CrossServerHistory {
     /// One show's decision; nil when one server or none holds it, where that
     /// server's own On Deck already has the whole history.
     private func outcome(for guid: String, sources: [Source], recents: [[PlexMetadata]],
-                         listed: Bool) async -> CrossServerNextUp.Outcome? {
+                         listed: Bool, now: Date) async -> CrossServerNextUp.Outcome? {
         // Each server's copies of the show: from its recent list, else looked up.
         var shows: [[PlexMetadata]] = []
         for (index, source) in sources.enumerated() {
@@ -177,7 +174,7 @@ final class CrossServerHistory {
             let lastViewed = shows[index].compactMap(\.lastViewedAt).max() ?? 0
             servers.append(.init(providerID: source.providerID, lastViewedAt: lastViewed, episodes: episodes))
         }
-        let outcome = CrossServerNextUp.outcome(showGuid: guid, servers: servers)
+        let outcome = CrossServerNextUp.outcome(showGuid: guid, servers: servers, now: now)
         // A show no row lists: the server it was last watched on left it out
         // on purpose (removed, or outside its window) when it holds the
         // episode. Offer it only from servers where that episode is new.
