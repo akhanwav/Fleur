@@ -2,13 +2,13 @@
 //  EndCardOverlayView.swift
 //  Rivulet
 //
-//  The end card: when a show's latest episode or a movie ends, a glass panel
-//  the size and place of the Up Next card slides in over the credits. A show's
-//  says "You're all caught up on <show>", then "You May Also Like" over up to
-//  five posters and Back to Show; a movie's says "More Like This" over its
-//  posters. Selecting a poster opens its page; Back closes the panel. It
-//  closes by itself after `UniversalPlayerViewModel.endCardSeconds` unless the
-//  person moves on it.
+//  The end card: when a show's latest available episode ends, a glass panel
+//  the size and place of the Up Next card slides in over the credits: "You're
+//  all caught up on <show>", then "You May Also Like" over up to five posters,
+//  and Back to Show. A focused poster's title shows under the row; selecting
+//  it opens its page. Back closes the panel. It closes by itself after
+//  `UniversalPlayerViewModel.endCardSeconds` unless the person moves on it.
+//  Movies get no panel.
 //
 //  Like the Up Next card, the view IS the panel's footprint: the container
 //  pins it to the trailing edge, so the credits stay visible beside it.
@@ -116,8 +116,7 @@ final class EndCardOverlayView: UIView {
 
     func configure(_ content: EndCardContent) {
         titleLabel.text = content.title
-        titleLabel.isHidden = content.title == nil
-        headingLabel.text = content.heading
+        headingLabel.text = "You May Also Like"
         hasShow = content.show != nil
         backButton.isHidden = !hasShow
 
@@ -168,8 +167,8 @@ final class EndCardOverlayView: UIView {
 
     // MARK: - Focus
 
-    /// A show's panel lands on Back to Show, so a stray Select does not open
-    /// another title; a movie's has only its posters.
+    /// The panel lands on Back to Show, so a stray Select does not open
+    /// another title; without it, on the first poster.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         hasShow ? [backButton] : (posters.first.map { [$0] } ?? [])
     }

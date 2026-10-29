@@ -977,7 +977,7 @@ item's `ref.providerID` names the server it came from.
 | Music Now Playing | `Views/Music/UIKit/MusicNowPlayingViewController.swift` |
 | Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
 | Music menus | `Views/Music/UIKit/MusicMenus.swift` |
-| End card (caught up / movie end) | `Views/Player/UIKit/EndCardOverlayView.swift` |
+| End card (caught up on a show) | `Views/Player/UIKit/EndCardOverlayView.swift` |
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
 | Content filter sources | `Services/Plex/Playback/ContentFilter/ContentFilterSources.swift` |

@@ -25,19 +25,16 @@ enum PostVideoState: Equatable {
     case hidden
     case loading
     case showingEpisodeSummary
-    /// A show's latest episode or a movie ended: `UniversalPlayerViewModel.endCard`.
+    /// A show's latest available episode ended: `UniversalPlayerViewModel.endCard`.
     case showingEndCard
 }
 
-/// The end card: "You're all caught up on a show" (or a movie's end), with
-/// related titles to open and, for a show, the way back to it.
+/// The end card: "You're all caught up on <show>", with related titles to
+/// open and the way back to the show.
 struct EndCardContent {
-    /// "You're all caught up on <show>"; nil for a movie.
-    let title: String?
-    /// Over the posters: "You May Also Like", or "More Like This" for a movie.
-    let heading: String
+    let title: String
     let related: [MediaItem]
-    /// Back to Show; nil for a movie, or when the show could not be read.
+    /// Back to Show; nil when the show could not be read.
     let show: MediaItem?
 }
 
@@ -5576,8 +5573,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         UserDefaults.standard.object(forKey: "showPostVideoUpNext") as? Bool ?? true
     }
 
-    /// Settings → Playback → Show Recommendations at End: the end card,
-    /// independent of the Up Next panel.
+    /// Settings → Playback → Show Recommendations at End: the end card after a
+    /// show's latest episode, independent of the Up Next panel.
     private var showEndRecommendations: Bool {
         UserDefaults.standard.object(forKey: "showEndRecommendations") as? Bool ?? true
     }
@@ -5667,15 +5664,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         // Up Next or the end card was closed on this item: no second offer at the end.
         guard !upNextDeclined, !endCardClosed else { return }
 
-        // Two opt-outs, one per panel: Up Next (episodes) and the end card
-        // (a movie, or a show's latest episode). With both off, credits play
-        // uninterrupted.
-        // A movie has no Up Next: its end card, with related titles.
-        guard isEpisode else {
-            if showEndRecommendations { await presentEndCard(generation: generation) }
-            return
-        }
-        guard showPostVideoUpNext || showEndRecommendations else { return }
+        // A movie gets no panel: its credits play and the player closes.
+        // Episodes have two opt-outs, one per panel: Up Next and the end card
+        // (after the latest episode). With both off, credits play uninterrupted.
+        guard isEpisode, showPostVideoUpNext || showEndRecommendations else { return }
 
         // Loading is Up Next's state; without it the episode after is still
         // looked up, only to know whether the show is caught up.
@@ -5740,44 +5732,36 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// The related titles: the server's own for the show or movie, else
-    /// TMDB's recommendations. A show's card stands without them; a movie's
-    /// has nothing else to show.
+    /// The related titles: the server's own for the show, else TMDB's
+    /// recommendations. The card stands without them.
     private func loadEndCard() async -> EndCardContent? {
-        let isEpisode = metadata.type == "episode"
-        guard let (provider, ref) = endCardTarget(isEpisode: isEpisode) else { return nil }
-        let kind: MediaKind = isEpisode ? .show : .movie
-        async let related = try? provider.related(for: ref, kind: kind)
+        guard let (provider, ref) = endCardTarget() else { return nil }
+        async let related = try? provider.related(for: ref, kind: .show)
         let detail = try? await provider.fullDetail(for: ref)
         var items = await related.map { $0.items.isEmpty ? $0.collection?.members ?? [] : $0.items } ?? []
         if items.isEmpty, let tmdbId = detail?.externalIDs["tmdb"].flatMap(Int.init) {
             let tmdbRef = MediaItemRef(providerID: TMDBMediaMapper.providerID,
-                                       itemID: TMDBMediaMapper.encodeItemID(tmdbId: tmdbId, type: isEpisode ? .tv : .movie))
+                                       itemID: TMDBMediaMapper.encodeItemID(tmdbId: tmdbId, type: .tv))
             items = (try? await TMDBMetadataSource().recommendations(for: tmdbRef)) ?? []
         }
         items = Array(items.prefix(Self.endCardRelatedLimit))
-        guard isEpisode else {
-            return items.isEmpty ? nil
-                : EndCardContent(title: nil, heading: "More Like This", related: items, show: nil)
-        }
         let showTitle = metadata.grandparentTitle ?? detail?.item.title ?? ""
         return EndCardContent(title: showTitle.isEmpty ? "You're All Caught Up" : "You're all caught up on \(showTitle)",
-                              heading: "You May Also Like", related: items, show: detail?.item)
+                              related: items, show: detail?.item)
     }
 
     /// The panel's poster row.
     static let endCardRelatedLimit = 5
 
-    /// The provider and ref the end card reads: the show for an episode, the
-    /// movie itself otherwise, on the server that is playing it.
-    private func endCardTarget(isEpisode: Bool) -> (any MediaProvider, MediaItemRef)? {
+    /// The provider and show the end card reads, on the server that is playing it.
+    private func endCardTarget() -> (any MediaProvider, MediaItemRef)? {
         switch source {
         case .provider(let playback):
-            guard let ref = isEpisode ? playback.item.grandparentRef : playback.item.ref else { return nil }
+            guard let ref = playback.item.grandparentRef else { return nil }
             return (playback.provider, ref)
         case .plex:
             guard let provider = MediaProviderRegistry.shared.plexProvider(serverURL: serverURL),
-                  let key = isEpisode ? metadata.grandparentRatingKey : metadata.ratingKey else { return nil }
+                  let key = metadata.grandparentRatingKey else { return nil }
             return (provider, MediaItemRef(providerID: provider.id, itemID: key))
         }
     }

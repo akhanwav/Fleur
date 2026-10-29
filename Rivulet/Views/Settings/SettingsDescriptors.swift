@@ -205,7 +205,7 @@ enum SettingsDescriptorStore {
         ),
         "showEndRecommendations": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
-            description: "When a movie ends, or the latest episode of a show you're caught up on, a panel over the credits suggests related titles for 15 seconds."
+            description: "When you finish the latest available episode of a show, a panel over the credits suggests related titles for 15 seconds."
         ),
 
         // MARK: Live TV
