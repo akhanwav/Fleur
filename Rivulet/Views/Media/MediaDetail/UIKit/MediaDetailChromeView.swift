@@ -120,6 +120,9 @@ final class MediaDetailChromeView: UIView {
     /// The selected copy's artwork when it is another server's (nil: the
     /// item's own), so the host shows that server's backdrop.
     var onCopyArtwork: ((MediaArtwork?) -> Void)?
+    /// The selected copy when it is another server's or library's (nil: the
+    /// item's own), so the episode list loads from it too.
+    var onCopyChange: ((BelowFoldCollectionView.EpisodeCopy?) -> Void)?
     var onShowFullDescription: ((MediaItemDetail) -> Void)?
 
     /// The Play pill (rebuilt per item). Exposed so the host cell can point the
@@ -647,6 +650,11 @@ final class MediaDetailChromeView: UIView {
         // Another server's copy brings its own (possibly custom) artwork; an
         // unowned page's copy is the only server art it has.
         onCopyArtwork?(copy.isMainServer ? nil : copy.item.artwork)
+        onCopyChange?(copy.isMainServer ? nil : copy.remote.map { remote in
+            BelowFoldCollectionView.EpisodeCopy(
+                original: item.ref, show: copy.item, machineId: copy.machineId,
+                serverName: copy.serverName, serverURL: remote.serverURL, token: remote.token)
+        })
     }
 
     /// Play the selected copy: another server's through `RemoteCopyPlayer`

@@ -50,8 +50,8 @@ final class EpisodeCollectionCell: UICollectionViewCell {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(episode: MediaItem, showSeasonPrefix: Bool) {
-        episodeView.configure(episode: episode, showSeasonPrefix: showSeasonPrefix)
+    func configure(episode: MediaItem, showSeasonPrefix: Bool, unavailableOn: String? = nil) {
+        episodeView.configure(episode: episode, showSeasonPrefix: showSeasonPrefix, unavailableOn: unavailableOn)
     }
 
     /// Trailers render with the SAME episode card so the two rows match exactly.

@@ -386,7 +386,10 @@ final class EpisodeCell: UIView {
 
     // MARK: - Configure
 
-    func configure(episode: MediaItem, showSeasonPrefix: Bool = false) {
+    /// `unavailableOn` names the server a show page's selected copy is on when
+    /// this episode is not there: the card dims and says so in place of its
+    /// runtime, and its thumb plays nothing (the host sets no play action).
+    func configure(episode: MediaItem, showSeasonPrefix: Bool = false, unavailableOn: String? = nil) {
         // Episodes have two focus stops: thumb (play) + description (details).
         // The description starts gated OFF; it becomes focusable only once the
         // thumb takes focus (see applyReachability), so the first focus into the
@@ -434,6 +437,16 @@ final class EpisodeCell: UIView {
             }
         }
 
+        // Not on the selected copy: dimmed, with the server named instead.
+        thumbnailImageView.alpha = unavailableOn == nil ? 1 : 0.3
+        durationIcon.image = UIImage(systemName: unavailableOn == nil ? "play.fill" : "slash.circle")
+        if let unavailableOn {
+            watchedGlyph.isHidden = true
+            progressTrack.isHidden = true
+            durationLabel.text = "Not on \(unavailableOn)"
+            durationBadge.isHidden = false
+        }
+
         // Thumbnail (async)
         imageToken &+= 1
         let token = imageToken
@@ -456,6 +469,8 @@ final class EpisodeCell: UIView {
     /// no episode number, summary, date, or rating — those are hidden and the
     /// block hugs thumbnail + title. Duration shows in the same on-thumbnail badge.
     func configure(trailer: BelowFoldTrailer) {
+        thumbnailImageView.alpha = 1
+        durationIcon.image = UIImage(systemName: "play.fill")
         // Trailers keep a single focus stop on the thumb (no description target).
         splitFocus = false
         descriptionBlock.isFocusEligible = false

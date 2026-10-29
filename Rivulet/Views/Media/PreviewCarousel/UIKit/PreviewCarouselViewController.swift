@@ -43,6 +43,9 @@ final class PreviewCarouselViewController: UIViewController {
     // MARK: - Inputs
 
     private var items: [MediaItem]
+    /// Each card's selected copy for the episode rail (Ways to Watch, On
+    /// Your Servers), by card index; absent for a card on its own copy.
+    private var episodeCopies: [Int: BelowFoldCollectionView.EpisodeCopy] = [:]
     private(set) var selectedIndex: Int
     private let initialSourceFrame: CGRect
     private let entrySnapshots: [PreviewEntrySnapshot]
@@ -380,6 +383,9 @@ final class PreviewCarouselViewController: UIViewController {
         // Episode description Select → reusable detail page (blur-fade in Stage 3c).
         expandedDetail.onShowEpisodeDetails = { [weak self] episode in
             guard let self else { return }
+            // An episode listed from another copy opens on that copy, not on
+            // the server it was last watched on.
+            if self.expandedDetail.hasEpisodeCopy { DetailCopySelection.pinnedToOwnCopy.insert(episode.ref) }
             // seriesTitle nil for now — the show name comes from the episode's
             // fetched metadata (grandparentTitle) in Stage 3b, not the carousel's
             // selectedIndex item (which isn't reliably the show).
@@ -405,6 +411,7 @@ final class PreviewCarouselViewController: UIViewController {
         // opens the season's summary and info on top of the show.
         expandedDetail.onOpenSeason = { [weak self] season in
             guard let self else { return }
+            if self.expandedDetail.hasEpisodeCopy { DetailCopySelection.pinnedToOwnCopy.insert(season.ref) }
             let show = self.items.indices.contains(self.selectedIndex) ? self.items[self.selectedIndex] : nil
             let page = MediaItemDetailPageViewController(
                 item: season,
@@ -718,6 +725,8 @@ final class PreviewCarouselViewController: UIViewController {
         // expanded). Item sync + cascade so paging snaps it out then re-cascades.
         expandedDetail.isHidden = false
         if items.indices.contains(selectedIndex) {
+            // Before the item: setting it loads the rail, from this card's copy.
+            expandedDetail.setEpisodeCopy(episodeCopies[selectedIndex])
             expandedDetail.item = items[selectedIndex]
         }
         expandedDetail.setCurrent(true, animated: animated)
@@ -2041,6 +2050,11 @@ extension PreviewCarouselViewController: UICollectionViewDataSource, UICollectio
         cell.onShowInfo = { [weak self] detail in self?.presentInfoPopup(detail) }
         let cardIndex = indexPath.item
         cell.onCopyArtwork = { [weak self] artwork in self?.backdropPlane.setArtwork(artwork, for: cardIndex) }
+        cell.onCopyChange = { [weak self] copy in
+            guard let self else { return }
+            self.episodeCopies[cardIndex] = copy
+            if cardIndex == self.selectedIndex { self.expandedDetail.setEpisodeCopy(copy) }
+        }
         // Default to non-current; if this dequeued cell happens to be
         // at selectedIndex (e.g. on first viewport population), the
         // entry-morph completion or paging completion will flip it via

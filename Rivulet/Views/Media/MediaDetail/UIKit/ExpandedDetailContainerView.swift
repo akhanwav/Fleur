@@ -707,6 +707,16 @@ final class ExpandedDetailContainerView: UIView {
     /// without re-running the episode load. `item`'s `didSet` would otherwise
     /// rebuild the rail from scratch; here only the stored value moves so the
     /// host can hand the fresh item back out (`onSelectSynopsis`, etc.).
+    /// The show's selected copy (Ways to Watch, On Your Servers): the episode
+    /// rail and season pills load from it. nil is the item's own copy.
+    func setEpisodeCopy(_ copy: BelowFoldCollectionView.EpisodeCopy?) {
+        belowFoldCollection.setEpisodeCopy(copy)
+    }
+
+    /// Whether the rail lists another copy than the item's own.
+    var hasEpisodeCopy: Bool { episodeCopy != nil }
+    private var episodeCopy: BelowFoldCollectionView.EpisodeCopy? { belowFoldCollection.currentEpisodeCopy }
+
     func updateItemInPlace(_ refreshed: MediaItem) {
         guard let current = item, current.ref == refreshed.ref else { return }
         isSwappingItemInPlace = true

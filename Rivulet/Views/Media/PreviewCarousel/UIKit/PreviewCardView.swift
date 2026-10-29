@@ -347,6 +347,8 @@ final class PreviewCardView: UICollectionViewCell {
     var onShowInfo: ((MediaItemDetail) -> Void)?
     /// The selected server copy's artwork (nil: the item's own).
     var onCopyArtwork: ((MediaArtwork?) -> Void)?
+    /// The selected copy for the episode list (nil: the item's own).
+    var onCopyChange: ((BelowFoldCollectionView.EpisodeCopy?) -> Void)?
 
     /// Switch the hero to another server's copy of this title.
     func selectCopy(copyID: String) {
@@ -385,6 +387,7 @@ final class PreviewCardView: UICollectionViewCell {
             self?.onShowInfo?(detail)
         }
         chromeView.onCopyArtwork = { [weak self] artwork in self?.onCopyArtwork?(artwork) }
+        chromeView.onCopyChange = { [weak self] copy in self?.onCopyChange?(copy) }
     }
 
     // MARK: - Expand state

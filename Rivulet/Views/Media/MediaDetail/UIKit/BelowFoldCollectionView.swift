@@ -20,6 +20,9 @@
 //
 
 import UIKit
+import os.log
+
+private let copyRailLog = Logger(subsystem: "com.rivulet.app", category: "WaysToWatch")
 
 // nonisolated + Sendable: required to be diffable identifiers under the
 // project's SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor (matches HomeSectionID).
@@ -135,6 +138,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     var onEpisodesApplied: (() -> Void)?
 
     private var episodesByID: [String: MediaItem] = [:]
+    /// The show page's selected copy (`setEpisodeCopy`), nil for its own.
+    private var episodeCopy: EpisodeCopy?
+    /// Episodes of the page's own copy that the selected copy lacks: listed
+    /// greyed, playing nothing.
+    private var unavailableEpisodeIDs: Set<String> = []
+    private var copyToken: UInt64 = 0
+    /// True once the full below-fold (seasons included) has been ingested.
+    private var hasFullContent = false
     private var trailersByID: [String: BelowFoldTrailer] = [:]
     private var extrasByID: [String: BelowFoldTrailer] = [:]
     private var castEntriesByID: [String: CastEntry] = [:]
@@ -459,14 +470,15 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .episode(let id):
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: EpisodeCollectionCell.reuseID, for: indexPath) as! EpisodeCollectionCell
                 if let ep = self.episodesByID[id] {
-                    cell.configure(episode: ep, showSeasonPrefix: self.multiSeason)
+                    let unavailableOn = self.unavailableEpisodeIDs.contains(id) ? self.episodeCopy?.serverName : nil
+                    cell.configure(episode: ep, showSeasonPrefix: self.multiSeason, unavailableOn: unavailableOn)
                     // Per-cell focus drives season-pill tracking (fires on every
                     // horizontal move; the collection's didUpdateFocus does not).
                     cell.onFocused = { [weak self] focused in
                         if focused { self?.pendingInitialFocus = nil; self?.onEpisodeFocused?(ep) }
                     }
                     // Two focus stops: thumb = play, description = detail page.
-                    cell.onPlay = { [weak self] in self?.onPlayEpisode?(ep) }
+                    cell.onPlay = unavailableOn == nil ? { [weak self] in self?.onPlayEpisode?(ep) } : nil
                     cell.onShowDetails = { [weak self] in self?.onShowEpisodeDetails?(ep) }
                     cell.onFocusKind = { [weak self] kind in
                         guard let self else { return }
@@ -612,8 +624,17 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         isLoadingEpisodes = false
         Task { [weak self] in
             guard let self else { return }
-            let content = await self.loader.load(for: item, detail: detail)
+            var content = await self.loader.load(for: item, detail: detail)
+            var missing: Set<String> = []
+            if let copy = self.activeCopy(for: item),
+               let merged = await Self.merged(with: copy, original: content.episodes, originalSeasons: content.seasons) {
+                content.seasons = merged.seasons
+                content.selectedSeason = merged.seasons.first
+                content.episodes = merged.episodes
+                missing = merged.missing
+            }
             guard self.loadToken == token else { return }
+            self.unavailableEpisodeIDs = missing
             self.ingest(content)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
@@ -692,6 +713,93 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         dataSource.apply(snapshot, animatingDifferences: false)
     }
 
+    // MARK: - Selected copy
+
+    /// Another server's or library's copy of the show a page switched to.
+    struct EpisodeCopy: Equatable {
+        /// The page's own show, which this copy stands in for.
+        let original: MediaItemRef
+        /// The copy's show, on its own server (`plex:<machineId>`).
+        let show: MediaItem
+        let machineId: String
+        let serverName: String
+        let serverURL: String
+        let token: String
+    }
+
+    /// List `copy`'s episodes (nil: the page's own). A show page only, and
+    /// only for the show it stands in for; reloads the rail when that show is up.
+    func setEpisodeCopy(_ copy: EpisodeCopy?) {
+        guard copy != episodeCopy else { return }
+        episodeCopy = copy
+        guard let item = configuredItem, item.kind == .show else { return }
+        reloadEpisodes(for: item)
+    }
+
+    /// The copy the rail lists now, nil for the item's own.
+    var currentEpisodeCopy: EpisodeCopy? { configuredItem.flatMap(activeCopy(for:)) }
+
+    private func activeCopy(for item: MediaItem) -> EpisodeCopy? {
+        guard item.kind == .show, let copy = episodeCopy, copy.original == item.ref else { return nil }
+        return copy
+    }
+
+    /// The copy's server, registered on first use so its episodes open, play
+    /// and report on that server (`PlexItemServer`).
+    static func provider(for copy: EpisodeCopy) -> (any MediaProvider)? {
+        let registry = MediaProviderRegistry.shared
+        if let provider = registry.provider(for: copy.show.ref.providerID) { return provider }
+        registry.registerAdditionalPlex(PlexProvider(machineIdentifier: copy.machineId, displayName: copy.serverName,
+                                                     serverURL: copy.serverURL, authToken: copy.token))
+        return registry.provider(for: copy.show.ref.providerID)
+    }
+
+    /// The copy's seasons and episodes with the original's it lacks; nil
+    /// when the copy's server did not answer, which keeps the original list.
+    private static func merged(with copy: EpisodeCopy, original: [MediaItem],
+                               originalSeasons: [MediaItem]) async -> CopyEpisodes.Merged? {
+        guard let provider = provider(for: copy) else { return nil }
+        async let seasons = try? provider.children(of: copy.show.ref)
+        async let episodes = try? provider.allEpisodes(of: copy.show.ref)
+        guard let copyEpisodes = await episodes else {
+            copyRailLog.error("[Copies] rail: \(copy.serverName, privacy: .public) did not answer; listing the page's own copy")
+            return nil
+        }
+        let merged = CopyEpisodes.merge(copy: copyEpisodes, copySeasons: await seasons ?? [],
+                                        original: original, originalSeasons: originalSeasons)
+        copyRailLog.info("[Copies] rail: \(copy.show.title, privacy: .public) from \(copy.serverName, privacy: .public) (\(copy.show.ref.itemID, privacy: .public)): \(copyEpisodes.count, privacy: .public) episodes, \(merged.missing.count, privacy: .public) not there")
+        return merged
+    }
+
+    /// The rail (and, once expanded, the season pills) again for the current
+    /// copy, leaving the rest of the below-fold as it is.
+    private func reloadEpisodes(for item: MediaItem) {
+        guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
+        copyToken &+= 1
+        let token = copyToken
+        let load = loadToken
+        let full = hasFullContent
+        let copy = activeCopy(for: item)
+        Task { [weak self] in
+            guard let self else { return }
+            var episodes = (try? await provider.allEpisodes(of: item.ref)) ?? []
+            var seasons = full ? (try? await provider.children(of: item.ref)) ?? [] : []
+            var missing: Set<String> = []
+            if let copy, let merged = await Self.merged(with: copy, original: episodes, originalSeasons: seasons) {
+                episodes = merged.episodes
+                seasons = merged.seasons
+                missing = merged.missing
+            }
+            guard self.copyToken == token, self.loadToken == load, !episodes.isEmpty else { return }
+            self.unavailableEpisodeIDs = missing
+            self.multiSeason = full ? seasons.count > 1 : Set(episodes.compactMap(\.seasonNumber)).count > 1
+            self.episodesByID = Dictionary(episodes.map { ($0.ref.itemID, $0) }, uniquingKeysWith: { a, _ in a })
+            self.cachedEpisodes = self.buildRailItems(from: episodes)
+            self.applySnapshot()
+            if full { self.onSeasonsLoaded?(seasons, 0) }
+        }
+    }
+
     /// Episodes-only load for the carousel-stable peek (per page) — skips the
     /// heavier cast/related fetch until expand.
     func configureEpisodesOnly(item: MediaItem) {
@@ -724,8 +832,16 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             } else {
                 eps = []
             }
+            var listed = eps
+            var missing: Set<String> = []
+            if let copy = self.activeCopy(for: item),
+               let merged = await Self.merged(with: copy, original: eps, originalSeasons: []) {
+                listed = merged.episodes
+                missing = merged.missing
+            }
             guard self.loadToken == token else { return }
-            self.ingestEpisodesOnly(eps)
+            self.unavailableEpisodeIDs = missing
+            self.ingestEpisodesOnly(listed)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: item)
             self.isLoadingEpisodes = false
@@ -768,10 +884,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // (`ingestEpisodesOnly` clears both), so skip /related and the
         // collection fetch. Read before the await: the stores can change under it.
         let hasShelves = collectionRow != nil || !cachedRelated.isEmpty
+        let copy = activeCopy(for: item)
         Task { [weak self] in
             guard let self else { return }
             let eps: [MediaItem]
-            if let showRef {
+            if let copy, let copyProvider = Self.provider(for: copy) {
+                // The selected copy's states; its missing episodes have none to refresh.
+                eps = (try? await copyProvider.allEpisodes(of: copy.show.ref)) ?? []
+            } else if let showRef {
                 eps = (try? await provider.allEpisodes(of: showRef)) ?? []
             } else if item.kind == .season {
                 eps = (try? await provider.children(of: item.ref)) ?? []
@@ -840,6 +960,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     }
 
     private func ingestEpisodesOnly(_ episodes: [MediaItem]) {
+        hasFullContent = false
         // Match the full-ingest label format: a multi-season show shows "S01E01"
         // prefixes, not "Episode N". (Derived from the episodes themselves since
         // the lighter peek load doesn't fetch the seasons list.)
@@ -856,6 +977,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     }
 
     private func ingest(_ content: BelowFoldContent) {
+        hasFullContent = true
         detail = content.detail
         showDetail = content.showDetail
         multiSeason = content.seasons.count > 1

@@ -138,6 +138,19 @@ extension MediaItem {
     /// Used by the prefetch ring to splice a TMDB-resolved logo URL into a
     /// MediaItem whose provider mapper didn't have one at construction time.
     /// A non-nil existing logo is never overwritten.
+    /// The same item under another parent (an episode moved under another
+    /// server's copy of its season, so the rail groups it with that season).
+    func withParentRef(_ parent: MediaItemRef?) -> MediaItem {
+        MediaItem(
+            ref: ref, kind: kind, title: title, sortTitle: sortTitle, overview: overview, year: year,
+            releaseDate: releaseDate, contentRating: contentRating, runtime: runtime, isMusic: isMusic,
+            parentRef: parent, grandparentRef: grandparentRef, seriesTitle: seriesTitle,
+            episodeNumber: episodeNumber, seasonNumber: seasonNumber, childProgress: childProgress,
+            userState: userState, artwork: artwork, parentArtwork: parentArtwork,
+            grandparentArtwork: grandparentArtwork, versionCount: versionCount, editionTitle: editionTitle,
+            addedAt: addedAt)
+    }
+
     func withLogoIfMissing(_ logo: URL?) -> MediaItem {
         guard let logo, artwork.logo == nil else { return self }
         return MediaItem(
