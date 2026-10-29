@@ -134,6 +134,11 @@ final class EpisodeCell: UIView {
     private var progressFillWidth: NSLayoutConstraint!
 
     private let watchedGlyph = WatchedGlyphView()
+    /// The copy that plays ("1080p · Alpha"), bottom-trailing, styled like
+    /// Continue Watching's tags. The quality is read once per episode
+    /// (`TitleQuality`); the server is the episode's own (`PlexItemServer`).
+    private let copyTag = QualityTagView()
+    private var copyTagToken: UInt64 = 0
 
     private let descriptionBlock = EpisodeDescriptionView()
     /// Episode mode (two focus stops: thumb + description). False for trailers
@@ -184,6 +189,7 @@ final class EpisodeCell: UIView {
         thumbnailCard.onFocusChange = { [weak self] focused, next, coordinator in
             guard let self else { return }
             self.thumbFocused = focused
+            self.copyTag.setFocused(focused)
             self.applyReachability(next: next)
             self.updateDescriptionGlass(coordinator)
             self.notifyFocusKind()
@@ -228,6 +234,12 @@ final class EpisodeCell: UIView {
         // Watched tag (top-trailing)
         watchedGlyph.isHidden = true
         thumbnailCard.contentView.addSubview(watchedGlyph)
+
+        copyTag.translatesAutoresizingMaskIntoConstraints = false
+        copyTag.isHidden = true
+        // A long server name gives way before the runtime beside it.
+        copyTag.setTextCompressionResistance(.defaultLow)
+        thumbnailCard.contentView.addSubview(copyTag)
 
         // Subtype icon (top-leading) — shown on trailer/extra tiles only.
         subtypeIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -333,6 +345,10 @@ final class EpisodeCell: UIView {
             durationLabel.trailingAnchor.constraint(equalTo: durationBadge.trailingAnchor),
             durationLabel.topAnchor.constraint(equalTo: durationBadge.topAnchor),
             durationLabel.bottomAnchor.constraint(equalTo: durationBadge.bottomAnchor),
+
+            copyTag.trailingAnchor.constraint(equalTo: thumbnailCard.contentView.trailingAnchor, constant: -12),
+            copyTag.centerYAnchor.constraint(equalTo: durationBadge.centerYAnchor),
+            copyTag.leadingAnchor.constraint(greaterThanOrEqualTo: thumbnailCard.contentView.leadingAnchor, constant: 110),
 
             // Progress bar: full width, 3pt, pinned bottom.
             progressTrack.leadingAnchor.constraint(equalTo: thumbnailCard.contentView.leadingAnchor),
@@ -447,6 +463,8 @@ final class EpisodeCell: UIView {
             durationBadge.isHidden = false
         }
 
+        configureCopyTag(episode, unavailable: unavailableOn != nil)
+
         // Thumbnail (async)
         imageToken &+= 1
         let token = imageToken
@@ -468,7 +486,33 @@ final class EpisodeCell: UIView {
     /// focus panel) as episodes so the two rows read as one design. A trailer has
     /// no episode number, summary, date, or rating — those are hidden and the
     /// block hugs thumbnail + title. Duration shows in the same on-thumbnail badge.
+    /// Quality and server of the copy this card plays; none for an episode
+    /// the selected copy lacks (its badge already says so).
+    private func configureCopyTag(_ episode: MediaItem, unavailable: Bool) {
+        copyTagToken &+= 1
+        let token = copyTagToken
+        let server = PlexItemServer.name(for: episode.ref)
+        func show(_ quality: String?) {
+            let text = [quality, server].compactMap { $0 }.joined(separator: " · ")
+            copyTag.text = text
+            copyTag.isHidden = text.isEmpty
+        }
+        guard !unavailable else { copyTag.isHidden = true; return }
+        if let known = TitleQuality.known(for: episode.ref) {
+            show(known)
+            return
+        }
+        show(nil)
+        Task { [weak self] in
+            let quality = await TitleQuality.label(for: episode)
+            guard let self, self.copyTagToken == token else { return }
+            show(quality)
+        }
+    }
+
     func configure(trailer: BelowFoldTrailer) {
+        copyTagToken &+= 1
+        copyTag.isHidden = true
         thumbnailImageView.alpha = 1
         durationIcon.image = UIImage(systemName: "play.fill")
         // Trailers keep a single focus stop on the thumb (no description target).
