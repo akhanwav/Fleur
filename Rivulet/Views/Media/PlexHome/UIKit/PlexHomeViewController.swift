@@ -6099,15 +6099,19 @@ final class PlexHomeViewController: UIViewController {
         }
         // A season tile (Recently Added lists one when several of its
         // episodes land) opens its show: the show's copies on every server,
-        // its Ways to Watch and its own background. The tile keeps its
-        // season caption; the tiles stay paired to cards by `sourceItemIDs`.
-        guard items.contains(where: { $0.kind == .season }) else { open(items); return }
+        // its Ways to Watch and its own background. An episode tile there
+        // whose season nobody has started opens the season's first episode
+        // (`SeasonStarts`). Each tile keeps its caption; the tiles stay paired
+        // to cards by `sourceItemIDs`.
+        let startsSeasons = section.kind == .recentlyAdded && items.contains { $0.kind == .episode }
+        guard items.contains(where: { $0.kind == .season }) || startsSeasons else { open(items); return }
         guard !isOpeningSeasonShows else { return }
         isOpeningSeasonShows = true
         Task { [weak self] in
-            let shows = await SeasonShows.shows(for: items)
+            var mapped = await SeasonShows.shows(for: items)
+            if startsSeasons { mapped = await SeasonStarts.firstEpisodes(for: mapped) }
             self?.isOpeningSeasonShows = false
-            open(shows)
+            open(mapped)
         }
     }
 

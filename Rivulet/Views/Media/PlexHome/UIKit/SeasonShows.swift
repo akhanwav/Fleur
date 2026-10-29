@@ -42,3 +42,44 @@ enum SeasonShows {
         return show
     }
 }
+
+/// Where an episode tile in Recently Added opens. A season added one episode
+/// at a time lists its newest episode; when nothing in that season has been
+/// watched or started, the tile opens the season's first episode instead, so
+/// Play starts the season from the top.
+@MainActor
+enum SeasonStarts {
+    /// `items` with each such episode replaced by its season's first.
+    static func firstEpisodes(for items: [MediaItem]) async -> [MediaItem] {
+        await withTaskGroup(of: (Int, MediaItem?).self) { group in
+            for (index, item) in items.enumerated() where item.kind == .episode && isUntouched(item) {
+                group.addTask { (index, await start(for: item)) }
+            }
+            var out = items
+            for await (index, first) in group {
+                if let first { out[index] = first }
+            }
+            return out
+        }
+    }
+
+    private static func start(for episode: MediaItem) async -> MediaItem? {
+        guard let season = episode.parentRef,
+              let provider = MediaProviderRegistry.shared.provider(for: season.providerID),
+              let episodes = try? await provider.children(of: season) else { return nil }
+        return seasonStart(in: episodes, for: episode)
+    }
+
+    /// The season's first episode when no episode in it is watched or
+    /// started; nil to keep `episode` (also when it is already the first).
+    nonisolated static func seasonStart(in episodes: [MediaItem], for episode: MediaItem) -> MediaItem? {
+        guard isUntouched(episode), episodes.allSatisfy(isUntouched) else { return nil }
+        let first = episodes.filter { $0.episodeNumber != nil }
+            .min { ($0.episodeNumber ?? 0) < ($1.episodeNumber ?? 0) }
+        return first?.ref == episode.ref ? nil : first
+    }
+
+    nonisolated private static func isUntouched(_ episode: MediaItem) -> Bool {
+        !episode.userState.isPlayed && episode.userState.viewOffset <= 0
+    }
+}

@@ -629,7 +629,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             if let copy = self.activeCopy(for: item),
                let merged = await Self.merged(with: copy, original: content.episodes, originalSeasons: content.seasons) {
                 content.seasons = merged.seasons
-                content.selectedSeason = merged.seasons.first
+                // An episode page opens on the copy's episode's season.
+                content.selectedSeason = merged.seasons.first {
+                    item.kind == .episode && $0.seasonNumber == copy.show.seasonNumber
+                } ?? merged.seasons.first
                 content.episodes = merged.episodes
                 missing = merged.missing
             }
@@ -637,7 +640,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.unavailableEpisodeIDs = missing
             self.ingest(content)
             self.applySnapshot()
-            self.scrollToInitialEpisode(item: item)
+            self.scrollToInitialEpisode(item: self.activeCopy(for: item)?.show ?? item)
             // Cross-server check: its own task, patching the Servers cell in
             // place when it answers, so neither the render above nor the
             // advisory below waits on it. An owned title is found by the Plex
@@ -717,22 +720,37 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     /// Another server's or library's copy of the show a page switched to.
     struct EpisodeCopy: Equatable {
-        /// The page's own show, which this copy stands in for.
+        /// The page's own item (a show, or an episode opened from Continue
+        /// Watching), which this copy stands in for.
         let original: MediaItemRef
-        /// The copy's show, on its own server (`plex:<machineId>`).
+        /// The copy's item on its own server (`plex:<machineId>`): the show,
+        /// or the episode.
         let show: MediaItem
         let machineId: String
         let serverName: String
         let serverURL: String
         let token: String
+
+        /// The copy's show, whose episodes the rail lists.
+        var showRef: MediaItemRef? { BelowFoldCollectionView.showRef(of: show) }
     }
 
-    /// List `copy`'s episodes (nil: the page's own). A show page only, and
-    /// only for the show it stands in for; reloads the rail when that show is up.
+    /// A show's own ref, or an episode's show.
+    static func showRef(of item: MediaItem) -> MediaItemRef? {
+        switch item.kind {
+        case .show: item.ref
+        case .episode: item.grandparentRef
+        default: nil
+        }
+    }
+
+    /// List `copy`'s episodes (nil: the page's own). A show or episode page
+    /// only, and only for the item it stands in for; reloads the rail when
+    /// that item is up.
     func setEpisodeCopy(_ copy: EpisodeCopy?) {
         guard copy != episodeCopy else { return }
         episodeCopy = copy
-        guard let item = configuredItem, item.kind == .show else { return }
+        guard let item = configuredItem, Self.showRef(of: item) != nil else { return }
         reloadEpisodes(for: item)
     }
 
@@ -740,7 +758,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     var currentEpisodeCopy: EpisodeCopy? { configuredItem.flatMap(activeCopy(for:)) }
 
     private func activeCopy(for item: MediaItem) -> EpisodeCopy? {
-        guard item.kind == .show, let copy = episodeCopy, copy.original == item.ref else { return nil }
+        guard Self.showRef(of: item) != nil, let copy = episodeCopy, copy.original == item.ref,
+              copy.showRef != nil else { return nil }
         return copy
     }
 
@@ -758,23 +777,24 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     /// when the copy's server did not answer, which keeps the original list.
     private static func merged(with copy: EpisodeCopy, original: [MediaItem],
                                originalSeasons: [MediaItem]) async -> CopyEpisodes.Merged? {
-        guard let provider = provider(for: copy) else { return nil }
-        async let seasons = try? provider.children(of: copy.show.ref)
-        async let episodes = try? provider.allEpisodes(of: copy.show.ref)
+        guard let provider = provider(for: copy), let showRef = copy.showRef else { return nil }
+        async let seasons = try? provider.children(of: showRef)
+        async let episodes = try? provider.allEpisodes(of: showRef)
         guard let copyEpisodes = await episodes else {
             copyRailLog.error("[Copies] rail: \(copy.serverName, privacy: .public) did not answer; listing the page's own copy")
             return nil
         }
         let merged = CopyEpisodes.merge(copy: copyEpisodes, copySeasons: await seasons ?? [],
                                         original: original, originalSeasons: originalSeasons)
-        copyRailLog.info("[Copies] rail: \(copy.show.title, privacy: .public) from \(copy.serverName, privacy: .public) (\(copy.show.ref.itemID, privacy: .public)): \(copyEpisodes.count, privacy: .public) episodes, \(merged.missing.count, privacy: .public) not there")
+        copyRailLog.info("[Copies] rail: \(copy.show.seriesTitle ?? copy.show.title, privacy: .public) from \(copy.serverName, privacy: .public) (\(copy.show.ref.itemID, privacy: .public)): \(copyEpisodes.count, privacy: .public) episodes, \(merged.missing.count, privacy: .public) not there")
         return merged
     }
 
     /// The rail (and, once expanded, the season pills) again for the current
     /// copy, leaving the rest of the below-fold as it is.
     private func reloadEpisodes(for item: MediaItem) {
-        guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID) else { return }
+        guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
+              let showRef = Self.showRef(of: item) else { return }
         copyToken &+= 1
         let token = copyToken
         let load = loadToken
@@ -782,8 +802,8 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         let copy = activeCopy(for: item)
         Task { [weak self] in
             guard let self else { return }
-            var episodes = (try? await provider.allEpisodes(of: item.ref)) ?? []
-            var seasons = full ? (try? await provider.children(of: item.ref)) ?? [] : []
+            var episodes = (try? await provider.allEpisodes(of: showRef)) ?? []
+            var seasons = full ? (try? await provider.children(of: showRef)) ?? [] : []
             var missing: Set<String> = []
             if let copy, let merged = await Self.merged(with: copy, original: episodes, originalSeasons: seasons) {
                 episodes = merged.episodes
@@ -796,7 +816,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.episodesByID = Dictionary(episodes.map { ($0.ref.itemID, $0) }, uniquingKeysWith: { a, _ in a })
             self.cachedEpisodes = self.buildRailItems(from: episodes)
             self.applySnapshot()
-            if full { self.onSeasonsLoaded?(seasons, 0) }
+            // An episode page lands on its episode: the copy's, or its own.
+            let landing = copy?.show ?? item
+            if full {
+                let season = item.kind == .episode
+                    ? seasons.firstIndex { $0.seasonNumber == landing.seasonNumber } ?? 0 : 0
+                self.onSeasonsLoaded?(seasons, season)
+            }
+            if item.kind == .episode { self.scrollToInitialEpisode(item: landing) }
         }
     }
 
@@ -843,7 +870,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.unavailableEpisodeIDs = missing
             self.ingestEpisodesOnly(listed)
             self.applySnapshot()
-            self.scrollToInitialEpisode(item: item)
+            self.scrollToInitialEpisode(item: self.activeCopy(for: item)?.show ?? item)
             self.isLoadingEpisodes = false
             // Realize the cells now, so the fade starts over a built rail.
             self.collectionView.layoutIfNeeded()
@@ -888,9 +915,9 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         Task { [weak self] in
             guard let self else { return }
             let eps: [MediaItem]
-            if let copy, let copyProvider = Self.provider(for: copy) {
+            if let copy, let copyProvider = Self.provider(for: copy), let copyShow = copy.showRef {
                 // The selected copy's states; its missing episodes have none to refresh.
-                eps = (try? await copyProvider.allEpisodes(of: copy.show.ref)) ?? []
+                eps = (try? await copyProvider.allEpisodes(of: copyShow)) ?? []
             } else if let showRef {
                 eps = (try? await provider.allEpisodes(of: showRef)) ?? []
             } else if item.kind == .season {
