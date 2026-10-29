@@ -272,6 +272,12 @@ struct TVSidebarView: View {
             deepLinkHandler.pendingDetail = nil
             presentDetailForDeepLink(metadata)
         }
+        // A title from the player's end card
+        .onChange(of: deepLinkHandler.pendingDetailItem) { _, item in
+            guard let item else { return }
+            deepLinkHandler.pendingDetailItem = nil
+            presentReplacingStack { top in presentDetail(item, from: top) }
+        }
         // What's New: present the SAME UIKit glass changelog popup as
         // Settings → Changelog (not a separate SwiftUI dialog) for consistency.
         .onChange(of: showWhatsNew) { _, show in

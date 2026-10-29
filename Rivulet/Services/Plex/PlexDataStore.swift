@@ -30,6 +30,13 @@ class PlexDataStore: ObservableObject {
     private var otherServersContinueWatching: [(server: OtherServersAvailabilityChecker.ServerAccess,
                                                 metas: [PlexMetadata])] = []
     private var otherServersContinueWatchingTask: Task<Void, Never>?
+    /// One episode per show across servers (`CrossServerNextUp`), applied to
+    /// the row in `continueWatchingRow`.
+    private lazy var crossServerHistory: CrossServerHistory = {
+        let history = CrossServerHistory()
+        history.onChange = { [weak self] in self?.projectHomeItems() }
+        return history
+    }()
     /// True once a Continue Watching fetch has completed (without throwing)
     /// for the current account/profile this session. Gates the launch-ordering
     /// carry-over in `projectHomeItems()`: before the first fresh fetch, a nil
@@ -477,6 +484,9 @@ class PlexDataStore: ObservableObject {
             continueWatchingPollingTimer = Timer.scheduledTimer(withTimeInterval: continueWatchingPollingInterval, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     await self?.pollContinueWatching()
+                    // A pass also runs on a timer of its own: a new episode on
+                    // another server changes no row, so no projection asks.
+                    self?.refreshCrossServerHistory()
                 }
             }
         }
@@ -628,6 +638,8 @@ class PlexDataStore: ObservableObject {
         hubs = []
         continueWatchingHub = nil
         otherServersContinueWatching = []
+        crossServerHistory.reset()
+        crossServerSources = []
         hasFetchedContinueWatching = false
         libraries = []
         hasLoadedLibraries = false
@@ -1945,8 +1957,9 @@ class PlexDataStore: ObservableObject {
         for other in otherServersContinueWatching {
             sources.append(("plex:\(other.server.machineId)", other.server.serverURL, other.server.token, other.metas))
         }
-        let picks = Self.mergeContinueWatching(sources.map(\.metas))
-        let metas = Self.sharingResumePoints(picks.map { sources[$0.list].metas[$0.index] })
+        let lists = applyingCrossServerHistory(to: sources)
+        let picks = Self.mergeContinueWatching(lists)
+        let metas = Self.sharingResumePoints(picks.map { lists[$0.list][$0.index] })
         let items = zip(picks, metas).map { pick, meta in
             let source = sources[pick.list]
             return PlexMediaMapper.item(meta, providerID: source.providerID,
@@ -1954,6 +1967,66 @@ class PlexDataStore: ObservableObject {
         }
         return CachedHomeHub(id: "hub:\(cw.id)", title: cw.title ?? "", isContinueWatching: true,
                              hubKey: nil, hubIdentifier: cw.hubIdentifier, totalSize: nil, items: items)
+    }
+
+    /// Each server's list with a show watched on several servers replaced by
+    /// the one episode `CrossServerHistory` picked for it, on the server it
+    /// picked. Also starts the next history pass when the row changed. The
+    /// account's own profile only, as for the other servers' lists.
+    private func applyingCrossServerHistory(
+        to sources: [(providerID: String, serverURL: String, token: String, metas: [PlexMetadata])]
+    ) -> [[PlexMetadata]] {
+        guard authManager.accountContentToken != nil else { return sources.map(\.metas) }
+        let others = Dictionary(otherServersContinueWatching.map { ("plex:\($0.server.machineId)", $0.server) },
+                                uniquingKeysWith: { first, _ in first })
+        crossServerSources = sources.map { source in
+            let access = others[source.providerID] ?? OtherServersAvailabilityChecker.ServerAccess(
+                machineId: ServerPreferences.mainMachineId ?? "main", name: "", serverURL: source.serverURL,
+                token: source.token, isMain: true)
+            return CrossServerHistory.Source(access: access, providerID: source.providerID, metas: source.metas)
+        }
+        refreshCrossServerHistory()
+        return Self.applying(crossServerHistory.outcomes, to: sources.map { ($0.providerID, $0.metas) })
+    }
+
+    /// The row's servers as the last projection saw them, for the timed pass.
+    private var crossServerSources: [CrossServerHistory.Source] = []
+
+    private func refreshCrossServerHistory() {
+        guard authManager.accountContentToken != nil else { return }
+        crossServerHistory.refresh(sources: crossServerSources)
+    }
+
+    /// `lists` (provider id and entries per server) with every decided show's
+    /// entries replaced by its cards. A show caught up everywhere loses its
+    /// entries; one whose cards land on no listed server keeps them.
+    nonisolated static func applying(_ outcomes: [String: CrossServerNextUp.Outcome],
+                                     to lists: [(providerID: String, metas: [PlexMetadata])]) -> [[PlexMetadata]] {
+        var replaced: Set<String> = []
+        var cardsToAdd: [(list: Int, meta: PlexMetadata)] = []
+        for (guid, outcome) in outcomes {
+            switch outcome {
+            case .noHistory:
+                continue
+            case .caughtUp:
+                replaced.insert(guid)
+            case .cards(let cards):
+                let placed = cards.compactMap { card in
+                    lists.firstIndex { $0.providerID == card.providerID }.map { (list: $0, meta: card.meta) }
+                }
+                guard !placed.isEmpty else { continue }
+                replaced.insert(guid)
+                cardsToAdd += placed
+            }
+        }
+        var result = lists.map { list in
+            list.metas.filter { meta in
+                guard meta.type == "episode", let guid = meta.grandparentGuid else { return true }
+                return !replaced.contains(guid)
+            }
+        }
+        for card in cardsToAdd { result[card.list].append(card.meta) }
+        return result
     }
 
     /// One pick per title AND quality across `lists` (the signed-in server's
@@ -2431,6 +2504,8 @@ class PlexDataStore: ObservableObject {
         hubs = []
         continueWatchingHub = nil
         otherServersContinueWatching = []
+        crossServerHistory.reset()
+        crossServerSources = []
         hasFetchedContinueWatching = false
         libraries = []
         hasLoadedLibraries = false

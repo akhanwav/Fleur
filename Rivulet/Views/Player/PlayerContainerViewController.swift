@@ -54,6 +54,8 @@ class PlayerContainerViewController: UIViewController {
     /// every other chrome layer while `postVideoState != .hidden`; removed
     /// (not just hidden) when it goes away so its buttons cannot hold focus.
     private var postVideoOverlay: PostVideoOverlayView?
+    /// The end card (`EndCardOverlayView`), up while `postVideoState == .showingEndCard`.
+    private var endCardOverlay: EndCardOverlayView?
     /// Darkens the video behind the Up Next card, as `chromeScrim` does behind the rail.
     private var postVideoScrim: SideScrimView?
     /// Snapshot of the last `$insightsCast` emission, read when the rail's
@@ -342,6 +344,9 @@ class PlayerContainerViewController: UIViewController {
         // page rendered with no button focused.
         if let overlay = postVideoOverlay, overlay.superview != nil {
             return [overlay]
+        }
+        if let endCard = endCardOverlay, endCard.superview != nil {
+            return [endCard]
         }
         if let descriptionOverlay { return [descriptionOverlay] }
         if let panel = activeRailPanel, panel.window != nil {
@@ -1185,10 +1190,16 @@ class PlayerContainerViewController: UIViewController {
         // to the fade, which ends in super.dismiss and bypasses them.
         guard !isFadingOut else { return }
         let showPage = viewModel?.showPageAfterExit
+        let detail = viewModel?.detailAfterExit
         fadeOutThenDismiss(animated: true) { [weak self] in
             self?.onDismiss?()
-            // An episode that ended with Up Next declined returns to its show.
-            if let showPage { DeepLinkHandler.shared.handleDetail(ratingKey: showPage) }
+            // A title picked on the end card, or Back to Show.
+            if let detail {
+                DeepLinkHandler.shared.openDetail(detail)
+            } else if let showPage {
+                // An episode that ended with Up Next declined returns to its show.
+                DeepLinkHandler.shared.handleDetail(ratingKey: showPage)
+            }
         }
     }
 
@@ -2168,7 +2179,8 @@ class PlayerContainerViewController: UIViewController {
     /// nothing until the engine is asked to re-resolve, which is why the
     /// SwiftUI version rendered with nothing focused.
     private func applyPostVideoState(_ state: PostVideoState) {
-        if state != .hidden {
+        applyEndCard(state == .showingEndCard)
+        if state == .loading || state == .showingEpisodeSummary {
             let overlay = postVideoOverlay ?? makePostVideoOverlay()
             if overlay.superview == nil {
                 let scrim = SideScrimView()
@@ -2182,13 +2194,17 @@ class PlayerContainerViewController: UIViewController {
                     scrim.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.6),
                 ])
                 postVideoScrim = scrim
-                UIView.animate(withDuration: 0.5) { scrim.alpha = 1 }
                 view.addSubview(overlay)
                 overlay.translatesAutoresizingMaskIntoConstraints = false
                 NSLayoutConstraint.activate([
                     overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -PlayerRailView.sideInset),
                     overlay.centerYAnchor.constraint(equalTo: view.centerYAnchor),
                 ])
+            }
+            // Darkens only once an episode is up next: a show with nothing
+            // after it moves on to the end card from loading.
+            if state == .showingEpisodeSummary, let scrim = postVideoScrim, scrim.alpha == 0 {
+                UIView.animate(withDuration: 0.5) { scrim.alpha = 1 }
             }
             refreshPostVideoContent()
         } else if let overlay = postVideoOverlay {
@@ -2205,6 +2221,38 @@ class PlayerContainerViewController: UIViewController {
         }
         setNeedsFocusUpdate()
         updateFocusIfNeeded()
+    }
+
+    /// Mounts or removes the end card. Up Next's card goes first: an episode
+    /// with nothing after it reaches the end card through Up Next's loading.
+    private func applyEndCard(_ show: Bool) {
+        if show {
+            guard endCardOverlay == nil, let vm = viewModel, let content = vm.endCard else { return }
+            let overlay = EndCardOverlayView()
+            overlay.configure(content)
+            overlay.onSelect = { [weak self] item in self?.viewModel?.openAfterExit(item) }
+            overlay.onBackToShow = { [weak self] in
+                guard let vm = self?.viewModel, let show = vm.endCard?.show else { return }
+                vm.openAfterExit(show)
+            }
+            overlay.onUserFocusMove = { [weak self] in self?.viewModel?.holdEndCard() }
+            view.addSubview(overlay)
+            overlay.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                overlay.topAnchor.constraint(equalTo: view.topAnchor),
+                overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                overlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            ])
+            endCardOverlay = overlay
+            overlay.fadeIn()
+        } else if let overlay = endCardOverlay {
+            endCardOverlay = nil
+            overlay.fadeOut { [weak self] in
+                self?.setNeedsFocusUpdate()
+                self?.updateFocusIfNeeded()
+            }
+        }
     }
 
     private func makePostVideoOverlay() -> PostVideoOverlayView {
@@ -2233,7 +2281,10 @@ class PlayerContainerViewController: UIViewController {
 
     private func refreshPostVideoContent() {
         guard let vm = viewModel, let overlay = postVideoOverlay, overlay.superview != nil else { return }
-        overlay.setLoading(vm.postVideoState == .loading)
+        // Only an episode up next slides the card in. The sink reads the state
+        // after it moved on, which slid an empty "End of Series" card in for a
+        // moment when nothing followed.
+        overlay.setLoading(vm.postVideoState != .showingEpisodeSummary)
         overlay.configure(
             nextEpisode: vm.nextEpisode,
             serverURL: vm.serverURL,

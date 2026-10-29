@@ -34,6 +34,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
     /// The card's server ("Alpha"), beside the quality while the row mixes servers.
     private let serverTag = QualityTagView()
     private let tags = UIStackView()
+    /// "New Episode", top-leading: an episode that arrived after the show was
+    /// last watched, for its first week (`NewEpisodeTag`).
+    private let newEpisodeTag = QualityTagView()
     /// The title (an episode: its show) and the time left under the card. The
     /// card carries no title of its own, so this shows whatever Settings → Show
     /// Titles Under Posters says.
@@ -116,6 +119,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
         tags.translatesAutoresizingMaskIntoConstraints = false
         card.contentView.addSubview(tags)
 
+        newEpisodeTag.text = "New Episode"
+        newEpisodeTag.isHidden = true
+        newEpisodeTag.translatesAutoresizingMaskIntoConstraints = false
+        card.contentView.addSubview(newEpisodeTag)
+
         let pad = ContinueWatchingCardCompositor.padding
         NSLayoutConstraint.activate([
             placeholderView.topAnchor.constraint(equalTo: card.contentView.topAnchor),
@@ -139,7 +147,10 @@ final class ContinueWatchingCell: UICollectionViewCell {
             infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad),
 
             tags.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad),
-            tags.centerYAnchor.constraint(equalTo: infoBar.centerYAnchor)
+            tags.centerYAnchor.constraint(equalTo: infoBar.centerYAnchor),
+
+            newEpisodeTag.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad),
+            newEpisodeTag.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: pad)
         ])
     }
 
@@ -154,6 +165,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
             self.infoBar.setFocused(nowFocused)
             self.qualityTag.setFocused(nowFocused)
             self.serverTag.setFocused(nowFocused)
+            self.newEpisodeTag.setFocused(nowFocused)
         }, completion: nil)
     }
 
@@ -199,6 +211,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
     func configure(item: MediaItem, knownQuality: String?? = nil, serverName: String? = nil) {
         serverTag.text = serverName
         serverTag.isHidden = serverName == nil
+        newEpisodeTag.isHidden = !NewEpisodeTag.applies(to: item)
         // Backdrop > thumbnail in landscape orientation.
         let url = item.grandparentArtwork?.backdrop
             ?? item.artwork.backdrop
@@ -239,6 +252,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         qualityTask = nil
         qualityTag.isHidden = true
         serverTag.isHidden = true
+        newEpisodeTag.isHidden = true
         infoBar.reset()
         caption.configure(title: nil, detail: nil)
     }
@@ -439,6 +453,21 @@ enum TitleQuality {
         inFlight[ref] = nil
         labels[ref] = .some(label)
         return label
+    }
+}
+
+/// Continue Watching's "New Episode" mark: an episode not started, added in
+/// the last week and after the show was last watched. Plex lists the next
+/// episode of a show watched within its window ("Weeks to consider for
+/// Continue Watching"), so a caught-up show's new episode comes in on its own;
+/// this only says why it is there.
+enum NewEpisodeTag {
+    static let window: TimeInterval = 7 * 86_400
+
+    static func applies(to item: MediaItem, now: Date = Date()) -> Bool {
+        guard item.kind == .episode, item.userState.viewOffset == 0,
+              let added = item.addedAt, let watched = item.userState.lastViewedAt else { return false }
+        return added > watched && now.timeIntervalSince(added) < window
     }
 }
 

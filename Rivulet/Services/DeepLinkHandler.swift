@@ -17,6 +17,8 @@ final class DeepLinkHandler: ObservableObject {
 
     @Published var pendingPlayback: PlexMetadata?
     @Published var pendingDetail: PlexMetadata?
+    /// A title to open whole, from any server or TMDB (the player's end card).
+    @Published var pendingDetailItem: MediaItem?
 
     /// The link waiting for the app to be ready. A newer link replaces it.
     private(set) var heldLink: RivuletLink?
@@ -54,6 +56,12 @@ final class DeepLinkHandler: ObservableObject {
 
     func handleDetail(ratingKey: String) {
         handle(RivuletLink(.detail, ratingKey: ratingKey))
+    }
+
+    /// Opens a title the app already holds. Never held: it comes from inside
+    /// the running app, so the shell is ready.
+    func openDetail(_ item: MediaItem) {
+        pendingDetailItem = item
     }
 
     @discardableResult

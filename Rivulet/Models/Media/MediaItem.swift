@@ -53,6 +53,8 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
     let versionCount: Int?
     /// Plex edition name ("Director's Cut"); each edition is its own item.
     let editionTitle: String?
+    /// When the server added it; nil when the list didn't say.
+    let addedAt: Date?
 
     init(
         ref: MediaItemRef,
@@ -76,7 +78,8 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         parentArtwork: MediaArtwork?,
         grandparentArtwork: MediaArtwork?,
         versionCount: Int? = nil,
-        editionTitle: String? = nil
+        editionTitle: String? = nil,
+        addedAt: Date? = nil
     ) {
         self.ref = ref
         self.kind = kind
@@ -100,6 +103,7 @@ struct MediaItem: Identifiable, Hashable, Sendable, Codable {
         self.grandparentArtwork = grandparentArtwork
         self.versionCount = versionCount
         self.editionTitle = editionTitle
+        self.addedAt = addedAt
     }
 }
 
@@ -163,7 +167,8 @@ extension MediaItem {
             parentArtwork: parentArtwork,
             grandparentArtwork: grandparentArtwork,
             versionCount: versionCount,
-            editionTitle: editionTitle
+            editionTitle: editionTitle,
+            addedAt: addedAt
         )
     }
 }

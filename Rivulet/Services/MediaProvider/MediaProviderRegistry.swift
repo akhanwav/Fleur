@@ -40,6 +40,12 @@ final class MediaProviderRegistry {
         currentPlexID.flatMap { providers[$0] }
     }
 
+    /// The Plex provider for a server address, the signed-in server's first.
+    func plexProvider(serverURL: String) -> PlexProvider? {
+        if let main = plexProvider as? PlexProvider, main.serverURL == serverURL { return main }
+        return providers.values.compactMap { $0 as? PlexProvider }.first { $0.serverURL == serverURL }
+    }
+
     func register(_ provider: any MediaProvider) {
         providers[provider.id] = provider
         if provider.kind == .plex { currentPlexID = provider.id }

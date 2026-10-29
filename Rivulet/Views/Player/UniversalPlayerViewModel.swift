@@ -25,6 +25,17 @@ enum PostVideoState: Equatable {
     case hidden
     case loading
     case showingEpisodeSummary
+    /// A show's latest episode or a movie ended: `UniversalPlayerViewModel.endCard`.
+    case showingEndCard
+}
+
+/// The end card: "You're all caught up on a show" (or a movie's end), with
+/// related titles to open and, for a show, the way back to it.
+struct EndCardContent {
+    let title: String
+    let related: [MediaItem]
+    /// Back to Show; nil for a movie, or when the show could not be read.
+    let show: MediaItem?
 }
 
 /// Seek indicator shown briefly when user taps left/right to skip
@@ -228,6 +239,18 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// Set when this episode ended with Up Next declined; the player opens
     /// the show's page once it has closed.
     private(set) var showPageAfterExit: String?
+    /// What the end card offers while `postVideoState == .showingEndCard`.
+    @Published private(set) var endCard: EndCardContent?
+    /// A title the end card chose; the player opens its page once it has closed.
+    private(set) var detailAfterExit: MediaItem?
+    /// Closes the end card after `endCardSeconds` unless the person moves on it.
+    private var endCardTimer: Task<Void, Never>?
+    /// The end card was shown and closed for this item: not offered again at its end.
+    private var endCardClosed = false
+    /// The stream reached its end under Up Next or the end card: closing the
+    /// card has nothing left to return to, so it closes the player.
+    private var playbackFinishedUnderCard = false
+    static let endCardSeconds = 15
 
     /// What `countdownSeconds` started at. The one resolved copy of the
     /// autoplay setting — read it, don't re-derive it from UserDefaults.
@@ -5609,6 +5632,9 @@ final class UniversalPlayerViewModel: ObservableObject {
                 showPageAfterExit = metadata.grandparentRatingKey
             }
             shouldDismiss = true
+        } else {
+            // Up Next or the end card is up: closing it closes the player.
+            playbackFinishedUnderCard = true
         }
     }
 
@@ -5629,19 +5655,20 @@ final class UniversalPlayerViewModel: ObservableObject {
         await markCurrentAsWatched()
         guard generation == itemGeneration else { return }
 
-        // Up Next was closed on this episode: no second offer at the end.
-        guard !upNextDeclined else { return }
+        // Up Next or the end card was closed on this item: no second offer at the end.
+        guard !upNextDeclined, !endCardClosed else { return }
 
-        postVideoState = .loading
+        // Per-user opt-out of the post-video panels: Up Next for episodes,
+        // the end card for both. When off, credits play uninterrupted.
+        guard showPostVideoUpNext else { return }
 
-        // Per-user opt-out of the post-video "Up Next" chooser for TV
-        // episodes. When disabled, episodes follow the same path movies
-        // already take: credits play uninterrupted at full size.
-        // Movies: No PostVideo - just let the video play through to the end
-        guard isEpisode && showPostVideoUpNext else {
-            postVideoState = .hidden
+        // A movie has no Up Next: its end card, with related titles.
+        guard isEpisode else {
+            await presentEndCard(generation: generation)
             return
         }
+
+        postVideoState = .loading
 
         // TV Show: Only show PostVideo if there's a next episode
 
@@ -5655,9 +5682,9 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard generation == itemGeneration else { return }
         nextEpisode = resolvedNext
 
-        // No next episode: Skip PostVideo - just let the video play through
+        // No next episode: the latest one available has been watched.
         guard nextEpisode != nil else {
-            postVideoState = .hidden
+            await presentEndCard(generation: generation)
             return
         }
 
@@ -5674,6 +5701,92 @@ final class UniversalPlayerViewModel: ObservableObject {
                 await preloadNextEpisode()
             }
         }
+    }
+
+    // MARK: - End card
+
+    /// Shows the end card, or closes the panel when there is nothing to put on it.
+    private func presentEndCard(generation: Int) async {
+        let content = await loadEndCard()
+        guard generation == itemGeneration else { return }
+        guard let content else {
+            postVideoState = .hidden
+            if playbackFinishedUnderCard { shouldDismiss = true }
+            return
+        }
+        endCard = content
+        postVideoState = .showingEndCard
+        endCardTimer?.cancel()
+        endCardTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.endCardSeconds))
+            guard !Task.isCancelled else { return }
+            self?.closeEndCard()
+        }
+    }
+
+    /// The related titles: the server's own for the show or movie, else
+    /// TMDB's recommendations. A show's card stands without them; a movie's
+    /// has nothing else to show.
+    private func loadEndCard() async -> EndCardContent? {
+        let isEpisode = metadata.type == "episode"
+        guard let (provider, ref) = endCardTarget(isEpisode: isEpisode) else { return nil }
+        let kind: MediaKind = isEpisode ? .show : .movie
+        async let related = try? provider.related(for: ref, kind: kind)
+        let detail = try? await provider.fullDetail(for: ref)
+        var items = await related.map { $0.items.isEmpty ? $0.collection?.members ?? [] : $0.items } ?? []
+        if items.isEmpty, let tmdbId = detail?.externalIDs["tmdb"].flatMap(Int.init) {
+            let tmdbRef = MediaItemRef(providerID: TMDBMediaMapper.providerID,
+                                       itemID: TMDBMediaMapper.encodeItemID(tmdbId: tmdbId, type: isEpisode ? .tv : .movie))
+            items = (try? await TMDBMetadataSource().recommendations(for: tmdbRef)) ?? []
+        }
+        items = Array(items.prefix(Self.endCardRelatedLimit))
+        guard isEpisode else {
+            return items.isEmpty ? nil : EndCardContent(title: "More Like This", related: items, show: nil)
+        }
+        let showTitle = metadata.grandparentTitle ?? detail?.item.title ?? ""
+        return EndCardContent(title: showTitle.isEmpty ? "You're All Caught Up" : "You're all caught up on \(showTitle)",
+                              related: items, show: detail?.item)
+    }
+
+    static let endCardRelatedLimit = 12
+
+    /// The provider and ref the end card reads: the show for an episode, the
+    /// movie itself otherwise, on the server that is playing it.
+    private func endCardTarget(isEpisode: Bool) -> (any MediaProvider, MediaItemRef)? {
+        switch source {
+        case .provider(let playback):
+            guard let ref = isEpisode ? playback.item.grandparentRef : playback.item.ref else { return nil }
+            return (playback.provider, ref)
+        case .plex:
+            guard let provider = MediaProviderRegistry.shared.plexProvider(serverURL: serverURL),
+                  let key = isEpisode ? metadata.grandparentRatingKey : metadata.ratingKey else { return nil }
+            return (provider, MediaItemRef(providerID: provider.id, itemID: key))
+        }
+    }
+
+    /// Back, Dismiss or the timer: the card goes, the credits keep playing,
+    /// and the player closes if the stream has already ended.
+    func closeEndCard() {
+        endCardTimer?.cancel()
+        endCardTimer = nil
+        endCardClosed = true
+        endCard = nil
+        postVideoState = .hidden
+        if playbackFinishedUnderCard { shouldDismiss = true }
+    }
+
+    /// A move on the card: the person is choosing, so it stays until they leave it.
+    func holdEndCard() {
+        endCardTimer?.cancel()
+        endCardTimer = nil
+    }
+
+    /// A title or Back to Show on the end card: the player closes, then its page opens.
+    func openAfterExit(_ item: MediaItem) {
+        endCardTimer?.cancel()
+        endCardTimer = nil
+        detailAfterExit = item
+        shouldDismiss = true
     }
 
     /// Fetch full metadata if parent keys or Media info are missing (e.g., from Continue Watching)
@@ -6562,6 +6675,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // replaced and time values reflect the new episode's actual position.
         hasTriggeredPostVideo = false
         upNextDeclined = false
+        endCardClosed = false
+        playbackFinishedUnderCard = false
         // We started this item, so arm the end funnel here rather than waiting
         // for a `.playing` to arrive. Every stale event from the outgoing
         // episode (the replayed terminal state, its own EOF) has already been
@@ -6578,6 +6693,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// The user closed Up Next (Back or Dismiss): playback continues, nothing
     /// autoplays, and the episode plays to its end.
     func declineUpNext() {
+        if postVideoState == .showingEndCard {
+            closeEndCard()
+            return
+        }
         upNextDeclined = true
         dismissPostVideo()
     }

@@ -935,13 +935,22 @@ item's `ref.providerID` names the server it came from.
   `name(for:)`, `machineId(for:)`). `access(for:)` returns nil for a
   non-main provider that is not registered yet. It never falls back to the main
   server: same ratingKey, different title.
-- **Continue Watching is merged across servers** (admin profile only,
-  `PlexDataStore.refreshOtherServersContinueWatching`). `mergeContinueWatching`
+- **Continue Watching is merged across servers** (the account's own profile
+  only, `PlexDataStore.refreshOtherServersContinueWatching`). `mergeContinueWatching`
   keys on title + quality: a 4K and a 1080p copy are two adjacent cards; the
   same quality on two servers merges into the more recently watched copy.
   `sharingResumePoints` gives every copy of one `plex://` guid the newest
   `viewOffset`. Cached rows drop other-server cards until their provider
   registers, which is why their quality tags are never missing.
+- **A show watched on several servers gets one episode** (`CrossServerHistory`
+  gathers, `CrossServerNextUp` decides, `PlexDataStore.applying` replaces the
+  servers' own entries). Resume the most recent activity if it is a partial
+  watch; otherwise the first episode after the furthest watched on any server,
+  none if there is none. One card per quality, on the most recently watched
+  server holding it. It reads each server's seasons, then only the furthest
+  season with progress and the next (a long show's `allLeaves` is ~1 MB),
+  cached until the show's counts or last-watched time change; a pass runs when
+  the row's entries change, else every 15 minutes. Watch states are never written.
 - **Progress goes to the server that played.** `PlexProgressReporter` takes
   `server:`. On stop or watched, `UniversalPlayerViewModel.syncSiblingCopies`
   writes the same position to the other copies **on the same server** only;
@@ -967,6 +976,7 @@ item's `ref.providerID` names the server it came from.
 | Music Now Playing | `Views/Music/UIKit/MusicNowPlayingViewController.swift` |
 | Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
 | Music menus | `Views/Music/UIKit/MusicMenus.swift` |
+| End card (caught up / movie end) | `Views/Player/UIKit/EndCardOverlayView.swift` |
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
 | Content filter sources | `Services/Plex/Playback/ContentFilter/ContentFilterSources.swift` |
