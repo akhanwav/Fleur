@@ -12,7 +12,8 @@
 //  there), same non-focusable cell forwarding focus to its buttons — but
 //  simpler: all three buttons are always visible, no Titles/Collections-style
 //  conditional swap. The person page's filmography reuses it with a fourth,
-//  an On My Servers toggle (`configure(toggle:)`).
+//  an On My Servers toggle (`configure(toggle:)`), and a row's View All grid
+//  with a Quality button and without Type or Genre where they cannot apply.
 //
 
 import UIKit
@@ -55,6 +56,14 @@ final class WatchlistFilterHeaderControl: UICollectionViewCell {
         return b
     }()
 
+    /// Hidden unless `configure` names a quality.
+    private let qualityButton: SortButton = {
+        let b = SortButton()
+        b.translatesAutoresizingMaskIntoConstraints = false
+        b.isHidden = true
+        return b
+    }()
+
     /// Optional trailing toggle; hidden unless `configure` names one.
     private let toggleButton: SortButton = {
         let b = SortButton()
@@ -87,6 +96,11 @@ final class WatchlistFilterHeaderControl: UICollectionViewCell {
         set { genreButton.onSortTapped = newValue }
     }
 
+    var onQualityTapped: (() -> Void)? {
+        get { qualityButton.onSortTapped }
+        set { qualityButton.onSortTapped = newValue }
+    }
+
     var onToggleTapped: (() -> Void)? {
         get { toggleButton.onSortTapped }
         set { toggleButton.onSortTapped = newValue }
@@ -112,7 +126,7 @@ final class WatchlistFilterHeaderControl: UICollectionViewCell {
         // Right-anchored row: Sort, Type, Genre, then the toggle when shown.
         // A hidden arranged view takes no space, so the Watchlist's three
         // still end on the trailing edge.
-        [sortButton, typeButton, genreButton, toggleButton].forEach(buttonsStack.addArrangedSubview)
+        [sortButton, typeButton, genreButton, qualityButton, toggleButton].forEach(buttonsStack.addArrangedSubview)
 
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -132,21 +146,29 @@ final class WatchlistFilterHeaderControl: UICollectionViewCell {
             typeButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             genreButton.heightAnchor.constraint(equalToConstant: 44),
             genreButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
+            qualityButton.heightAnchor.constraint(equalToConstant: 44),
+            qualityButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 140),
             toggleButton.heightAnchor.constraint(equalToConstant: 44),
             toggleButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
         ])
     }
 
     /// `toggle` adds the trailing On/Off button (its title, and whether it
-    /// is on); nil leaves the three Watchlist buttons alone.
-    func configure(title: String, count: Int, sortName: String, typeName: String, genreName: String,
+    /// is on); nil leaves the three Watchlist buttons alone. A nil type or
+    /// genre hides that button; a quality shows the Quality button.
+    func configure(title: String, count: Int, sortName: String, typeName: String?, genreName: String?,
+                   qualityName: String? = nil,
                    countNoun: (one: String, many: String) = ("item", "items"),
                    toggle: (title: String, isOn: Bool)? = nil) {
         titleLabel.text = title
         countLabel.text = count == 1 ? "1 \(countNoun.one)" : "\(count) \(countNoun.many)"
         sortButton.configure(sortName: sortName, symbol: "arrow.up.arrow.down")
-        typeButton.configure(sortName: typeName, symbol: "line.3.horizontal.decrease.circle")
-        genreButton.configure(sortName: genreName, symbol: "theatermasks")
+        typeButton.isHidden = typeName == nil
+        typeButton.configure(sortName: typeName ?? "", symbol: "line.3.horizontal.decrease.circle")
+        genreButton.isHidden = genreName == nil
+        genreButton.configure(sortName: genreName ?? "", symbol: "theatermasks")
+        qualityButton.isHidden = qualityName == nil
+        qualityButton.configure(sortName: qualityName ?? "", symbol: "sparkles.tv")
         toggleButton.isHidden = toggle == nil
         if let toggle {
             toggleButton.configure(sortName: toggle.title,
@@ -159,6 +181,6 @@ final class WatchlistFilterHeaderControl: UICollectionViewCell {
     override var canBecomeFocused: Bool { false }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        [sortButton, typeButton, genreButton, toggleButton].filter { !$0.isHidden }
+        [sortButton, typeButton, genreButton, qualityButton, toggleButton].filter { !$0.isHidden }
     }
 }

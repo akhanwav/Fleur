@@ -52,6 +52,8 @@ nonisolated struct HomeSectionID: Hashable, Sendable {
     static let watchlist = HomeSectionID(raw: "watchlist")
     /// Watchlist-mode-only: the filter/sort header above the watchlist grid.
     static let watchlistHeader = HomeSectionID(raw: "watchlistHeader")
+    /// View All page only: the filter/sort header above its grid.
+    static let rowGridHeader = HomeSectionID(raw: "rowGridHeader")
     static let recommendations = HomeSectionID(raw: "recommendations")
     /// Library-mode-only sections: the sort header (title + count + sort
     /// button) and the paginated poster grid below the hub rows.
@@ -96,6 +98,15 @@ enum HomeMode {
     /// Collection page: one Plex collection's members as a poster grid under
     /// the collection's title. `ref.itemID` is the collection ratingKey.
     case collection(MediaItem)
+    /// A capped row's View All page: everything in the row's source as a
+    /// poster grid, with Sort / Type / Genre / Quality (`RowGridQuery`).
+    case rowGrid(RowGridPage)
+}
+
+/// What a View All page lists: the row's title and source.
+struct RowGridPage {
+    let title: String
+    let query: RowGridQuery
 }
 
 nonisolated struct HomeItemID: Hashable, Sendable {
@@ -147,6 +158,8 @@ enum HomeSectionKind: Equatable {
     /// Watchlist mode only — full-width header (title + filtered item count
     /// + focusable Sort / Type / Genre buttons, `WatchlistFilterHeaderControl`).
     case watchlistHeader
+    /// View All page only — the same header, with Quality, over the grid.
+    case rowGridHeader
     /// Search mode only — one grouped result grid (Movies & TV, Episodes &
     /// Seasons, Music) with a row-style header. Same 6-across poster grid
     /// as the library, no pagination (search caps at 80 results).
@@ -182,6 +195,8 @@ struct HomeSectionData {
     let hubIdentifier: String?
     /// The header's server badge ("Plex", "Jellyfin"); nil with one server.
     var sourceBadge: String? = nil
+    /// A capped row (`RowCap`): a View All tile follows its items.
+    var viewAll = false
 
     /// True when this section holds music (artist/album/track). Sections are
     /// content-uniform (a whole row / library is music or not), so the first
@@ -243,6 +258,22 @@ struct HomeSectionData {
             title: "Watchlist",
             headerStyle: .swiftUIInfiniteRow,
             totalSize: count,
+            items: [],
+            watchlistItems: [],
+            heroItems: [],
+            hubKey: nil,
+            hubIdentifier: nil
+        )
+    }
+
+    /// View All page: the title and the Sort / Type / Genre / Quality buttons.
+    static func rowGridHeader(title: String) -> HomeSectionData {
+        HomeSectionData(
+            id: .rowGridHeader,
+            kind: .rowGridHeader,
+            title: title,
+            headerStyle: .swiftUIInfiniteRow,
+            totalSize: nil,
             items: [],
             watchlistItems: [],
             heroItems: [],
@@ -495,7 +526,7 @@ final class PlexHomeViewController: UIViewController {
             self.watchlistGenreFilters = []
         }
         super.init(nibName: nil, bundle: nil)
-        if case .collection = mode {
+        if isGridPage {
             // A drill-in like the person page and the standalone detail: the
             // shell has no navigation controller, so it blur-fades in over
             // whatever presented it.
@@ -661,6 +692,17 @@ final class PlexHomeViewController: UIViewController {
     /// `init` for library mode; never read in home mode.
     private var gridSort: LibrarySortOption
 
+    // MARK: View All page state
+    //
+    // Session only: a View All page opens on the row's own order, unfiltered.
+
+    private var rowGridChoices = RowGridQuery.Choices()
+    /// What Genre offers, for the type the grid lists under `rowGridChoices`.
+    private var rowGridGenres: [RowGridQuery.Genre] = []
+    /// The first page has landed. From then on a sort or filter reloads the
+    /// grid under the header rather than covering the page.
+    private var rowGridHasLoaded = false
+
     // MARK: Watchlist-mode filter/sort state
     //
     // The whole watchlist is already in memory (`PlexWatchlistService`
@@ -701,6 +743,8 @@ final class PlexHomeViewController: UIViewController {
     private var gridGeneration = 0
     /// Page size matching the SwiftUI PlexLibraryView (`pageSize = 60`).
     private let gridPageSize = 60
+    /// A curated row sorted in the app reads at most this many titles.
+    private static let rowGridInAppSortLimit = 1000
     /// Collection page only: page 0's outcome. An empty `gridItems` reads the
     /// same while the request is in flight, after it failed and after an
     /// empty answer, so updateHomeState reads this instead. Set by
@@ -753,6 +797,7 @@ final class PlexHomeViewController: UIViewController {
     private static let sortHeaderItemID = HomeItemID(sectionID: .sortHeader, itemID: "sort-header")
     /// The single item id of the watchlist filter/sort header section.
     private static let watchlistHeaderItemID = HomeItemID(sectionID: .watchlistHeader, itemID: "watchlist-header")
+    private static let rowGridHeaderItemID = HomeItemID(sectionID: .rowGridHeader, itemID: "row-grid-header")
 
     private static func gridSlotID(_ index: Int) -> HomeItemID {
         HomeItemID(sectionID: .grid, itemID: "grid-\(index)")
@@ -781,6 +826,8 @@ final class PlexHomeViewController: UIViewController {
             return "Nothing in your Watchlist yet."
         case .collection:
             return "This collection is empty."
+        case .rowGrid:
+            return "Nothing here yet."
         case .library where providerLibrary != nil:
             return "This library is empty."
         case .home where isJellyfinOnlyHome:
@@ -802,8 +849,8 @@ final class PlexHomeViewController: UIViewController {
             return false  // Search has no hero — keyboard + results only
         case .watchlist:
             return false  // Watchlist is the grid alone
-        case .collection:
-            return false  // A collection page is its title and grid
+        case .collection, .rowGrid:
+            return false  // A collection or View All page is its title and grid
         }
     }
     /// `enablePersonalizedRecommendations` AppStorage gate.
@@ -871,7 +918,7 @@ final class PlexHomeViewController: UIViewController {
         view.backgroundColor = .clear
         // Collection page: presented over the library through
         // BlurFadeAnimator, which assumes an opaque page.
-        if case .collection = mode { view.backgroundColor = .black }
+        if isGridPage { view.backgroundColor = .black }
 
         Perf.event(.homeFirstRender, message: "viewDidLoad start")
 
@@ -1003,6 +1050,14 @@ final class PlexHomeViewController: UIViewController {
             collectionView.showsVerticalScrollIndicator = false
             collectionView.indexDisplayMode = .alwaysHidden
             loadGridPage(containing: 0)
+        case .rowGrid:
+            // View All: the collection page's grid under a filter header.
+            collectionFocusAnchor.frame = .zero
+            view.addSubview(collectionFocusAnchor)
+            collectionView.showsVerticalScrollIndicator = false
+            collectionView.indexDisplayMode = .alwaysHidden
+            loadGridPage(containing: 0)
+            loadRowGridGenres()
         }
     }
 
@@ -1818,6 +1873,35 @@ final class PlexHomeViewController: UIViewController {
                     )
                     return (result.items.map(map), result.totalSize)
                 }
+            } else if case .rowGrid(let page) = mode {
+                // The row's own key, or its filtered listing (`RowGridQuery`).
+                let choices = rowGridChoices
+                let key = page.query.key(for: choices)
+                let identifier = page.query.rowIdentifier
+                if !page.query.canFilter, choices.sort != .row {
+                    // A curated row sorts in the app: its whole list is page 0.
+                    let sort = choices.sort
+                    fetchPage = { start in
+                        guard start == 0 else { return ([], nil) }
+                        var all: [PlexMetadata] = []
+                        while all.count < Self.rowGridInAppSortLimit {
+                            let result = try await network.getHubItems(
+                                serverURL: serverURL, authToken: token, hubKey: key,
+                                hubIdentifier: identifier, start: all.count, count: 200)
+                            all += result.items
+                            if result.items.isEmpty || all.count >= (result.totalSize ?? 0) { break }
+                        }
+                        let sorted = RowGridQuery.sortedInApp(all.map(map), by: sort)
+                        return (sorted, sorted.count)
+                    }
+                } else {
+                    fetchPage = { start in
+                        let result = try await network.getHubItems(
+                            serverURL: serverURL, authToken: token, hubKey: key,
+                            hubIdentifier: identifier, start: start, count: pageSize)
+                        return (result.items.map(map), result.totalSize)
+                    }
+                }
             } else {
                 return
             }
@@ -1833,7 +1917,10 @@ final class PlexHomeViewController: UIViewController {
             do {
                 let result = try await fetchPage(start)
                 guard gen == self.gridGeneration else { return }
-                if page == 0 { self.pageZero = .loaded }
+                if page == 0 {
+                    self.pageZero = .loaded
+                    self.rowGridHasLoaded = true
+                }
                 let total = result.totalSize ?? max(self.gridItems.count, start + result.items.count)
                 let countChanged = total != self.gridItems.count
                 if countChanged {
@@ -2030,8 +2117,14 @@ final class PlexHomeViewController: UIViewController {
     /// which throws when the section is absent.
     private func refreshSortHeaderCount() {
         var snap = dataSource.snapshot()
-        guard snap.sectionIdentifiers.contains(.sortHeader) else { return }
-        snap.reconfigureItems([Self.sortHeaderItemID])
+        // The library's header, or a View All page's.
+        if snap.sectionIdentifiers.contains(.sortHeader) {
+            snap.reconfigureItems([Self.sortHeaderItemID])
+        } else if snap.sectionIdentifiers.contains(.rowGridHeader) {
+            snap.reconfigureItems([Self.rowGridHeaderItemID])
+        } else {
+            return
+        }
         dataSource.apply(snap, animatingDifferences: false)
     }
 
@@ -2208,7 +2301,7 @@ final class PlexHomeViewController: UIViewController {
         // Collection page: own Menu from the start of the blur-fade (see
         // handleMenuBack). The library that presented it already installed
         // the interceptor; viewDidAppear registering again is harmless.
-        if case .collection = mode { MenuPressInterceptor.register(self) }
+        if isGridPage { MenuPressInterceptor.register(self) }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -2751,7 +2844,7 @@ final class PlexHomeViewController: UIViewController {
             // failed) and Refresh (empty) both ask for page 0 again. A
             // settled empty page 0 is still marked requested, so forget it
             // first.
-            let isCollection = if case .collection = self.mode { true } else { false }
+            let isCollection = self.isGridPage
             if isCollection || self.providerLibrary != nil {
                 self.pageZero = .loading
                 self.updateHomeState()
@@ -2907,6 +3000,14 @@ final class PlexHomeViewController: UIViewController {
             isLoadingHubs = state.loading
             hubsError = state.error
             hubsEmpty = gridItems.isEmpty
+        case .rowGrid:
+            // Only the first load covers the page. After a sort or filter the
+            // header stays up over the reloading grid, and a filter that
+            // matches nothing reads "0 items" there, not an empty page.
+            let state = pageZeroState
+            isLoadingHubs = state.loading && !rowGridHasLoaded
+            hubsError = rowGridHasLoaded ? nil : state.error
+            hubsEmpty = false
         }
 
         // Precedence: notConnected → loading → error → empty → content.
@@ -2955,7 +3056,7 @@ final class PlexHomeViewController: UIViewController {
             // above have their own `setNeedsFocusUpdate()`; only the content
             // path was silent, which is why Discover (the one surface that sits
             // in `.loading` long enough to matter) came up dead.
-            if wasUnfocusable, case .collection = mode {
+            if wasUnfocusable, isGridPage {
                 // Collection page: a modal, so the shell's re-drive does
                 // nothing for it (its handler no-ops once the library tab has
                 // held focus). Page 0's snapshot was applied while the
@@ -2963,7 +3064,8 @@ final class PlexHomeViewController: UIViewController {
                 // lay out, then ask for the first tile explicitly. Focus sits
                 // on this page's own anchor, so the request is honoured.
                 collectionView.layoutIfNeeded()
-                if let cell = collectionView.cellForItem(at: IndexPath(item: 0, section: 0)),
+                // View All lands on its first poster, below the header.
+                if let cell = collectionView.cellForItem(at: IndexPath(item: 0, section: gridSectionIndex ?? 0)),
                    let system = UIFocusSystem.focusSystem(for: collectionView) {
                     system.requestFocusUpdate(to: cell)
                     system.updateFocusIfNeeded()
@@ -2981,7 +3083,7 @@ final class PlexHomeViewController: UIViewController {
         // flight, so it never competes with the grid or the state view's
         // button. Entering loading again (the retry) re-resolves focus, which
         // moves it off the Try Again button that just vanished.
-        if case .collection = mode {
+        if isGridPage {
             collectionFocusAnchor.isHidden = !showsLoading
             if showsLoading { setNeedsFocusUpdate() }
         }
@@ -3170,7 +3272,7 @@ final class PlexHomeViewController: UIViewController {
             return makeHubSectionLayout(section: section, isContinueWatching: false)
         case .recommendationsLoading, .recommendationsError:
             return makeRecommendationsStateLayout()
-        case .sortHeader, .watchlistHeader:
+        case .sortHeader, .watchlistHeader, .rowGridHeader:
             return makeSortHeaderSectionLayout()
         case .grid, .watchlistGrid:
             return makeGridSectionLayout(section: section)
@@ -3391,7 +3493,7 @@ final class PlexHomeViewController: UIViewController {
         let section = sectionsSnapshot[index]
         let loadedCount: Int
         switch section.kind {
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader,
              .searchPrompt, .searchState:
             loadedCount = 0
         case .continueWatching, .recentlyAdded, .recommendations, .grid, .discoverList,
@@ -3577,6 +3679,11 @@ final class PlexHomeViewController: UIViewController {
             cell.onGenreTapped = { [weak self] in self?.presentWatchlistGenrePicker() }
             return cell
 
+        case .rowGridHeader:
+            let cell = collectionView.dequeueReusableCell(withReuseIdentifier: WatchlistFilterHeaderControl.reuseID, for: indexPath) as! WatchlistFilterHeaderControl
+            configureRowGridHeader(cell, title: section.title ?? "")
+            return cell
+
         case .recommendationsLoading:
             let cell = collectionView.dequeueReusableCell(withReuseIdentifier: RecommendationsStateCell.reuseID, for: indexPath) as! RecommendationsStateCell
             cell.configure(state: .loading)
@@ -3686,7 +3793,7 @@ final class PlexHomeViewController: UIViewController {
                         self.reloadLoadedGridPages()
                         self.loadAlphabetIndex()
                         await self.refreshThisLibraryHubs()
-                    case .collection:
+                    case .collection, .rowGrid:
                         // Playback and detail-page watch changes: re-request
                         // the loaded pages so badges and progress repaint.
                         self.reloadLoadedGridPages()
@@ -3732,7 +3839,7 @@ final class PlexHomeViewController: UIViewController {
                     self?.refreshWatchlistEnrichment()
                 }
                 .store(in: &dataStoreObservers)
-        case .discover, .search, .collection:
+        case .discover, .search, .collection, .rowGrid:
             break
         }
 
@@ -3824,6 +3931,175 @@ final class PlexHomeViewController: UIViewController {
                 self?.watchlistToast.show(message: message)
             }
             .store(in: &dataStoreObservers)
+    }
+
+    // MARK: - View All page (`.rowGrid`)
+
+    /// A grid page presented over its surface: a collection or a View All
+    /// page. Both are modals the blur-fade brings in and Menu closes.
+    private var isGridPage: Bool {
+        switch mode {
+        case .collection, .rowGrid: return true
+        case .home, .library, .discover, .search, .watchlist: return false
+        }
+    }
+
+    private var rowGridPage: RowGridPage? {
+        if case .rowGrid(let page) = mode { page } else { nil }
+    }
+
+    private func configureRowGridHeader(_ cell: WatchlistFilterHeaderControl, title: String) {
+        guard let query = rowGridPage?.query else { return }
+        let choices = rowGridChoices
+        cell.configure(
+            title: title,
+            count: totalGridCount,
+            sortName: rowGridSortName(choices.sort, query: query),
+            typeName: query.typeOptions.isEmpty ? nil : (choices.type?.displayName ?? "All Types"),
+            genreName: query.canFilter ? rowGridGenreButtonLabel : nil,
+            qualityName: query.canFilter ? (choices.quality?.displayName ?? "All Qualities") : nil
+        )
+        cell.onSortTapped = { [weak self] in self?.presentRowGridSortPicker() }
+        cell.onTypeTapped = { [weak self] in self?.presentRowGridTypePicker() }
+        cell.onGenreTapped = { [weak self] in self?.presentRowGridGenrePicker() }
+        cell.onQualityTapped = { [weak self] in self?.presentRowGridQualityPicker() }
+    }
+
+    private func rowGridSortName(_ sort: RowGridQuery.Sort, query: RowGridQuery) -> String {
+        switch sort {
+        case .row: return query.rowSortName
+        case .title: return "Title"
+        case .year: return "Release Year"
+        }
+    }
+
+    /// Worded as the Watchlist's Genre button.
+    private var rowGridGenreButtonLabel: String {
+        let names = rowGridChoices.genres.map(\.title).sorted()
+        switch names.count {
+        case 0: return "All Genres"
+        case 1: return names[0]
+        default:
+            let joined = names.joined(separator: " + ")
+            return joined.count <= 24 ? joined : "\(names.count) Genres"
+        }
+    }
+
+    private func presentRowGridPicker<Option: Equatable>(title: String, options: [(Option, String)],
+                                                         selected: Option,
+                                                         apply: @escaping (Option) -> Void) {
+        let sheet = UIAlertController(title: title, message: nil, preferredStyle: .actionSheet)
+        for (option, name) in options {
+            sheet.addAction(UIAlertAction(title: option == selected ? "\u{2713} \(name)" : name, style: .default) { _ in
+                apply(option)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    private func presentRowGridSortPicker() {
+        guard let query = rowGridPage?.query else { return }
+        let sorts: [RowGridQuery.Sort] = [.row, .title, .year]
+        presentRowGridPicker(title: "Sort By", options: sorts.map { ($0, rowGridSortName($0, query: query)) },
+                             selected: rowGridChoices.sort) { [weak self] sort in
+            guard let self else { return }
+            var choices = self.rowGridChoices
+            choices.sort = sort
+            self.applyRowGridChoices(choices)
+        }
+    }
+
+    private func presentRowGridTypePicker() {
+        guard let query = rowGridPage?.query, !query.typeOptions.isEmpty else { return }
+        let options: [(RowGridQuery.ItemType?, String)] = [(nil, "All Types")] + query.typeOptions.map { ($0, $0.displayName) }
+        presentRowGridPicker(title: "Show", options: options, selected: rowGridChoices.type) { [weak self] type in
+            guard let self else { return }
+            var choices = self.rowGridChoices
+            choices.type = type
+            self.applyRowGridChoices(choices)
+        }
+    }
+
+    private func presentRowGridQualityPicker() {
+        let options: [(RowGridQuery.Quality?, String)] = [(nil, "All Qualities")]
+            + RowGridQuery.Quality.allCases.map { ($0, $0.displayName) }
+        presentRowGridPicker(title: "Quality", options: options, selected: rowGridChoices.quality) { [weak self] quality in
+            guard let self else { return }
+            var choices = self.rowGridChoices
+            choices.quality = quality
+            self.applyRowGridChoices(choices)
+        }
+    }
+
+    /// The Watchlist's multi-select popup, without its live count: Plex does
+    /// the filtering, so the count arrives with the grid's first page.
+    private func presentRowGridGenrePicker() {
+        guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.kind == .rowGridHeader }),
+              let cell = collectionView.cellForItem(at: IndexPath(item: 0, section: sectionIndex)) as? WatchlistFilterHeaderControl
+        else { return }
+        let genres = rowGridGenres
+        let popup = WatchlistGenreFilterPopupViewController(
+            genres: genres.map(\.title),
+            selected: Set(rowGridChoices.genres.map(\.title)),
+            sourceFrame: cell.genreButtonView.convert(cell.genreButtonView.bounds, to: nil),
+            countProvider: nil,
+            onApply: { [weak self] titles in
+                guard let self else { return }
+                var choices = self.rowGridChoices
+                choices.genres = Set(genres.filter { titles.contains($0.title) })
+                self.applyRowGridChoices(choices)
+            }
+        )
+        present(popup, animated: false)
+    }
+
+    /// A new sort or filter: the grid starts again from page 0 under the
+    /// header, which keeps focus.
+    private func applyRowGridChoices(_ choices: RowGridQuery.Choices) {
+        guard let query = rowGridPage?.query, choices != rowGridChoices else { return }
+        var choices = choices
+        let genreTypeChanged = query.genreType(for: choices) != query.genreType(for: rowGridChoices)
+        if genreTypeChanged { choices.genres = [] }
+        rowGridChoices = choices
+        if genreTypeChanged { loadRowGridGenres() }
+        resetGrid()
+        pageZero = .loading
+        applySnapshot(animated: false)
+        refreshSortHeaderCount()
+        loadGridPage(containing: 0)
+    }
+
+    /// The genres Genre offers: the row's library's, or every library of
+    /// its type for a row across libraries. Ids are the server's tags,
+    /// shared between its libraries.
+    private func loadRowGridGenres() {
+        rowGridGenres = []
+        guard let query = rowGridPage?.query, let listing = query.listing,
+              let type = query.genreType(for: rowGridChoices),
+              let serverURL = authManager.selectedServerURL,
+              let token = authManager.selectedServerToken else { return }
+        let libraryType = type == .movie ? "movie" : "show"
+        let sections = listing.sectionID.map { [$0] }
+            ?? dataStore.visibleMediaLibraries.filter { $0.type == libraryType }.map(\.key)
+        Task { @MainActor [weak self] in
+            var byTitle: [String: RowGridQuery.Genre] = [:]
+            await withTaskGroup(of: [(id: String, title: String)].self) { group in
+                for section in sections {
+                    group.addTask {
+                        (try? await PlexNetworkManager.shared.getGenres(
+                            serverURL: serverURL, authToken: token, sectionId: section, type: type.rawValue)) ?? []
+                    }
+                }
+                for await list in group {
+                    for genre in list where byTitle[genre.title] == nil {
+                        byTitle[genre.title] = RowGridQuery.Genre(id: genre.id, title: genre.title)
+                    }
+                }
+            }
+            guard let self, query.genreType(for: self.rowGridChoices) == type else { return }
+            self.rowGridGenres = byTitle.values.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
     }
 
     // MARK: - Watchlist filter/sort
@@ -4285,6 +4561,8 @@ final class PlexHomeViewController: UIViewController {
                 ids = [Self.sortHeaderItemID]
             case .watchlistHeader:
                 ids = [Self.watchlistHeaderItemID]
+            case .rowGridHeader:
+                ids = [Self.rowGridHeaderItemID]
             case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid:
                 // Shelf rows are ONE diffable item — the ShelfRowCell hosts
                 // the tiles in its own horizontal collection view (and shows
@@ -4378,7 +4656,7 @@ final class PlexHomeViewController: UIViewController {
         switch kind {
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList, .searchGrid: return true
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .watchlistHeader, .searchPrompt, .searchState: return false
+             .sortHeader, .watchlistHeader, .rowGridHeader, .searchPrompt, .searchState: return false
         }
     }
 
@@ -4386,8 +4664,15 @@ final class PlexHomeViewController: UIViewController {
         sectionsSnapshot.first(where: { $0.id == id })
     }
 
+    /// The row's tiles, counting a trailing View All tile.
     private func shelfRealCount(_ section: HomeSectionData) -> Int {
-        section.kind == .watchlist ? section.watchlistItems.count : section.items.count
+        (section.kind == .watchlist ? section.watchlistItems.count : section.items.count)
+            + (section.viewAll ? 1 : 0)
+    }
+
+    /// The View All tile's index in a capped row.
+    private static func isViewAllTile(_ index: Int, in section: HomeSectionData) -> Bool {
+        section.viewAll && index == section.items.count
     }
 
     /// Content identity for a shelf row — reload only when this changes.
@@ -4401,6 +4686,7 @@ final class PlexHomeViewController: UIViewController {
         } else if section.kind == .searchGrid, section.id != .searchTrending {
             hasher.combine(lastSubmittedQuery)
         }
+        hasher.combine(section.viewAll)
         if section.kind == .watchlist {
             for item in section.watchlistItems { hasher.combine(item.id) }
         } else {
@@ -4511,6 +4797,9 @@ final class PlexHomeViewController: UIViewController {
         // snapshot we were bound to; hand back nil for a blank poster rather
         // than trapping on the subscript.
         guard indexPath.item < shelfRealCount(section) else { return nil }
+        if Self.isViewAllTile(indexPath.item, in: section) {
+            return innerCV.dequeueReusableCell(withReuseIdentifier: ViewAllTileCell.reuseID, for: indexPath)
+        }
 
         switch section.kind {
         case .continueWatching:
@@ -4549,7 +4838,7 @@ final class PlexHomeViewController: UIViewController {
             }
             return cell
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
+             .sortHeader, .watchlistHeader, .rowGridHeader, .searchPrompt, .searchState:
             return nil
         }
     }
@@ -4558,6 +4847,10 @@ final class PlexHomeViewController: UIViewController {
         guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id == sectionID }) else { return }
         let section = sectionsSnapshot[sectionIndex]
         guard itemIndex < shelfRealCount(section) else { return }
+        if Self.isViewAllTile(itemIndex, in: section) {
+            openViewAll(for: section)
+            return
+        }
         switch section.kind {
         case .continueWatching:
             // Instant Resume on: a CW tile resumes straight away. Off: it
@@ -4594,7 +4887,7 @@ final class PlexHomeViewController: UIViewController {
         case .searchGrid:
             handleSearchTap(section: section, indexPath: IndexPath(item: itemIndex, section: sectionIndex))
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
+             .sortHeader, .watchlistHeader, .rowGridHeader, .searchPrompt, .searchState:
             return
         }
     }
@@ -4607,11 +4900,14 @@ final class PlexHomeViewController: UIViewController {
         case .continueWatching, .recentlyAdded:
             break
         case .hero, .watchlist, .watchlistGrid, .recommendations, .grid, .discoverList,
-             .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
+             .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader,
              .searchPrompt, .searchState, .searchGrid:
             return  // No pagination for these (matches SwiftUI hubKey == nil)
         }
         guard itemIndex >= section.items.count - 5 else { return }
+        // A capped row pages only until it holds its tiles.
+        if section.kind == .recentlyAdded,
+           (paginationStates[section.id]?.loadedItems.count ?? 0) >= RowCap.limit { return }
         Task { @MainActor in
             await self.loadMoreIfNeeded(sectionID: section.id, hubKey: section.hubKey, hubIdentifier: section.hubIdentifier)
         }
@@ -4621,7 +4917,7 @@ final class PlexHomeViewController: UIViewController {
     /// Same per-section routing the context-menu delegate used before the
     /// system path died on tvOS 26 (see TileMenuPopupViewController).
     private func presentShelfTileMenu(sectionID: HomeSectionID, itemIndex: Int) {
-        guard let section = shelfSection(id: sectionID) else { return }
+        guard let section = shelfSection(id: sectionID), !Self.isViewAllTile(itemIndex, in: section) else { return }
         switch section.kind {
         case .continueWatching, .recentlyAdded, .recommendations:
             guard itemIndex < section.items.count else { return }
@@ -4647,7 +4943,7 @@ final class PlexHomeViewController: UIViewController {
         case .watchlist:
             presentWatchlistTileMenu(sectionID: sectionID, itemIndex: itemIndex)
         case .hero, .grid, .watchlistGrid, .recommendationsLoading, .recommendationsError,
-             .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
+             .sortHeader, .watchlistHeader, .rowGridHeader, .searchPrompt, .searchState:
             return  // hero / state cells don't get menus
         }
     }
@@ -4799,7 +5095,7 @@ final class PlexHomeViewController: UIViewController {
             }
             return playableItem(section.items[itemIndex])
         case .watchlist, .watchlistGrid, .hero, .grid, .recommendationsLoading,
-             .recommendationsError, .sortHeader, .watchlistHeader, .searchPrompt, .searchState:
+             .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader, .searchPrompt, .searchState:
             return nil
         }
     }
@@ -5006,6 +5302,11 @@ final class PlexHomeViewController: UIViewController {
         if case .collection(let item) = mode {
             return gridItems.isEmpty ? [] : [.grid(items: mapGridSlots(gridItems), title: item.title)]
         }
+        // View All: the header stays while the grid reloads under it.
+        if case .rowGrid(let page) = mode {
+            let header = HomeSectionData.rowGridHeader(title: page.title)
+            return gridItems.isEmpty ? [header] : [header, .grid(items: mapGridSlots(gridItems))]
+        }
         if case .search = mode {
             return computeSearchSections()
         }
@@ -5047,15 +5348,18 @@ final class PlexHomeViewController: UIViewController {
             if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
                 items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
             }
+            let total = merged.totalSize ?? hub.totalSize
+            let cap = Self.rowCap(items, total: total, hubKey: hub.hubKey, isContinueWatching: hub.isContinueWatching)
             var section = HomeSectionData.hub(
                 id: id,
                 title: hub.title,
-                items: items,
+                items: cap.items,
                 isContinueWatching: hub.isContinueWatching,
                 hubKey: hub.hubKey,
                 hubIdentifier: hub.hubIdentifier,
-                totalSize: merged.totalSize ?? hub.totalSize
+                totalSize: total
             )
+            section.viewAll = cap.viewAll
             section.sourceBadge = labelsServers
                 ? Self.serverName(providerID: hub.items.first?.ref.providerID, kind: kind) : nil
             sections.append(section)
@@ -5218,15 +5522,19 @@ final class PlexHomeViewController: UIViewController {
             if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
                 items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
             }
-            sections.append(.hub(
+            let total = merged.totalSize ?? hub.totalSize
+            let cap = Self.rowCap(items, total: total, hubKey: hub.hubKey, isContinueWatching: hub.isContinueWatching)
+            var section = HomeSectionData.hub(
                 id: id,
                 title: hub.title,
-                items: items,
+                items: cap.items,
                 isContinueWatching: hub.isContinueWatching,
                 hubKey: hub.hubKey,
                 hubIdentifier: hub.hubIdentifier,
-                totalSize: merged.totalSize ?? hub.totalSize
-            ))
+                totalSize: total
+            )
+            section.viewAll = cap.viewAll
+            sections.append(section)
         }
 
         // Collections: placed after the gates, so it follows whatever CW and
@@ -5258,15 +5566,19 @@ final class PlexHomeViewController: UIViewController {
             for row in rows {
                 let id = HomeSectionID(raw: "libraryPin:\(row.pin.ratingKey)")
                 let merged = mergedItems(forSection: id, initial: mapToMediaItems(row.items))
-                sections.insert(.hub(
+                let cap = Self.rowCap(merged.items, total: merged.totalSize, hubKey: row.pin.childrenKey,
+                                      isContinueWatching: false)
+                var section = HomeSectionData.hub(
                     id: id,
                     title: row.pin.title,
-                    items: merged.items,
+                    items: cap.items,
                     isContinueWatching: false,
                     hubKey: row.pin.childrenKey,
                     hubIdentifier: nil,
                     totalSize: merged.totalSize
-                ), at: at)
+                )
+                section.viewAll = cap.viewAll
+                sections.insert(section, at: at)
                 at += 1
             }
         }
@@ -5319,6 +5631,15 @@ final class PlexHomeViewController: UIViewController {
             return true
         }
         return (hub.title ?? "").lowercased().contains("continue")
+    }
+
+    /// A row that pages from the server (a hub key, not Continue Watching)
+    /// stops at `RowCap.limit` tiles and ends in View All. Jellyfin rows have
+    /// no hub key: they arrive whole and never page.
+    private static func rowCap(_ items: [MediaItem], total: Int?, hubKey: String?,
+                               isContinueWatching: Bool) -> (items: [MediaItem], viewAll: Bool) {
+        guard !isContinueWatching, hubKey?.isEmpty == false else { return (items, false) }
+        return RowCap.capped(items, total: total)
     }
 
     /// For a section with pagination state, return the merged item list
@@ -5422,7 +5743,7 @@ final class PlexHomeViewController: UIViewController {
         let cacheKey: String
         let sourceHubs: [PlexHub]
         switch mode {
-        case .discover, .search, .watchlist, .collection:
+        case .discover, .search, .watchlist, .collection, .rowGrid:
             return  // no Plex-hub hero on these surfaces
         case .home:
             guard authManager.hasCredentials else { return }  // Jellyfin-only: MediaItem hero
@@ -5457,7 +5778,7 @@ final class PlexHomeViewController: UIViewController {
         switch mode {
         case .home: isTMDBEligible = true
         case .library: isTMDBEligible = trendingHeroType() != nil
-        case .discover, .search, .watchlist, .collection: isTMDBEligible = false
+        case .discover, .search, .watchlist, .collection, .rowGrid: isTMDBEligible = false
         }
 
         if heroItems.isEmpty {
@@ -5530,7 +5851,7 @@ final class PlexHomeViewController: UIViewController {
                 items,
                 toLibraryKeys: dataStore.librariesPinnedToHome.map { $0.key }
             )
-        case .library, .discover, .search, .watchlist, .collection:
+        case .library, .discover, .search, .watchlist, .collection, .rowGrid:
             return items
         }
     }
@@ -5632,7 +5953,7 @@ final class PlexHomeViewController: UIViewController {
             guard let t = trendingHeroType() else { lastUpgradedIndexGeneration = -1; return }
             cacheKey = key
             heroType = t
-        case .discover, .search, .watchlist, .collection:
+        case .discover, .search, .watchlist, .collection, .rowGrid:
             return
         }
 
@@ -5732,7 +6053,7 @@ final class PlexHomeViewController: UIViewController {
         switch mode {
         case .home: sourceHubs = dataStore.hubs
         case .library(let key, _): sourceHubs = dataStore.libraryHubs[key] ?? []
-        case .discover, .search, .watchlist, .collection: return
+        case .discover, .search, .watchlist, .collection, .rowGrid: return
         }
         let fallback = computeHubBackedHero(from: sourceHubs)
         if !fallback.isEmpty {
@@ -5906,7 +6227,7 @@ final class PlexHomeViewController: UIViewController {
         switch section.kind {
         case .hero, .recommendationsLoading, .recommendationsError:
             return  // hero overlay + state cells handle their own input
-        case .sortHeader, .watchlistHeader:
+        case .sortHeader, .watchlistHeader, .rowGridHeader:
             return  // the embedded SortButton(s) handle their own Select press
         case .searchPrompt, .searchState:
             return  // recents pills / Try Again are FocusableActionButtons
@@ -6044,6 +6365,25 @@ final class PlexHomeViewController: UIViewController {
     /// from, so the loop page → member → trailing collection tile finds the
     /// page below it and unwinds to it instead of stacking a second one.
     @discardableResult
+    /// A capped row's View All tile: everything in the row's source as a
+    /// grid, presented as a collection page is. Menu closes it, and focus
+    /// returns to the tile.
+    private func openViewAll(for section: HomeSectionData) {
+        guard let key = section.hubKey, !key.isEmpty else { return }
+        let libraries = dataStore.libraries
+        let query = RowGridQuery(rowKey: key, rowIdentifier: section.hubIdentifier) { sectionID in
+            switch libraries.first(where: { $0.key == sectionID })?.type {
+            case "movie": return .movie
+            case "show": return .show
+            default: return nil
+            }
+        }
+        var top: UIViewController = self
+        while let presented = top.presentedViewController { top = presented }
+        top.present(PlexHomeViewController(mode: .rowGrid(RowGridPage(title: section.title ?? "", query: query))),
+                    animated: true)
+    }
+
     static func openCollectionIfNeeded(_ item: MediaItem,
                                        from presenter: UIViewController,
                                        onDismiss: (() -> Void)? = nil) -> Bool {
@@ -6610,7 +6950,7 @@ final class PlexHomeViewController: UIViewController {
         guard let sectionIndex = sectionsSnapshot.firstIndex(where: { $0.id.raw == target.rowID }) else { return nil }
         let section = sectionsSnapshot[sectionIndex]
         switch section.kind {
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader,
              .searchPrompt, .searchState:
             return nil
         case .continueWatching, .recentlyAdded, .recommendations, .grid, .discoverList,
@@ -6921,7 +7261,7 @@ final class PlexHomeViewController: UIViewController {
         // anchor is the only target inside this modal. Without it focus stays
         // on the library tile underneath, where the library's staged Menu back
         // would swallow Menu and arrows / Select would drive the hidden page.
-        if case .collection = mode, case .loading = pageZero {
+        if isGridPage, case .loading = pageZero, !rowGridHasLoaded {
             return [collectionFocusAnchor]
         }
         // Strip idle return / letter stepping: land on the jumped-to slot.
@@ -7050,7 +7390,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         switch section.kind {
         case .continueWatching, .recentlyAdded, .watchlist, .recommendations, .discoverList, .searchGrid:
             break
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .grid,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader, .grid,
              .watchlistGrid, .searchPrompt, .searchState:
             return true
         }
@@ -7087,7 +7427,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
         (cell as? ShelfRowCell)?.tilesHiddenForPreview =
             previewHiddenRowID != nil && section.id.raw == previewHiddenRowID
         switch section.kind {
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader,
              .searchPrompt, .searchState, .searchGrid, .watchlistGrid:
             return  // No pagination for these (the watchlist is fetched whole)
         case .continueWatching, .recentlyAdded, .recommendations, .watchlist, .discoverList:
@@ -7957,7 +8297,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             // point at the previous cell when it's already on screen
             // (ported from MediaLibraryViewController.updateLeftEdgeGuide).
             break
-        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader,
+        case .hero, .recommendationsLoading, .recommendationsError, .sortHeader, .watchlistHeader, .rowGridHeader,
              .searchPrompt, .searchState:
             leftEdgeFocusGuide.preferredFocusEnvironments = []
             return
@@ -8024,7 +8364,7 @@ extension PlexHomeViewController: MenuBackHandling {
         // Collection page mid blur-fade: asked before the library under it,
         // whose tile may still hold focus. Drop the press. Before the window
         // guard, because the page's view may not be in the window yet.
-        if case .collection = mode, !hasMarkedFirstFrame { return true }
+        if isGridPage, !hasMarkedFirstFrame { return true }
         guard isViewLoaded, let window = view.window, window.isKeyWindow else { return false }
         // From the A–Z strip or the (hidden) fast-scroll bar, Menu goes back
         // to a tile, never out to the sidebar.
@@ -8049,6 +8389,8 @@ extension PlexHomeViewController: MenuBackHandling {
             onReturnToKeyboard()
             return true
         }
+        // View All: Menu closes the page from anywhere, back to its row's tile.
+        if case .rowGrid = mode { return false }
         guard StagedMenuBack.shouldReturnToTop(
             focusedSection: sectionIndex(forFocusedView: focused),
             topSection: topSectionIndex

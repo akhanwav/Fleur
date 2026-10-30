@@ -1129,6 +1129,18 @@ The working signal is the newest item on `/library/recentlyAdded` capped with
 newest keeps that season's ratingKey and moves only its timestamps. `PlexDataStore`'s 30s poll
 uses exactly this to decide when to refetch Home's Recently Added rows (#315).
 
+**A listing carries at most two genres a title** (Colony: 2 of its 8), so
+genre filtering must be Plex's, never the app's. Measured on the same server:
+a repeated `genre=` is AND (Horror 31, Comedy 22, both 8) and a comma is OR;
+episodes filter by `show.genre`, shows by `episode.resolution`; `resolution`
+takes `4k`, `1080`, `720`, `480`; `/library/all` takes the same filters across
+libraries; hub endpoints (`/hubs/...`) ignore every filter. `RowGridQuery`
+encodes all of it for a row's View All page.
+
+**Rows that page from Plex stop at 15 tiles** (`RowCap`) and end in a View All
+tile that opens `PlexHomeViewController(mode: .rowGrid)`: the row's own key
+while unsorted and unfiltered, else the library listing behind the row.
+
 ## Plex Live TV
 
 ### Stream URL Types

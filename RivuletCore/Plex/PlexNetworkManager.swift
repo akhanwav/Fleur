@@ -1005,6 +1005,30 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return components.url
     }
 
+    /// A library's genres as its filter lists them: the tag id a `genre=`
+    /// filter takes, and the name. `type` is the listing's (1 movies, 2 shows).
+    func getGenres(serverURL: String, authToken: String, sectionId: String,
+                   type: Int) async throws -> [(id: String, title: String)] {
+        guard var components = URLComponents(string: "\(serverURL)/library/sections/\(sectionId)/genre") else {
+            throw URLError(.badURL)
+        }
+        components.queryItems = [URLQueryItem(name: "type", value: "\(type)")]
+        guard let url = components.url else { throw URLError(.badURL) }
+        nonisolated struct Container: Decodable, Sendable {
+            nonisolated struct Inner: Decodable, Sendable { let Directory: [Tag]? }
+            nonisolated struct Tag: Decodable, Sendable {
+                let key: String?
+                let title: String?
+            }
+            let MediaContainer: Inner
+        }
+        let container: Container = try await request(url, headers: plexHeaders(authToken: authToken))
+        return (container.MediaContainer.Directory ?? []).compactMap { tag in
+            guard let key = tag.key, let title = tag.title else { return nil }
+            return (key, title)
+        }
+    }
+
     /// Get more items from a hub using its key (for pagination/infinite scroll)
     /// - Parameters:
     ///   - hubKey: The hub's key path (e.g., "/hubs/sections/1/continueWatching")

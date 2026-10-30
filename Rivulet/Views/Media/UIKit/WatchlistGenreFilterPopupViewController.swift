@@ -27,7 +27,8 @@ final class WatchlistGenreFilterPopupViewController: UIViewController {
     /// Recomputes the live "N titles" count for a candidate selection —
     /// same AND-across-the-set rule `PlexHomeViewController.watchlistItems(matchingType:genres:from:)`
     /// applies to the grid itself.
-    private let countProvider: (Set<String>) -> Int
+    /// nil hides the count (View All's grid is filtered by the server).
+    private let countProvider: ((Set<String>) -> Int)?
     private let onApply: (Set<String>) -> Void
 
     private var panel: UIVisualEffectView!
@@ -51,7 +52,7 @@ final class WatchlistGenreFilterPopupViewController: UIViewController {
     /// Present with `animated: false` — entrance/exit run in-controller so
     /// the panel can grow from / shrink to the Genre button's corner.
     init(genres: [String], selected: Set<String>, sourceFrame: CGRect?,
-         countProvider: @escaping (Set<String>) -> Int,
+         countProvider: ((Set<String>) -> Int)?,
          onApply: @escaping (Set<String>) -> Void) {
         self.genres = genres
         self.selected = selected
@@ -208,6 +209,7 @@ final class WatchlistGenreFilterPopupViewController: UIViewController {
     }
 
     private func updateCount() {
+        guard let countProvider else { countLabel.isHidden = true; return }
         let count = countProvider(selected)
         countLabel.text = count == 1 ? "1 title" : "\(count) titles"
     }
