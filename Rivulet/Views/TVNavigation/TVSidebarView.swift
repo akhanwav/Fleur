@@ -397,8 +397,9 @@ struct TVSidebarView: View {
             //
             // No standalone Sentry event for a library that fails: the cause is
             // the user's own server, and PlexNetworkManager already captures
-            // each transport failure. The builder leaves a breadcrumb.
-            Task.detached(priority: .background) {
+            // each transport failure. The builder leaves a breadcrumb. Its
+            // requests wait out the background (`ForegroundGate`).
+            ForegroundGate.detached(priority: .background) {
                 try? await Task.sleep(for: .seconds(5))
                 let (serverURL, token, serverID) = await MainActor.run {
                     (PlexAuthManager.shared.selectedServerURL,

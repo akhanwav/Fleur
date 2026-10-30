@@ -27,6 +27,8 @@ struct RivuletApp: App {
         UserDefaults.standard.register(defaults: ["showHomeHero": true])
         // Start the path monitor now; its first reading arrives after a delay.
         _ = NetworkPathMonitor.shared
+        // What leaving the foreground puts down, and picks up on the way back.
+        AppBackground.install()
 
         // PlexAuthManager owns identity and lives in RivuletCore; the content
         // store it hands off to is per platform. Set BEFORE any sign-in can

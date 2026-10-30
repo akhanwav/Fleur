@@ -505,7 +505,9 @@ class PlexDataStore: ObservableObject {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return }
 
-        await fetchHubsFromServer(serverURL: serverURL, token: token, updateLoading: false)
+        await ForegroundGate.$holdsInBackground.withValue(true) {
+            await fetchHubsFromServer(serverURL: serverURL, token: token, updateLoading: false)
+        }
     }
 
     /// Fast poll: refresh only the Continue Watching hub (small payload). When
@@ -515,8 +517,10 @@ class PlexDataStore: ObservableObject {
         guard let serverURL = authManager.selectedServerURL,
               let token = authManager.selectedServerToken else { return }
 
-        await fetchContinueWatchingOnly(serverURL: serverURL, token: token)
-        await refreshLibraryHubsIfContentAdded()
+        await ForegroundGate.$holdsInBackground.withValue(true) {
+            await fetchContinueWatchingOnly(serverURL: serverURL, token: token)
+            await refreshLibraryHubsIfContentAdded()
+        }
     }
 
     /// Home's "Recently Added <Library>" rows are projected from `libraryHubs`,
@@ -1897,36 +1901,39 @@ class PlexDataStore: ObservableObject {
     /// the same rule).
     private func refreshOtherServersContinueWatching() {
         guard otherServersContinueWatchingTask == nil, authManager.accountContentToken != nil else { return }
-        otherServersContinueWatchingTask = Task { [weak self] in
-            let servers = await OtherServersAvailabilityChecker.shared.enabledServers().filter { !$0.isMain }
-            let fetched = await withTaskGroup(of: (Int, [PlexMetadata]?).self) { group in
-                for (index, server) in servers.enumerated() {
-                    group.addTask {
-                        let hub = try? await PlexNetworkManager.shared.getContinueWatching(
-                            serverURL: server.serverURL, authToken: server.token)
-                        return (index, hub.map { $0.Metadata ?? [] })
+        // Its requests wait out the background (`ForegroundGate`).
+        otherServersContinueWatchingTask = ForegroundGate.$holdsInBackground.withValue(true) {
+            Task { [weak self] in
+                let servers = await OtherServersAvailabilityChecker.shared.enabledServers().filter { !$0.isMain }
+                let fetched = await withTaskGroup(of: (Int, [PlexMetadata]?).self) { group in
+                    for (index, server) in servers.enumerated() {
+                        group.addTask {
+                            let hub = try? await PlexNetworkManager.shared.getContinueWatching(
+                                serverURL: server.serverURL, authToken: server.token)
+                            return (index, hub.map { $0.Metadata ?? [] })
+                        }
                     }
+                    var lists: [Int: [PlexMetadata]] = [:]
+                    for await (index, metas) in group { if let metas { lists[index] = metas } }
+                    return lists
                 }
-                var lists: [Int: [PlexMetadata]] = [:]
-                for await (index, metas) in group { if let metas { lists[index] = metas } }
-                return lists
-            }
-            guard let self else { return }
-            self.otherServersContinueWatchingTask = nil
-            let previous = Dictionary(self.otherServersContinueWatching.map { ($0.server.machineId, $0.metas) },
-                                      uniquingKeysWith: { first, _ in first })
-            let next = servers.enumerated().compactMap { index, server -> (OtherServersAvailabilityChecker.ServerAccess, [PlexMetadata])? in
-                guard let metas = fetched[index] ?? previous[server.machineId] else { return nil }
-                return (server, metas)
-            }
-            for (server, _) in next { Self.registerProvider(for: server) }
-            let unchanged = next.count == self.otherServersContinueWatching.count
-                && zip(next, self.otherServersContinueWatching).allSatisfy {
-                    $0.0 == $1.server && PlexHub.metadataStateEqual($0.1, $1.metas)
+                guard let self else { return }
+                self.otherServersContinueWatchingTask = nil
+                let previous = Dictionary(self.otherServersContinueWatching.map { ($0.server.machineId, $0.metas) },
+                                          uniquingKeysWith: { first, _ in first })
+                let next = servers.enumerated().compactMap { index, server -> (OtherServersAvailabilityChecker.ServerAccess, [PlexMetadata])? in
+                    guard let metas = fetched[index] ?? previous[server.machineId] else { return nil }
+                    return (server, metas)
                 }
-            guard !unchanged else { return }
-            self.otherServersContinueWatching = next.map { (server: $0.0, metas: $0.1) }
-            self.projectHomeItems()
+                for (server, _) in next { Self.registerProvider(for: server) }
+                let unchanged = next.count == self.otherServersContinueWatching.count
+                    && zip(next, self.otherServersContinueWatching).allSatisfy {
+                        $0.0 == $1.server && PlexHub.metadataStateEqual($0.1, $1.metas)
+                    }
+                guard !unchanged else { return }
+                self.otherServersContinueWatching = next.map { (server: $0.0, metas: $0.1) }
+                self.projectHomeItems()
+            }
         }
     }
 
@@ -2238,7 +2245,7 @@ class PlexDataStore: ObservableObject {
         }
 
         // Run heavy prefetch work off the main actor; only hop back when touching UI state.
-        prefetchTask = Task.detached(priority: .utility) { [weak self] in
+        prefetchTask = ForegroundGate.detached(priority: .utility) { [weak self] in
             guard let self else { return }
 
             for library in libraries {

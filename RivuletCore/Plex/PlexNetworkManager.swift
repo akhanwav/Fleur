@@ -145,7 +145,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await (timeout == nil ? session : longHoldSession).data(for: request)
+            (data, response) = try await ForegroundGate.shared.data(
+                for: request, in: timeout == nil ? session : longHoldSession)
         } catch {
             // Transport-level failures (timeout -1001, connection lost -1005,
             // cannot-connect -1004) previously escaped this function completely
@@ -291,7 +292,8 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         let netStart = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await (timeout == nil ? session : longHoldSession).data(for: request)
+        let (data, response) = try await ForegroundGate.shared.data(
+            for: request, in: timeout == nil ? session : longHoldSession)
         let netMs = Int((ProcessInfo.processInfo.systemUptime - netStart) * 1000)
         if netMs > 750 {
             StartupTimer.mark("SLOW net \(netMs)ms \(url.path) (\(data.count)B)")

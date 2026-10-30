@@ -64,14 +64,17 @@ final class CrossServerHistory {
         if signature == lastSignature, let lastRun, now.timeIntervalSince(lastRun) < Self.interval { return }
         lastSignature = signature
         lastRun = now
-        task = Task { [weak self] in
-            guard let self else { return }
-            let next = await self.run(sources: sources, now: now)
-            // Reset while it ran: a newer pass, or none, owns the state now.
-            guard !Task.isCancelled else { return }
-            self.task = nil
-            self.outcomes = next
-            self.onChange?()
+        // Its requests wait out the background (`ForegroundGate`).
+        task = ForegroundGate.$holdsInBackground.withValue(true) {
+            Task { [weak self] in
+                guard let self else { return }
+                let next = await self.run(sources: sources, now: now)
+                // Reset while it ran: a newer pass, or none, owns the state now.
+                guard !Task.isCancelled else { return }
+                self.task = nil
+                self.outcomes = next
+                self.onChange?()
+            }
         }
     }
 

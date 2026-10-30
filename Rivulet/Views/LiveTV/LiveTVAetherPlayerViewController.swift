@@ -325,6 +325,8 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         Self.debugCurrent = self
         #endif
         view.backgroundColor = .black
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
 
         engineSurfaceView.frame = view.bounds
         engineSurfaceView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -551,6 +553,23 @@ final class LiveTVAetherPlayerViewController: UIViewController {
         inputCoordinator.invalidate()
         UIApplication.shared.isIdleTimerDisabled = false
         onDismiss?(channel)
+    }
+
+    /// Leaving the app ends the channel (`AppBackground`): a live stream has
+    /// nothing to resume, and the tuner stays grabbed until it is released.
+    /// The teardown sends Plex "stopped" now; if the app is frozen before that
+    /// request leaves, the server frees the tuner on its 300 s timer.
+    @objc private func appDidEnterBackground() {
+        guard presentingViewController != nil, !isBeingDismissed else { return }
+        cancelRetune()
+        teardownPlaybackSession()
+        // Now, not at viewDidDisappear: the audio session is let go a turn later.
+        MusicQueue.shared.liveTVSessionEnded(ObjectIdentifier(self))
+        if let presented = presentedViewController {
+            presented.dismiss(animated: false) { [weak self] in self?.dismissPlayer(animated: false) }
+        } else {
+            dismissPlayer(animated: false)
+        }
     }
 
     /// Leaves the player entirely, past every chrome layer. The layered

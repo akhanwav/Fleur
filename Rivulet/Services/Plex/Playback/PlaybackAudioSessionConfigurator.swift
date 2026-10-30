@@ -51,6 +51,21 @@ enum PlaybackAudioSessionConfigurator {
     private static var lastActivationModeRawValue: String = ""
     private static let minimumReactivationInterval: CFAbsoluteTime = 0.75
 
+    /// Let the session go, so a backgrounded app holds no audio route. Only
+    /// with nothing playing (`AppBackground`). The next activation applies the
+    /// category again, as on first use.
+    static func deactivatePlaybackSession(owner: String) {
+        appHangSectionEnter("audio_session_deactivate", owner: owner)
+        defer { appHangSectionExit("audio_session_deactivate") }
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            playerDebugLog("🎵 \(owner): Could not deactivate audio session: \(error.localizedDescription)")
+        }
+        lastActivationTimestamp = 0
+        lastActivationModeRawValue = ""
+    }
+
     /// Configure and activate a playback session optimized for long-form media.
     /// Uses long-form video routing on iOS and long-form audio on tvOS (video policy
     /// is unavailable on tvOS). Falls back to allowAirPlay when policy-based routing

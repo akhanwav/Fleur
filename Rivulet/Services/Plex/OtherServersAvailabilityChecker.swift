@@ -14,6 +14,7 @@
 //  timeout, so one asleep server costs at most that timeout and never holds up
 //  the rest. Plex's agent guid is the same on every server that matched the
 //  title; a TMDB id is turned into it once through Discover's matches endpoint.
+//  Every request waits out the background (`ForegroundGate`).
 //
 //  This replaced paging every other server's whole library into a guid index
 //  (2000 items a page, includeGuids, every movie and show section). On large
@@ -192,8 +193,9 @@ actor OtherServersAvailabilityChecker {
         components.queryItems = query
         guard let url = components.url else { return [] }
         let headers = await PlexNetworkManager.shared.plexHeaders(authToken: server.token)
-        let container: PlexMediaContainerWrapper? = try? await PlexNetworkManager.shared.request(
-            url, headers: headers, timeout: lookupTimeout)
+        let container: PlexMediaContainerWrapper? = try? await ForegroundGate.$holdsInBackground.withValue(true) {
+            try await PlexNetworkManager.shared.request(url, headers: headers, timeout: lookupTimeout)
+        }
         // Checked, not trusted: a server that ignored the filter must not
         // pass its other items off as this title.
         let matches = (container?.MediaContainer.Metadata ?? []).filter { $0.guid == plexGuid }
@@ -233,8 +235,9 @@ actor OtherServersAvailabilityChecker {
             let MediaContainer: Inner
         }
         let headers = await PlexNetworkManager.shared.plexHeaders(authToken: token)
-        guard let matches: Matches = try? await PlexNetworkManager.shared.request(
-            url, headers: headers, timeout: Self.lookupTimeout),
+        guard let matches: Matches = try? await ForegroundGate.$holdsInBackground.withValue(true, operation: {
+            try await PlexNetworkManager.shared.request(url, headers: headers, timeout: Self.lookupTimeout)
+        }),
               let match = matches.MediaContainer.Metadata?.first
         else {
             otherServersLog.info("[OtherServers] no Discover match for tmdb \(key, privacy: .public)")
@@ -285,7 +288,9 @@ actor OtherServersAvailabilityChecker {
         let start = ContinuousClock.now
         let authToken = await MainActor.run { PlexAuthManager.shared.authToken }
         guard let authToken,
-              let devices = try? await PlexNetworkManager.shared.getServers(authToken: authToken) else {
+              let devices = try? await ForegroundGate.$holdsInBackground.withValue(true, operation: {
+                  try await PlexNetworkManager.shared.getServers(authToken: authToken)
+              }) else {
             otherServersLog.error("[OtherServers] getServers failed; no cross-server lookups until the next resolve")
             return []
         }
@@ -348,8 +353,9 @@ actor OtherServersAvailabilityChecker {
                     guard let url = URL(string: "\(connection.uri)/identity") else { return nil }
                     struct Probe: Decodable, Sendable {}
                     let headers = await PlexNetworkManager.shared.plexHeaders(authToken: token)
-                    guard let _: Probe = try? await PlexNetworkManager.shared.request(
-                        url, headers: headers, timeout: probeTimeout) else { return nil }
+                    guard let _: Probe = try? await ForegroundGate.$holdsInBackground.withValue(true, operation: {
+                        try await PlexNetworkManager.shared.request(url, headers: headers, timeout: probeTimeout)
+                    }) else { return nil }
                     return connection.uri
                 }
             }

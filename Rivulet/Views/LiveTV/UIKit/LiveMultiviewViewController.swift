@@ -128,6 +128,8 @@ final class LiveMultiviewViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(white: 0.05, alpha: 1)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground),
+                                               name: UIApplication.didEnterBackgroundNotification, object: nil)
 
         view.addSubview(watchHint)
         view.addSubview(editHint)
@@ -338,6 +340,13 @@ final class LiveMultiviewViewController: UIViewController {
             self?.exitMultiview(handingOff: nil)
         })
         present(alert, animated: true)
+    }
+
+    /// Leaving the app closes multiview and stops every tile, releasing their
+    /// tuners (`AppBackground`), as the full-screen player does.
+    @objc private func appDidEnterBackground() {
+        guard presentingViewController != nil else { return }
+        exitMultiview(handingOff: nil, animated: false)
     }
 
     /// Close multiview. Every tile stops except `session`, which goes to the

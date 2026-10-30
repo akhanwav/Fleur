@@ -19,6 +19,11 @@ nonisolated extension ContinueWatchingCardCompositor {
         return cache
     }()
 
+    /// Drop every built layer, in the background (`AppBackground`).
+    static func emptyMemory() {
+        cache.removeAllObjects()
+    }
+
     /// What to build from a source image.
     enum Layer: String {
         case card, title, titleStrong

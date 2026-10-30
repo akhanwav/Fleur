@@ -137,8 +137,7 @@ actor ImageCacheManager: NSObject {
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil
         ) { [weak self] _ in
-            self?.memoryCache.removeAllObjects()
-            self?.fullCache.removeAllObjects()
+            self?.emptyMemory()
         }
         keyCache.countLimit = maxKeyCacheCount
         Task {
@@ -251,6 +250,13 @@ actor ImageCacheManager: NSObject {
                 }
             }
         }
+    }
+
+    /// Drop every decoded bitmap. The originals stay on disk, so a reload is a
+    /// decode, not a download. On a memory warning and in the background.
+    nonisolated func emptyMemory() {
+        memoryCache.removeAllObjects()
+        fullCache.removeAllObjects()
     }
 
     /// Clear all cached images

@@ -607,6 +607,25 @@ functions over those signals in the same file (`cost`, `chooseSlot`, `choose`,
   `trailingCost`, with the still added as a test case. A per-title exception fixes
   one card on one server.
 
+### Background
+
+A backgrounded app is frozen within seconds, and a sleeping Apple TV keeps it
+frozen for hours. `AppBackground` (installed in `RivuletApp.init`) is the one
+list of what leaving the foreground does; the owners handle the rest (Home's
+timers stop on resign-active, the VOD player pauses, Live TV closes and
+releases its tuner).
+
+- **Work that only serves the screen holds its requests over the background.**
+  Run it under `ForegroundGate.$holdsInBackground.withValue(true)` (or
+  `ForegroundGate.detached` in place of `Task.detached`, which drops
+  task-locals). The gate cancels those requests on background and sends them
+  again on return, so callers never see the failure. Home's polls, the
+  multi-server Continue Watching pass, the library index, other servers'
+  lookups and every TMDB request go through it. Playback reports must not:
+  the player reports its position on the way out.
+- **Decoded images are dropped**, and the audio session is deactivated unless
+  a song is playing or a video player is up.
+
 ### Plex Metadata Hierarchy
 
 For TV shows:

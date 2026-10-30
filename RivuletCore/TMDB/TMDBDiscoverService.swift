@@ -353,7 +353,7 @@ actor TMDBDiscoverService {
             throw URLError(.badURL)
         }
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await ForegroundGate.shared.data(for: request, in: session, always: true)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
