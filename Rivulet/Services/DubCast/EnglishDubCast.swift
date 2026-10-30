@@ -47,6 +47,12 @@ nonisolated enum EnglishDubCast {
         let characters: [String]
     }
 
+    /// Settings → Appearance → Show English Dub Cast (on unless turned off).
+    /// Off, no source is asked at all.
+    static let settingKey = "showEnglishDubCast"
+
+    static var isEnabled: Bool { SettingsStore.bool(settingKey, default: true) }
+
     /// The row's length: AniList's top characters across a few entries.
     static let limit = 30
 
@@ -128,7 +134,7 @@ enum EnglishDubCastLoader {
     /// cast for anime it has, else The Dubbing Database's.
     static func credits(item: MediaItem, detail: MediaItemDetail?,
                         showDetail: MediaItemDetail?) async -> [EnglishDubCast.Credit] {
-        guard item.ref.isPlex, !item.isMetadataOnly,
+        guard EnglishDubCast.isEnabled, item.ref.isPlex, !item.isMetadataOnly,
               EnglishDubCast.isAnimation((showDetail ?? detail)?.genres ?? []),
               let title = EnglishDubCast.title(item: item, detail: detail, showDetail: showDetail),
               await anyCopyHasEnglishAudio(item: item, detail: detail, showDetail: showDetail)

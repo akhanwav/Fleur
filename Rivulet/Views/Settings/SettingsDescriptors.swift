@@ -90,6 +90,10 @@ enum SettingsDescriptorStore {
             icon: "textformat",
             description: "Shows each title and its year under the posters in Home rows, library grids and the Watchlist. Long titles are cut to one line."
         ),
+        "showEnglishDubCast": SettingDescriptor(
+            icon: "person.wave.2",
+            description: "Adds an English Dub Cast row under Cast & Crew on animated titles you can play in English, with the English voice actors and their characters. Turned off, these casts aren't looked up at all."
+        ),
         "homeHero": SettingDescriptor(
             icon: "sparkles.rectangle.stack",
             description: "Shows a large featured content banner at the top of the Home screen with artwork and quick actions."

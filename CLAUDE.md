@@ -671,6 +671,8 @@ dubbed titles, its credits list only the Japanese cast, and words like
   second per host, `Retry-After` honoured.
 - **Every source gets the app's user agent** (`EnglishDubCast.userAgent`, Fleur
   with the repo URL, as Wikimedia's policy asks).
+- **Settings → Appearance → Show English Dub Cast** (`EnglishDubCast.settingKey`, on by
+  default) gates the loader before anything is fetched: off, no source is asked.
 - Credited on the tvOS Licenses & Legal screen (`dubCastAttribution`).
 
 ### Plex Metadata Hierarchy

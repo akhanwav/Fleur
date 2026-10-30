@@ -315,6 +315,9 @@ enum SettingsContent {
             .header("Posters"),
             toggle("posterTitles", "Show Titles Under Posters", key: "showPosterTitles", default: true),
 
+            .header("Detail Pages"),
+            toggle("showEnglishDubCast", "Show English Dub Cast", key: EnglishDubCast.settingKey, default: true),
+
             .header("Library"),
             toggle("libraryHero", "Hero", key: "showLibraryHero", default: true),
             toggle("discoveryRows", "Discovery Rows", key: "showLibraryRecommendations", default: true),
