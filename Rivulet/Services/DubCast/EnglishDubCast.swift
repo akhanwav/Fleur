@@ -10,8 +10,9 @@
 //  through Fribb's id map (`AnimeIDMap`); a season or an episode page lists
 //  its own season's entry, a show page combines every entry, main
 //  characters first, each actor once. Other non-English animation comes from
-//  The Dubbing Database (`DubDatabaseClient`), matched strictly, with photos
-//  and links from TMDB by name (`DubActorMatcher`).
+//  The Dubbing Database (`DubDatabaseClient`), matched strictly, then from the
+//  title's English Wikipedia article (`WikipediaCastClient`), with photos and
+//  links from TMDB by name (`DubActorMatcher`).
 //
 //  Shown only for animation that some copy on the servers can play in
 //  English: an English audio track on any copy of a film or episode, or on
@@ -21,6 +22,21 @@
 import Foundation
 
 nonisolated enum EnglishDubCast {
+
+    /// A character and its English voice, as a cast page lists it
+    /// (The Dubbing Database, Wikipedia).
+    struct Role: Codable, Equatable, Sendable {
+        let character: String
+        let actor: String
+    }
+
+    /// Every dub cast source is told who is asking, with a way to reach the
+    /// app's makers (Wikimedia's user-agent policy asks for one; Cloudflare in
+    /// front of AniList refuses generic clients).
+    static var userAgent: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"
+        return "Fleur/\(version) (Apple TV media player; https://github.com/akhanwav/Fleur)"
+    }
 
     /// One actor in the row, with every character they voice in it.
     struct Credit: Equatable, Sendable {
@@ -56,9 +72,9 @@ nonisolated enum EnglishDubCast {
         }
     }
 
-    /// A Dubbing Database cast in the page's order, each actor once with all
-    /// their characters. Photos come later, from TMDB.
-    static func credits(_ roles: [DubDatabaseClient.Role], limit: Int = limit) -> [Credit] {
+    /// A cast page's roles in its order, each actor once with all their
+    /// characters. Photos come later, from TMDB.
+    static func credits(_ roles: [Role], limit: Int = limit) -> [Credit] {
         var order: [String] = []
         var characters: [String: [String]] = [:]
         for role in roles {
@@ -125,12 +141,13 @@ enum EnglishDubCastLoader {
             let credits = EnglishDubCast.combine(ids.compactMap { characters[$0] })
             if !credits.isEmpty { return credits }
         }
-        return await dubDatabaseCredits(for: title)
+        return await castPageCredits(for: title)
     }
 
-    /// A non-English original's English dub on The Dubbing Database, with
-    /// each actor's TMDB photo where the name matches one person.
-    private static func dubDatabaseCredits(for title: AnimeIDMap.Title) async -> [EnglishDubCast.Credit] {
+    /// A non-English original's English dub from The Dubbing Database, else
+    /// from its Wikipedia article's cast table, with each actor's TMDB photo
+    /// where the name matches one person.
+    private static func castPageCredits(for title: AnimeIDMap.Title) async -> [EnglishDubCast.Credit] {
         let tmdb: (id: Int, isMovie: Bool)
         switch title {
         case .movie(let id): tmdb = (id, true)
@@ -138,10 +155,13 @@ enum EnglishDubCastLoader {
         case .show(nil, _, _): return []
         }
         guard let original = await TMDBClient.shared.originalTitle(tmdbId: tmdb.id, isMovie: tmdb.isMovie),
-              original.language != "en",
-              let roles = await DubDatabaseClient.shared.englishCast(
-                for: .init(tmdbId: tmdb.id, isMovie: tmdb.isMovie, original: original)),
-              !roles.isEmpty else { return [] }
+              original.language != "en" else { return [] }
+        var roles = await DubDatabaseClient.shared.englishCast(
+            for: .init(tmdbId: tmdb.id, isMovie: tmdb.isMovie, original: original)) ?? []
+        if roles.isEmpty {
+            roles = await WikipediaCastClient.shared.englishCast(tmdbId: tmdb.id, isMovie: tmdb.isMovie) ?? []
+        }
+        guard !roles.isEmpty else { return [] }
         let credits = EnglishDubCast.credits(roles)
         let matches = await DubActorMatcher.matches(for: credits.map(\.name))
         return credits.map { credit in

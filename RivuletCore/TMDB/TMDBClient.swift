@@ -78,6 +78,11 @@ nonisolated struct TMDBOriginalTitle: Codable, Equatable, Sendable {
     let year: Int?
 }
 
+private nonisolated struct TMDBWikidataResponse: Codable, Sendable {
+    let wikidataId: String?
+    enum CodingKeys: String, CodingKey { case wikidataId = "wikidata_id" }
+}
+
 private nonisolated struct TMDBOriginalTitleResponse: Codable, Sendable {
     let title: String?
     let name: String?
@@ -395,6 +400,15 @@ final class TMDBClient: @unchecked Sendable {
             }
         }
         return qualifying.count == 1 ? qualifying[0] : nil
+    }
+
+    /// A title's Wikidata item ("Q134571218"), which names its Wikipedia
+    /// articles (`WikipediaCastClient`). nil when TMDB has none.
+    func wikidataID(tmdbId: Int, isMovie: Bool) async -> String? {
+        guard let response: TMDBWikidataResponse = try? await request(
+            path: isMovie ? "movie/\(tmdbId)/external_ids" : "tv/\(tmdbId)/external_ids") else { return nil }
+        guard let id = response.wikidataId, !id.isEmpty else { return nil }
+        return id
     }
 
     /// A title's original title and language, its English title and its year:

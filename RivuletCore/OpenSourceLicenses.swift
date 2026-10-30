@@ -64,8 +64,10 @@ enum OpenSourceLicenses {
     (github.com/Fribb/anime-lists), built from anime-offline-database and Anime-Lists.
 
     English dub casts for other animation come from The Dubbing Database \
-    (dubdb.fandom.com), whose text is available under the Creative Commons \
-    Attribution-ShareAlike license (CC BY-SA). Rivulet is not affiliated with it or with Fandom.
+    (dubdb.fandom.com) and from English Wikipedia (en.wikipedia.org), found through \
+    Wikidata (wikidata.org). Their text is available under the Creative Commons \
+    Attribution-ShareAlike license (CC BY-SA). Rivulet is not affiliated with The Dubbing \
+    Database, Fandom, Wikipedia or the Wikimedia Foundation.
     """
 
     static var entries: [Entry] {

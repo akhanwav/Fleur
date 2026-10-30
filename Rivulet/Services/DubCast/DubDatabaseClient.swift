@@ -22,8 +22,8 @@
 //  Measured: looser matching (any page linking to the original) put Sonic's
 //  and Bratz's casts on Spanish and French films.
 //
-//  Read through the wiki's MediaWiki API, one request a second, with a named
-//  user agent; each title's answer (an empty one included) is cached 30 days.
+//  Read through the wiki's MediaWiki API, one request a second, with the
+//  app's user agent (`EnglishDubCast.userAgent`); each title's answer (an empty one included) is cached 30 days.
 //
 
 import Foundation
@@ -34,10 +34,7 @@ nonisolated private let dubDatabaseLog = Logger(subsystem: "com.rivulet.app", ca
 actor DubDatabaseClient {
     static let shared = DubDatabaseClient()
 
-    nonisolated struct Role: Codable, Equatable, Sendable {
-        let character: String
-        let actor: String
-    }
+    typealias Role = EnglishDubCast.Role
 
     /// The title to find: TMDB's original title and language, English title
     /// and year.
@@ -152,8 +149,7 @@ actor DubDatabaseClient {
             .sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = components.url else { return nil }
         var request = URLRequest(url: url, timeoutInterval: 20)
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"
-        request.setValue("Rivulet/\(version) (Apple TV)", forHTTPHeaderField: "User-Agent")
+        request.setValue(EnglishDubCast.userAgent, forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await ForegroundGate.shared.data(for: request, in: .shared, always: true)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {

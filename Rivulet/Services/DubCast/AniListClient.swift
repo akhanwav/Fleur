@@ -100,7 +100,7 @@ actor AniListClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(EnglishDubCast.userAgent, forHTTPHeaderField: "User-Agent")
         request.httpBody = try? JSONSerialization.data(withJSONObject: ["query": Self.query, "variables": ["ids": ids]])
         do {
             let (data, response) = try await ForegroundGate.shared.data(for: request, in: .shared, always: true)
@@ -120,11 +120,6 @@ actor AniListClient {
             aniListLog.error("[AniList] failed: \(error.localizedDescription, privacy: .public)")
             return nil
         }
-    }
-
-    private static var userAgent: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"
-        return "Rivulet/\(version) (Apple TV)"
     }
 
     // MARK: - Pure

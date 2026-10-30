@@ -660,6 +660,17 @@ dubbed titles, its credits list only the Japanese cast, and words like
   Ladybug"). Looser matching put Sonic's and Bratz's casts on French films.
   8 of the 21 titles match, with no wrong ones. Photos and links come from TMDB
   by name (`DubActorMatcher`, the same rule as the actor links).
+- **Then English Wikipedia** (CC BY-SA, `WikipediaCastClient`), matched by id:
+  TMDB's `external_ids` names the Wikidata item, whose `enwiki` sitelink is the
+  article. Only a rendered cast table with a Character (or Role) column and a
+  column headed English is read (Arco: "Voice actor" spanning French and
+  English); an unlabelled "Dub Actor" column is not, nor a list of the original
+  cast. 8 of 20 measured titles have one, 4 of them dubs The Dubbing Database
+  lacks (I Lost My Body, My Life as a Zucchini, Long Way North, Tad), so the two
+  cover 12 of the 21. Wikimedia rate-limits (429) when busy: one request a
+  second per host, `Retry-After` honoured.
+- **Every source gets the app's user agent** (`EnglishDubCast.userAgent`, Fleur
+  with the repo URL, as Wikimedia's policy asks).
 - Credited on the tvOS Licenses & Legal screen (`dubCastAttribution`).
 
 ### Plex Metadata Hierarchy
@@ -1037,7 +1048,7 @@ item's `ref.providerID` names the server it came from.
 | Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
 | Music menus | `Views/Music/UIKit/MusicMenus.swift` |
 | End card (caught up on a show) | `Views/Player/UIKit/EndCardOverlayView.swift` |
-| English Dub Cast (animation) | `Services/DubCast/EnglishDubCast.swift` |
+| English Dub Cast (animation) | `Services/DubCast/EnglishDubCast.swift` (+ AniList, Dubbing Database, Wikipedia clients) |
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
 | Content filter sources | `Services/Plex/Playback/ContentFilter/ContentFilterSources.swift` |
