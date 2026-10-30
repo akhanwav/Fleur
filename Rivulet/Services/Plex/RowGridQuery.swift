@@ -78,6 +78,10 @@ nonisolated struct RowGridQuery: Equatable, Sendable {
         let filters: [URLQueryItem]
         let type: ItemType?
         let sort: String?
+        /// The grid opens on the listing, not the row's key: a TV Recently
+        /// Added row mixes seasons and episodes, a show once per addition,
+        /// and its listing of shows by newest episode has each show once.
+        var replacesRow = false
     }
 
     let rowKey: String
@@ -112,8 +116,10 @@ nonisolated struct RowGridQuery: Equatable, Sendable {
         if path == "/hubs/home/recentlyAdded", value("personal") == nil,
            let type = value("type").flatMap(Int.init).flatMap(ItemType.init) {
             let section = value("sectionID")
+            let shows = type == .show
             return Listing(path: section.map { "/library/sections/\($0)/all" } ?? "/library/all",
-                           sectionID: section, filters: [], type: type, sort: "addedAt:desc")
+                           sectionID: section, filters: [], type: type,
+                           sort: shows ? "episode.addedAt:desc" : "addedAt:desc", replacesRow: shows)
         }
         return nil
     }
@@ -121,7 +127,7 @@ nonisolated struct RowGridQuery: Equatable, Sendable {
     /// The Sort menu's name for the row's own order.
     var rowSortName: String {
         switch listing?.sort?.split(separator: ":").first {
-        case "addedAt": return "Date Added"
+        case "addedAt", "episode.addedAt": return "Date Added"
         case "originallyAvailableAt": return "Release Date"
         case "lastViewedAt": return "Last Watched"
         case "audienceRating", "rating": return "Rating"
@@ -175,7 +181,7 @@ nonisolated struct RowGridQuery: Equatable, Sendable {
     /// The key the grid pages under `choices`: the row's own while nothing
     /// differs from the row, else the filtered listing.
     func key(for choices: Choices) -> String {
-        guard !choices.isDefault, let listing else { return rowKey }
+        guard let listing, !choices.isDefault || listing.replacesRow else { return rowKey }
         let type = type(for: choices)
         var items = listing.filters
         if let type { items.append(URLQueryItem(name: "type", value: "\(type.rawValue)")) }
@@ -210,5 +216,24 @@ nonisolated enum RowCap {
     /// the server's count when it sent one.
     static func capped<Item>(_ items: [Item], total: Int?) -> (items: [Item], viewAll: Bool) {
         (Array(items.prefix(limit)), max(total ?? 0, items.count) > limit)
+    }
+}
+
+/// A Recently Added row lists every addition: a show that gained episodes
+/// one at a time appears once per episode (One Piece six times in one row,
+/// measured on a server). The row keeps the newest tile of each show.
+nonisolated enum RecentlyAddedRow {
+    static func newestPerShow(_ items: [MediaItem]) -> [MediaItem] {
+        var seen = Set<MediaItemRef>()
+        return items.filter { seen.insert(show(of: $0)).inserted }
+    }
+
+    /// The show a tile belongs to; a movie is its own.
+    static func show(of item: MediaItem) -> MediaItemRef {
+        switch item.kind {
+        case .season: return item.parentRef ?? item.ref
+        case .episode: return item.grandparentRef ?? item.parentRef ?? item.ref
+        default: return item.ref
+        }
     }
 }

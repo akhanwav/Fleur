@@ -646,9 +646,11 @@ Two rules that look wrong until you know them:
 - **A resume point outranks the watched flag.** `PlexMetadata.isWatched` reports
   false while a rewatch is in progress, and the episode cells draw the
   progress bar *instead of* the watched glyph. Posters draw neither (a show's
-  poster names its seasons, "3 Seasons", Specials aside); progress lives on the
-  detail page. In a Recently Added row a show names the seasons that came in
-  ("Season 3", "Seasons 1–3") instead of its year (`TitleSeasons`). A label keyed on
+  poster, and a season or episode tile wearing its show's, names the show's
+  seasons, "3 Seasons", Specials aside); progress lives on the detail page.
+  Where tiles list by date added, a show names its latest season that came in
+  ("Season 4") instead of its year (`TitleSeasons`), and a Recently Added row
+  keeps one tile per show (`RecentlyAddedRow`). A label keyed on
   `viewOffset > 0 && !isWatched` mislabels a resumable rewatch (issue #270).
   `MediaUserState.isInProgress` adds `!isPlayed` for exactly one reason: On Deck
   must advance past a finished episode.

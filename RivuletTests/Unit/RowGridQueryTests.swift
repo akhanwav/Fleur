@@ -45,6 +45,17 @@ final class RowGridQueryTests: XCTestCase {
         XCTAssertEqual(params(q.key(for: .init(sort: .year)))["sort"], ["year:desc"])
     }
 
+    /// A TV row mixes seasons and episodes, a show once per addition: its
+    /// grid lists the library's shows by newest episode, each once.
+    func test_tvRecentlyAdded_opensOnShowsByNewestEpisode() {
+        let q = RowGridQuery(rowKey: "/hubs/home/recentlyAdded?type=2&sectionID=22", rowIdentifier: nil)
+        let key = q.key(for: .init())
+        XCTAssertTrue(key.hasPrefix("/library/sections/22/all?"))
+        XCTAssertEqual(params(key)["sort"], ["episode.addedAt:desc"])
+        XCTAssertEqual(params(key)["type"], ["2"])
+        XCTAssertEqual(q.rowSortName, "Date Added")
+    }
+
     /// Repeated, not comma-joined: Plex reads a repeat as AND.
     func test_genres_areRepeated() {
         let q = RowGridQuery(rowKey: "/library/sections/5/all?sort=addedAt:desc", rowIdentifier: nil,

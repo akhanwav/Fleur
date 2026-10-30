@@ -3633,10 +3633,7 @@ final class PlexHomeViewController: UIViewController {
                 } else {
                     Perf.interval(.cellPrepare, key: perfKey) {
                         cell.configure(item: displayed(item))
-                        if case .rowGrid(let page) = mode, rowGridChoices.isDefault,
-                           Self.listsRecentlyAdded(page.query.rowKey) {
-                            cell.showRecentSeasons(for: item)
-                        }
+                        if showsRecentSeasonsInGrid { cell.showRecentSeasons(for: item) }
                     }
                 }
             }
@@ -4911,9 +4908,9 @@ final class PlexHomeViewController: UIViewController {
             return  // No pagination for these (matches SwiftUI hubKey == nil)
         }
         guard itemIndex >= section.items.count - 5 else { return }
-        // A capped row pages only until it holds its tiles.
-        if section.kind == .recentlyAdded,
-           (paginationStates[section.id]?.loadedItems.count ?? 0) >= RowCap.limit { return }
+        // A capped row pages only until it holds its tiles (counted after a
+        // Recently Added row keeps one tile per show).
+        if section.kind == .recentlyAdded, section.items.count >= RowCap.limit { return }
         Task { @MainActor in
             await self.loadMoreIfNeeded(sectionID: section.id, hubKey: section.hubKey, hubIdentifier: section.hubIdentifier)
         }
@@ -5354,6 +5351,7 @@ final class PlexHomeViewController: UIViewController {
             if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
                 items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
             }
+            if Self.listsRecentlyAdded(hub.hubKey) { items = RecentlyAddedRow.newestPerShow(items) }
             let total = merged.totalSize ?? hub.totalSize
             let cap = Self.rowCap(items, total: total, hubKey: hub.hubKey, isContinueWatching: hub.isContinueWatching)
             var section = HomeSectionData.hub(
@@ -5528,6 +5526,7 @@ final class PlexHomeViewController: UIViewController {
             if hub.isContinueWatching, !pendingCWRemovals.isEmpty {
                 items.removeAll { pendingCWRemovals.contains($0.ref.itemID) }
             }
+            if Self.listsRecentlyAdded(hub.hubKey) { items = RecentlyAddedRow.newestPerShow(items) }
             let total = merged.totalSize ?? hub.totalSize
             let cap = Self.rowCap(items, total: total, hubKey: hub.hubKey, isContinueWatching: hub.isContinueWatching)
             var section = HomeSectionData.hub(
@@ -5639,8 +5638,19 @@ final class PlexHomeViewController: UIViewController {
         return (hub.title ?? "").lowercased().contains("continue")
     }
 
-    /// A Recently Added row's key: a show in it names the seasons that came
-    /// in (`PosterCell.showRecentSeasons`) instead of its year.
+    /// The grid lists by date added: a library under Recently Added or New
+    /// Episodes, or a Recently Added row's View All in the row's order. A
+    /// show there names its latest season instead of its year.
+    private var showsRecentSeasonsInGrid: Bool {
+        switch mode {
+        case .library: return gridSort == .addedAtDesc || gridSort == .lastEpisodeAddedDesc
+        case .rowGrid(let page): return rowGridChoices.sort == .row && Self.listsRecentlyAdded(page.query.rowKey)
+        default: return false
+        }
+    }
+
+    /// A Recently Added row's key: a show in it names the latest season that
+    /// came in (`PosterCell.showRecentSeasons`) instead of its year.
     nonisolated static func listsRecentlyAdded(_ key: String?) -> Bool {
         guard let key else { return false }
         return key.contains("/recentlyAdded") || key.contains("sort=addedAt")
