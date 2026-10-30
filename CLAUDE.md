@@ -498,6 +498,25 @@ most servers and fails on the ones behind a raw-IP or private certificate (#314,
 Two layouts: What's On (`LiveBrowseViewController`, the default) and the Guide (`GuideLayoutView`). Both play through `LiveTVAetherPlayerViewController` on the VOD glass rail. Multiview (`LiveMultiviewViewController`) runs **AetherPlayer** per slot (`MultiStreamViewModel` instantiates `AetherPlayer()`, each tile binds the engine surface), up to 4 concurrent slots. HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
 iOS reads the same `LiveTVDataStore` and saved sources and adds sources through the same `LiveTVSourceConnector`. Dispatcharr API keys live in the Keychain (`liveTVSourceToken_<sourceId>`); the saved source JSON keeps one only if the Keychain write fails, and older plain-text keys are migrated on load.
 
+### Audio and Subtitles on the detail page
+
+Movie, show and episode pages carry Audio and Subtitles buttons right of Info
+(`MediaDetailChromeView`, "Audio and Subtitles"). They list the tracks of the
+copy selected in Ways to Watch (a show page: the episode Play would start).
+
+- **A choice is kept twice**: in `TitleTrackChoices` (by Plex guid, as the
+  track's shape: language, format, flags) and in Plex's per-part stream
+  selection. Plex's `selected` flag cannot say Off and cannot be told apart
+  from its own auto-selection, so the local copy is the authority. A show
+  page's choice covers every episode; an episode's own wins.
+- **The player applies it at Play** (`UniversalPlayerViewModel`, tier 1b of
+  `applyAudioPreference` / `applySubtitlePreference`), matched by shape on
+  whichever copy plays. A saved track the copy lacks falls through.
+- **With no choice, Settings → Playback → Default Subtitles decides.**
+  English (the default, `EnglishSubtitleDefault`): SRT, then other English
+  text, then PGS, full before forced-only, plain before SDH; none, off. Last
+  Used keeps the old global memory (`TrackIntentStore`).
+
 ### Content Filter (VOD)
 
 A local VidAngel/ClearPlay-style filter: mute language, skip scenes, never touch the

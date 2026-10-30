@@ -4741,7 +4741,9 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     /// Apply saved audio preference. Selection priority is:
-    ///  1. `initialAudioTrackId` from the pre-play picker (this session).
+    ///  1. `initialAudioTrackId` from the pre-play picker (this session),
+    ///     then the title's saved choice from the detail page's Audio picker
+    ///     (`TitleTrackChoices`).
     ///  2. Plex's per-item explicit selection (a `selected: true` stream
     ///     that isn't also the file's `default: true` track — meaning the
     ///     user picked something deliberately, in Plex Web / mobile / our
@@ -4774,6 +4776,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
+        // 1b. The title's own choice from the detail page's Audio picker (its
+        //     own, else its show's), matched by shape on whichever copy plays.
+        if let intent = titleTrackChoice?.audio,
+           let match = TrackIntentResolver.resolveAudio(intent: intent, in: audioTracks) {
+            selectAudioTrackWithoutSaving(id: match.id)
+            return
+        }
+
         // 2. Plex per-item explicit selection: a `selected: true` stream that
         //    isn't also the file's default means the user deliberately picked it
         //    (here, or in Plex Web / mobile), and that persists server-side.
@@ -4804,6 +4814,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
+    /// The detail page's saved choice for this item, or its show's.
+    private var titleTrackChoice: TitleTrackChoice? {
+        TitleTrackChoices.choice(guid: metadata.guid, showGuid: metadata.grandparentGuid)
+    }
+
     /// Apply saved subtitle preference
     private func applySubtitlePreference() {
         // 1. Pre-play picker selection (this session). Off and a specific
@@ -4827,6 +4842,20 @@ final class UniversalPlayerViewModel: ObservableObject {
             break
         }
 
+        // 1b. The title's own choice from the detail page's Subtitles picker
+        //     (its own, else its show's): Off, or its track by shape. A saved
+        //     track this copy lacks falls through to the defaults below.
+        if let intent = titleTrackChoice?.subtitle {
+            if intent == .off {
+                selectSubtitleTrackWithoutSaving(id: nil)
+                return
+            }
+            if let match = TrackIntentResolver.resolveSubtitle(intent: intent, in: subtitleTracks) {
+                selectSubtitleTrackWithoutSaving(id: match.id)
+                return
+            }
+        }
+
         // 2. Plex's per-item explicit selection. A `selected: true` stream
         //    that's neither the default nor the forced one is a deliberate
         //    user pick (here, or in Plex Web / mobile) — honor it over the
@@ -4842,7 +4871,21 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // 3. No explicit user intent yet: honor selected/default stream behavior.
+        // 3. Settings → Playback → Default Subtitles. English: English text
+        //    subtitles, else English image ones, else off. Last Used keeps the
+        //    global memory below.
+        switch DefaultSubtitles.current {
+        case .english:
+            selectSubtitleTrackWithoutSaving(id: EnglishSubtitleDefault.pick(subtitleTracks)?.id)
+            return
+        case .off:
+            selectSubtitleTrackWithoutSaving(id: nil)
+            return
+        case .lastUsed:
+            break
+        }
+
+        // 4. No explicit user intent yet: honor selected/default stream behavior.
         guard let intent = TrackIntentStore.subtitleIntent else {
             if currentSubtitleTrackId == nil,
                let forcedTrack = subtitleTracks.first(where: { $0.isForced }) {
@@ -4853,7 +4896,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             return
         }
 
-        // 4. Global subtitle intent. Resolution is a PURE READ: when no track
+        // 5. Global subtitle intent. Resolution is a PURE READ: when no track
         //    on this title matches the intent (e.g. stored "ENG forced" but
         //    this title only ships a regular English track), subtitles come up
         //    off for this title and the stored intent is left ALONE, so it

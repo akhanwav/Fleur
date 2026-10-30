@@ -402,7 +402,15 @@ enum SettingsContent {
             SettingsRowItem(id: "cat_contentFilter", title: "Content Filtering",
                             kind: .navigationValue(.contentFilter, value: {
                                 SettingsStore.bool(ContentFilterManager.Keys.enabled, default: false) ? "On" : "Off"
-                            }))
+                            })),
+            .header("Subtitles"),
+            SettingsRowItem(id: "defaultSubtitles", title: "Default Subtitles",
+                            kind: .cycle(value: { DefaultSubtitles.current.description },
+                                         next: {
+                                             let all = DefaultSubtitles.allCases
+                                             let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
+                                             SettingsStore.setString(DefaultSubtitles.settingKey, next.rawValue)
+                                         }))
         ]
     }
 

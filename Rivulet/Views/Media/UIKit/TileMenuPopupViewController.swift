@@ -122,6 +122,9 @@ final class TileMenuPopupViewController: UIViewController {
     private var isDismissing = false
     /// Runs once the popup is gone, however it closed.
     var onDismiss: (() -> Void)?
+    /// The row (`TileMenuAction.id`, else its title) that takes initial
+    /// focus instead of the first: a picker opens on its current choice.
+    var initialFocusKey: String?
 
     /// Present with `animated: false` — entrance/exit run in-controller so
     /// the panel can grow from / shrink to the tile's corner.
@@ -315,7 +318,9 @@ final class TileMenuPopupViewController: UIViewController {
                         self?.animateOut { handler() }
                     }
                 }
-                if firstRow == nil, action.isEnabled { firstRow = row }
+                if action.isEnabled, firstRow == nil || (initialFocusKey == key && firstRow?.key != key) {
+                    firstRow = row
+                }
                 rows.append(row)
                 arranged.append(row)
             }

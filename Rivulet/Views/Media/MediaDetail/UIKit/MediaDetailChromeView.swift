@@ -539,6 +539,7 @@ final class MediaDetailChromeView: UIView {
                 self.detail = fetched
                 self.resolvedGenres = genres
                 self.applyDetail(item: item, detail: fetched)
+                self.refreshTrackButtons()
             }
         }
     }
@@ -561,6 +562,11 @@ final class MediaDetailChromeView: UIView {
             // The pill names the selected copy's episode: another server's
             // copy has its own next episode.
             if !self.copySelection.isRemoteSelected { self.setPlayTarget(episode) }
+            // Its tracks, for the Audio and Subtitles pickers.
+            let episodeDetail = await Self.fetchDetail(episode.ref)
+            guard self.loadToken == token else { return }
+            self.mainPlayTargetDetail = episodeDetail
+            self.refreshTrackButtons()
         }
     }
 
@@ -620,6 +626,8 @@ final class MediaDetailChromeView: UIView {
     /// A show's or season's Play target on the main server, kept so the pill
     /// can go back to it after another server's copy was selected.
     private var mainPlayTarget: MediaItem?
+    /// That episode's detail: the tracks a show page's pickers list.
+    private var mainPlayTargetDetail: MediaItemDetail?
 
     /// Switch the page to another copy (On Your Servers), by
     /// `DetailCopy.id`. No-op when the page has no such copy.
@@ -647,6 +655,7 @@ final class MediaDetailChromeView: UIView {
             : copySelection.selectedDetail?.primarySource
         rebuildQualityRow(item: item, detail: copySelection.selectedDetail ?? detail, source: source)
         insertWaysToWatchButtonIfNeeded()
+        refreshTrackButtons()
         // Another server's copy brings its own (possibly custom) artwork; an
         // unowned page's copy is the only server art it has.
         onCopyArtwork?(copy.isMainServer ? nil : copy.item.artwork)
@@ -773,6 +782,7 @@ final class MediaDetailChromeView: UIView {
             actionButtonsStack.addArrangedSubview(watchlist)
         }
         actionButtonsStack.addArrangedSubview(info)
+        addTrackButtons(item: item)
         // An episode's Watched acts on the episode alone; the whole show is
         // marked from the show's own page, which this opens.
         if item.kind == .episode, let showRef = item.grandparentRef, !showRef.itemID.isEmpty {
@@ -784,6 +794,166 @@ final class MediaDetailChromeView: UIView {
             actionButtonsStack.addArrangedSubview(goToShow)
         }
         playButton = play
+    }
+
+    // MARK: - Audio and Subtitles
+
+    private weak var audioButton: FocusableActionButton?
+    private weak var subtitlesButton: FocusableActionButton?
+
+    /// The file the Audio and Subtitles pickers describe, and the item it
+    /// belongs to on that copy's server.
+    private struct TrackTarget {
+        let source: MediaSource
+        let playable: MediaItem
+        let copy: DetailCopy?
+    }
+
+    /// Audio and Subtitles, right of Info, on a Plex movie, show or episode.
+    /// Hidden until the selected copy's tracks are known.
+    private func addTrackButtons(item: MediaItem) {
+        guard item.ref.isPlex, [.movie, .show, .episode].contains(item.kind) else { return }
+        let audio = makeCircleButton(systemImage: "speaker.wave.2", caption: "Audio")
+        audio.onPrimaryAction = { [weak self, weak audio] in self?.presentAudioPicker(from: audio) }
+        let subtitles = makeCircleButton(systemImage: "captions.bubble", caption: "Subtitles")
+        subtitles.onPrimaryAction = { [weak self, weak subtitles] in self?.presentSubtitlePicker(from: subtitles) }
+        audioButton = audio
+        subtitlesButton = subtitles
+        actionButtonsStack.addArrangedSubview(audio)
+        actionButtonsStack.addArrangedSubview(subtitles)
+        refreshTrackButtons()
+    }
+
+    /// The selected copy's picked version (best first otherwise); on a show
+    /// page, the episode Play would start on that copy.
+    private func trackTarget() -> TrackTarget? {
+        guard let item else { return nil }
+        let copy = copySelection.selected
+        if item.kind == .show {
+            let remote = copy.map { !$0.isMainServer } ?? false
+            let detail = remote ? copy?.playTargetDetail : (mainPlayTargetDetail ?? copy?.playTargetDetail)
+            let playable = remote ? copy?.playTarget : (mainPlayTarget ?? copy?.playTarget)
+            guard let detail, let playable,
+                  let source = VersionRanking.ordered(detail.mediaSources).first else { return nil }
+            return TrackTarget(source: source, playable: playable, copy: copy)
+        }
+        let detail = copySelection.selectedDetail ?? detail
+        let sources = copySelection.selectedDetail != nil
+            ? (detail?.mediaSources ?? []) : VersionRanking.ordered(detail?.mediaSources ?? [])
+        guard let source = sources.first else { return nil }
+        return TrackTarget(source: source, playable: copy?.item ?? item, copy: copy)
+    }
+
+    /// Where a choice is kept: the movie's or episode's guid, or the show's
+    /// for every episode of it.
+    private var trackChoiceKey: String? {
+        TitleTrackChoices.key(guid: (copySelection.selectedDetail ?? detail)?.plexGuid ?? detail?.plexGuid)
+    }
+
+    private func refreshTrackButtons() {
+        guard let audioButton, let subtitlesButton else { return }
+        guard let target = trackTarget() else {
+            audioButton.isHidden = true
+            subtitlesButton.isHidden = true
+            return
+        }
+        let choice = TitleTrackChoices.choice(for: trackChoiceKey)
+        audioButton.isHidden = target.source.audioTracks.isEmpty
+        audioButton.focusCaption = Self.currentAudio(in: target.source, choice: choice).map(TrackLabels.audioButton) ?? "Audio"
+        subtitlesButton.isHidden = false
+        subtitlesButton.focusCaption = Self.currentSubtitle(in: target.source, choice: choice)
+            .map(TrackLabels.subtitleButton) ?? "Off"
+    }
+
+    /// The track that will play: the saved choice, else Plex's selection,
+    /// else the file's default, else the first.
+    private static func currentAudio(in source: MediaSource, choice: TitleTrackChoice?) -> AudioTrack? {
+        let tracks = source.audioTracks
+        if let intent = choice?.audio, let match = TitleTrackMatch.audio(intent, in: tracks) { return match }
+        return tracks.first(where: \.isSelected) ?? tracks.first(where: \.isDefault) ?? tracks.first
+    }
+
+    /// The subtitles that will play (nil: off): the saved choice, else Plex's
+    /// own selection, else Settings → Playback → Default Subtitles.
+    private static func currentSubtitle(in source: MediaSource, choice: TitleTrackChoice?) -> SubtitleTrack? {
+        let tracks = source.subtitleTracks
+        if let intent = choice?.subtitle {
+            if intent == .off { return nil }
+            if let match = TitleTrackMatch.subtitle(intent, in: tracks) { return match }
+        }
+        if let selected = tracks.first(where: { $0.isSelected && !$0.isForced && !$0.isDefault }) { return selected }
+        switch DefaultSubtitles.current {
+        case .english: return EnglishSubtitleDefault.pick(tracks)
+        case .off: return nil
+        case .lastUsed:
+            guard let intent = TrackIntentStore.subtitleIntent, intent != .off else { return nil }
+            return TitleTrackMatch.subtitle(intent, in: tracks)
+        }
+    }
+
+    private func presentAudioPicker(from button: UIView?) {
+        guard let target = trackTarget(), let host = hostViewController else { return }
+        let current = Self.currentAudio(in: target.source, choice: TitleTrackChoices.choice(for: trackChoiceKey))
+        let tracks = target.source.audioTracks
+        let titles = TrackLabels.distinct(tracks.map(TrackLabels.audioRow), titles: tracks.map(\.title))
+        let rows = zip(tracks, titles).map { track, title in
+            TileMenuAction(title: title, systemImage: track.id == current?.id ? "checkmark.circle.fill" : "circle",
+                           id: track.id) { [weak self] in
+                self?.chooseAudio(track, target: target)
+            }
+        }
+        present(rows, title: "Audio", focusing: current?.id, from: button, host: host)
+    }
+
+    private func presentSubtitlePicker(from button: UIView?) {
+        guard let target = trackTarget(), let host = hostViewController else { return }
+        let current = Self.currentSubtitle(in: target.source, choice: TitleTrackChoices.choice(for: trackChoiceKey))
+        let off = TileMenuAction(title: "Off", systemImage: current == nil ? "checkmark.circle.fill" : "circle",
+                                 id: "off") { [weak self] in self?.chooseSubtitle(nil, target: target) }
+        let tracks = target.source.subtitleTracks
+        let titles = TrackLabels.distinct(tracks.map(TrackLabels.subtitleRow), titles: tracks.map(\.title))
+        let rows = zip(tracks, titles).map { track, title in
+            TileMenuAction(title: title, systemImage: track.id == current?.id ? "checkmark.circle.fill" : "circle",
+                           id: track.id) { [weak self] in
+                self?.chooseSubtitle(track, target: target)
+            }
+        }
+        present([off] + rows, title: "Subtitles", focusing: current?.id ?? "off", from: button, host: host)
+    }
+
+    private func present(_ rows: [TileMenuAction], title: String, focusing key: String?,
+                         from button: UIView?, host: UIViewController) {
+        let frame = button.map { $0.convert($0.bounds, to: nil) }
+        let popup = TileMenuPopupViewController(sections: [rows], sourceFrame: frame, header: TileMenuHeader(title: title))
+        popup.initialFocusKey = key
+        host.topmostPresented.present(popup, animated: false)
+    }
+
+    /// Kept for the title, and sent to Plex for this file so other clients
+    /// follow it. It applies when Play is pressed (`UniversalPlayerViewModel`).
+    private func chooseAudio(_ track: AudioTrack, target: TrackTarget) {
+        if let key = trackChoiceKey { TitleTrackChoices.setAudio(AudioIntent(from: track), for: key) }
+        refreshTrackButtons()
+        let provider = Self.provider(for: target)
+        Task { try? await provider?.setSelectedAudioTrack(track.id, source: target.source.id, of: target.playable.ref) }
+    }
+
+    private func chooseSubtitle(_ track: SubtitleTrack?, target: TrackTarget) {
+        if let key = trackChoiceKey {
+            TitleTrackChoices.setSubtitle(track.map(SubtitleIntent.init(from:)) ?? .off, for: key)
+        }
+        refreshTrackButtons()
+        let provider = Self.provider(for: target)
+        Task { try? await provider?.setSelectedSubtitleTrack(track?.id, source: target.source.id, of: target.playable.ref) }
+    }
+
+    /// The copy's own server: the registered provider, or one made for another
+    /// server's copy from its address and token.
+    private static func provider(for target: TrackTarget) -> (any MediaProvider)? {
+        if let provider = MediaProviderRegistry.shared.provider(for: target.playable.ref.providerID) { return provider }
+        guard let copy = target.copy, let remote = copy.remote else { return nil }
+        return PlexProvider(machineIdentifier: copy.machineId, displayName: copy.serverName,
+                            serverURL: remote.serverURL, authToken: remote.token)
     }
 
     private var hostViewController: UIViewController? {
