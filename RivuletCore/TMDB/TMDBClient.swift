@@ -62,6 +62,40 @@ nonisolated struct TMDBPersonDetails: Codable, Sendable {
     }
 }
 
+/// A voice actor matched by name (`TMDBClient.voiceActor`).
+nonisolated struct TMDBVoiceActor: Codable, Equatable, Sendable {
+    let personId: Int
+    let profilePath: String?
+
+    var profileURL: URL? { profilePath.flatMap { URL(string: "https://image.tmdb.org/t/p/w342\($0)") } }
+}
+
+/// `TMDBClient.originalTitle`: `language` is TMDB's ISO 639-1 code ("fr").
+nonisolated struct TMDBOriginalTitle: Codable, Equatable, Sendable {
+    let title: String
+    let language: String
+    let englishTitle: String
+    let year: Int?
+}
+
+private nonisolated struct TMDBOriginalTitleResponse: Codable, Sendable {
+    let title: String?
+    let name: String?
+    let originalTitle: String?
+    let originalName: String?
+    let originalLanguage: String?
+    let releaseDate: String?
+    let firstAirDate: String?
+    enum CodingKeys: String, CodingKey {
+        case title, name
+        case originalTitle = "original_title"
+        case originalName = "original_name"
+        case originalLanguage = "original_language"
+        case releaseDate = "release_date"
+        case firstAirDate = "first_air_date"
+    }
+}
+
 /// One title in a person's TMDB combined credits (`person/{id}/combined_credits`).
 /// A person credited twice on one title (two characters, or a cast and a
 /// crew credit) appears once per credit.
@@ -115,9 +149,11 @@ private nonisolated struct TMDBPersonSearchResponse: Codable, Sendable {
         let name: String?
         let popularity: Double?
         let knownFor: [KnownFor]?
+        let profilePath: String?
         enum CodingKeys: String, CodingKey {
             case id, name, popularity
             case knownFor = "known_for"
+            case profilePath = "profile_path"
         }
     }
     struct KnownFor: Codable, Sendable {
@@ -341,22 +377,37 @@ final class TMDBClient: @unchecked Sendable {
         return exact.max { ($0.popularity ?? 0) < ($1.popularity ?? 0) }?.id
     }
 
-    /// A voice actor known only by name (an English dub cast from AniList,
-    /// whose credits TMDB never lists on the anime itself): the one TMDB
-    /// person with exactly this name and a voice credit in animation. nil
-    /// when no one qualifies, or more than one does: a name two people share
-    /// is not guessed at.
-    func voiceActorPersonId(name: String) async -> Int? {
+    /// A voice actor known only by name (an English dub cast, whose credits
+    /// TMDB never lists on the dubbed title itself): the one TMDB person with
+    /// exactly this name and a role in animation, with their photo. nil when
+    /// no one qualifies, or more than one does: a name two people share is
+    /// not guessed at.
+    func voiceActor(name: String) async -> TMDBVoiceActor? {
         let target = Self.normalizedName(name)
         guard !target.isEmpty, let search: TMDBPersonSearchResponse = try? await request(
             path: "search/person", queryItems: [URLQueryItem(name: "query", value: name)]) else { return nil }
         let candidates = (search.results ?? []).filter { $0.name.map(Self.normalizedName) == target }.prefix(4)
-        var qualifying: [Int] = []
+        var qualifying: [TMDBVoiceActor] = []
         for candidate in candidates {
             guard let filmography = await personFilmography(personId: candidate.id) else { continue }
-            if Self.hasAnimationVoiceCredit(filmography.cast) { qualifying.append(candidate.id) }
+            if Self.hasAnimationVoiceCredit(filmography.cast) {
+                qualifying.append(TMDBVoiceActor(personId: candidate.id, profilePath: candidate.profilePath))
+            }
         }
         return qualifying.count == 1 ? qualifying[0] : nil
+    }
+
+    /// A title's original title and language, its English title and its year:
+    /// what an English dub's page is found by (`DubDatabaseClient`).
+    func originalTitle(tmdbId: Int, isMovie: Bool) async -> TMDBOriginalTitle? {
+        guard let response: TMDBOriginalTitleResponse = try? await request(
+            path: isMovie ? "movie/\(tmdbId)" : "tv/\(tmdbId)") else { return nil }
+        guard let original = response.originalTitle ?? response.originalName,
+              let language = response.originalLanguage else { return nil }
+        let date = response.releaseDate ?? response.firstAirDate
+        return TMDBOriginalTitle(title: original, language: language,
+                                 englishTitle: response.title ?? response.name ?? original,
+                                 year: date.flatMap { Int($0.prefix(4)) })
     }
 
     /// A role in an Animation title (genre 16), which is a voice role: TMDB

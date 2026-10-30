@@ -96,7 +96,7 @@ final class EnglishDubCastTests: XCTestCase {
         let season2 = [character("Rival", "MAIN", actor: 3), character("Hero", "MAIN", actor: 1),
                        character("Old Man", "SUPPORTING", actor: 2)]
         let credits = EnglishDubCast.combine([season1, season2])
-        XCTAssertEqual(credits.map(\.actor.id), [1, 3, 2])
+        XCTAssertEqual(credits.map(\.key), ["anilist:1", "anilist:3", "anilist:2"])
         XCTAssertEqual(credits[0].characters, ["Hero"])
         XCTAssertEqual(credits[2].characters, ["Friend", "Old Man"])
     }

@@ -57,11 +57,15 @@ enum OpenSourceLicenses {
     """
 
     /// The Apple TV app's English Dub Cast row (iOS has none).
-    static let aniListAttribution = """
+    static let dubCastAttribution = """
     English dub casts and voice actor photos for anime are provided by AniList (anilist.co), \
     used under the AniList API terms for non-commercial use. Rivulet is not affiliated with \
     AniList. Titles are matched to AniList with Fribb's anime-lists \
     (github.com/Fribb/anime-lists), built from anime-offline-database and Anime-Lists.
+
+    English dub casts for other animation come from The Dubbing Database \
+    (dubdb.fandom.com), whose text is available under the Creative Commons \
+    Attribution-ShareAlike license (CC BY-SA). Rivulet is not affiliated with it or with Fandom.
     """
 
     static var entries: [Entry] {

@@ -637,7 +637,7 @@ enum InfoPopupContent {
             row.alignment = .center
             stack.addArrangedSubview(row)
         }
-        stack.addArrangedSubview(label(OpenSourceLicenses.aniListAttribution, size: 24, weight: .regular,
+        stack.addArrangedSubview(label(OpenSourceLicenses.dubCastAttribution, size: 24, weight: .regular,
                                        color: .white.withAlphaComponent(0.85), lines: 0))
 
         for entry in OpenSourceLicenses.entries {

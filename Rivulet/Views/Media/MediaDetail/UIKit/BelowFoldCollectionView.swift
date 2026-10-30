@@ -160,13 +160,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     private struct CastEntry { let person: MediaPerson; let subtitle: String? }
 
-    /// The English Dub Cast row, by item id ("dub:<AniList staff id>"): its
-    /// own store, so a reload's `ingest` keeps it.
+    /// The English Dub Cast row, by item id ("dub:<credit key>"): its own
+    /// store, so a reload's `ingest` keeps it.
     private var dubEntriesByID: [String: CastEntry] = [:]
     private var cachedDubOrder: [BelowFoldItem] = []
-    /// A dub actor's TMDB person, once looked up: nil when the name matched no
-    /// one, or more than one, with animation voice credits (no link).
-    private var dubPersonIDs: [String: Int?] = [:]
 
     // MARK: - Init
 
@@ -632,11 +629,11 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         var entries: [String: CastEntry] = [:]
         var order: [BelowFoldItem] = []
         for credit in credits {
-            let id = "dub:\(credit.actor.id)"
+            let id = "dub:\(credit.key)"
             guard entries[id] == nil else { continue }
-            let person = MediaPerson(id: "anilist:\(credit.actor.id)", name: credit.actor.name,
+            let person = MediaPerson(id: credit.key, name: credit.name,
                                      role: credit.characters.prefix(2).joined(separator: " / "),
-                                     imageURL: credit.actor.image)
+                                     imageURL: credit.image)
             entries[id] = CastEntry(person: person, subtitle: nil)
             order.append(.cast(id))
         }
@@ -646,22 +643,13 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     }
 
     /// An actor page only for a TMDB person matched with confidence
-    /// (`TMDBClient.voiceActorPersonId`); otherwise Select does nothing.
+    /// (`DubActorMatcher`); otherwise Select does nothing.
     private func openDubActor(id: String, entry: CastEntry) {
-        func open(_ tmdbID: Int) {
-            var person = entry.person
-            person.tmdbPersonId = tmdbID
-            onSelectPerson?(person)
-        }
-        if let known = dubPersonIDs[id] {
-            if let known { open(known) }
-            return
-        }
         Task { [weak self] in
-            let match = await TMDBClient.shared.voiceActorPersonId(name: entry.person.name)
-            guard let self else { return }
-            self.dubPersonIDs[id] = .some(match)
-            if let match { open(match) }
+            guard let match = await DubActorMatcher.match(entry.person.name) else { return }
+            var person = entry.person
+            person.tmdbPersonId = match.personId
+            self?.onSelectPerson?(person)
         }
     }
 

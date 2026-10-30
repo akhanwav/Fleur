@@ -626,10 +626,10 @@ releases its tuner).
 - **Decoded images are dropped**, and the audio session is deactivated unless
   a song is playing or a video player is up.
 
-### English Dub Cast (anime)
+### English Dub Cast (animation)
 
-The detail page's row under Cast & Crew: an anime title's English voice actors
-and their characters (`Services/Anime/`). TMDB cannot supply it: measured on 33
+The detail page's row under Cast & Crew: an animated title's English voice
+actors and their characters (`Services/DubCast/`). TMDB cannot supply it: measured on 33
 dubbed titles, its credits list only the Japanese cast, and words like
 "English" in them are characters ("Soldier of the English Army").
 
@@ -651,7 +651,16 @@ dubbed titles, its credits list only the Japanese cast, and words like
   (`TMDBClient.voiceActorPersonId`): one person with exactly that name and a
   role in an Animation title, else no link. TMDB marks a dub role "(voice)",
   "(English Dub)" or not at all, so the rule cannot ask for the marker.
-- Credited on the tvOS Licenses & Legal screen (`aniListAttribution`).
+- **Other non-English animation: The Dubbing Database** (dubdb.fandom.com,
+  CC BY-SA), when AniList has no cast (`DubDatabaseClient`). TMDB and Wikidata
+  have none (TMDB 0 of 28 known English voices on 21 French, Spanish and Danish
+  titles; Wikidata 1 title). Its pages carry no TMDB or IMDb id, so matching is
+  strict: the original's page in TMDB's original language and year, and an
+  English page naming the same work (`media`, shared by both: "Miraculous
+  Ladybug"). Looser matching put Sonic's and Bratz's casts on French films.
+  8 of the 21 titles match, with no wrong ones. Photos and links come from TMDB
+  by name (`DubActorMatcher`, the same rule as the actor links).
+- Credited on the tvOS Licenses & Legal screen (`dubCastAttribution`).
 
 ### Plex Metadata Hierarchy
 
@@ -1028,7 +1037,7 @@ item's `ref.providerID` names the server it came from.
 | Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
 | Music menus | `Views/Music/UIKit/MusicMenus.swift` |
 | End card (caught up on a show) | `Views/Player/UIKit/EndCardOverlayView.swift` |
-| English Dub Cast (anime) | `Services/Anime/EnglishDubCast.swift` |
+| English Dub Cast (animation) | `Services/DubCast/EnglishDubCast.swift` |
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
 | Content filter sources | `Services/Plex/Playback/ContentFilter/ContentFilterSources.swift` |
