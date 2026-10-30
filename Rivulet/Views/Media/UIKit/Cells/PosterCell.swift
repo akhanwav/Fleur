@@ -577,12 +577,13 @@ final class PosterCell: UICollectionViewCell {
         watchedBadge.isHidden = true
     }
 
+    /// A server show names its seasons ("3 Seasons"), as Search does; a TMDB
+    /// show gets one only where its surface asks (`showSeasonCount`).
     private func configureWatchedBadge(item: MediaItem) {
-        if item.kind == .show, let cp = item.childProgress, cp.total > 0, cp.total > cp.played {
-            showUnwatchedCount(cp.total - cp.played)
-            return
-        }
         watchedBadge.isHidden = true
+        if item.kind == .show, item.isMusic != true, !item.isMetadataOnly {
+            showSeasonCount(for: item)
+        }
     }
 
     private func showUnwatchedCount(_ count: Int) {
@@ -614,9 +615,28 @@ final class PosterCell: UICollectionViewCell {
     }
 
     private var seasonsTask: Task<Void, Never>?
+    private var recentSeasonsTask: Task<Void, Never>?
 
-    /// Search: a show's tag names its seasons ("3 Seasons") in place of the
-    /// unwatched-episode count. Call after `configure`, which clears it.
+    /// Recently Added: a show's caption names the seasons that came in last
+    /// ("Season 3", "Seasons 1–3") in place of its year. Call after `configure`.
+    func showRecentSeasons(for item: MediaItem) {
+        recentSeasonsTask?.cancel()
+        guard item.kind == .show, !item.isMetadataOnly else { return }
+        if let known = TitleSeasons.knownRecentLabel(for: item.ref) {
+            if let known { caption.setDetail(known) }
+            return
+        }
+        let ref = item.ref
+        recentSeasonsTask = Task { [weak self] in
+            let label = await TitleSeasons.recentLabel(for: item)
+            guard !Task.isCancelled, let self, self.seasonsRef == ref, let label else { return }
+            self.caption.setDetail(label)
+        }
+    }
+
+    /// A show's tag names its seasons ("3 Seasons") in place of the
+    /// unwatched-episode count. `configure` asks for it on a server show;
+    /// Search calls it for TMDB shows too.
     func showSeasonCount(for item: MediaItem) {
         seasonsTask?.cancel()
         watchedBadge.isHidden = true
@@ -647,6 +667,8 @@ final class PosterCell: UICollectionViewCell {
         showTitleRef = nil
         seasonsTask?.cancel()
         seasonsTask = nil
+        recentSeasonsTask?.cancel()
+        recentSeasonsTask = nil
         seasonsRef = nil
     }
 }
@@ -680,12 +702,13 @@ enum SeasonShowTitles {
     }
 }
 
-/// How many seasons a show has, not counting Specials (season 0). Read once
-/// per show from its season list and kept for the session.
+/// A show's seasons, read once per show and kept for the session: how many
+/// there are, not counting Specials (season 0), and which came in last.
 @MainActor
 enum TitleSeasons {
     private static var counts: [MediaItemRef: Int?] = [:]
-    private static var inFlight: [MediaItemRef: Task<Int?, Never>] = [:]
+    private static var lists: [MediaItemRef: [MediaItem]?] = [:]
+    private static var inFlight: [MediaItemRef: Task<[MediaItem]?, Never>] = [:]
 
     /// `.some(nil)` when the read found nothing; nil before the first read.
     static func known(for ref: MediaItemRef) -> Int?? { counts[ref] }
@@ -693,24 +716,62 @@ enum TitleSeasons {
     static func count(for show: MediaItem) async -> Int? {
         let ref = show.ref
         if let known = counts[ref] { return known }
-        if let task = inFlight[ref] { return await task.value }
-        let task = Task<Int?, Never> {
-            // A TMDB title (Search's suggestions and Trending) has no provider
-            // to list seasons; TMDB's detail counts them, Specials excluded,
-            // and is cached on disk for the detail page anyway.
-            if show.isMetadataOnly, let decoded = TMDBMediaMapper.decodeItemID(ref.itemID) {
-                return await TMDBDiscoverService.shared.fetchDetail(tmdbId: decoded.tmdbId, type: decoded.type)?
-                    .numberOfSeasons
-            }
-            guard let provider = MediaProviderRegistry.shared.provider(for: ref.providerID),
-                  let seasons = try? await provider.children(of: ref) else { return nil }
-            return seasons.filter { $0.kind == .season && $0.seasonNumber != 0 }.count
+        let count: Int?
+        // A TMDB title (Search's suggestions and Trending) has no provider
+        // to list seasons; TMDB's detail counts them, Specials excluded,
+        // and is cached on disk for the detail page anyway.
+        if show.isMetadataOnly, let decoded = TMDBMediaMapper.decodeItemID(ref.itemID) {
+            count = await TMDBDiscoverService.shared.fetchDetail(tmdbId: decoded.tmdbId, type: decoded.type)?
+                .numberOfSeasons
+        } else {
+            count = await seasons(for: show)?.filter { $0.seasonNumber != 0 }.count
         }
-        inFlight[ref] = task
-        let count = await task.value
-        inFlight[ref] = nil
         counts[ref] = .some(count)
         return count
+    }
+
+    /// The label already worked out for a Recently Added show, if its
+    /// seasons were read.
+    static func knownRecentLabel(for ref: MediaItemRef) -> String?? {
+        lists[ref].map { $0.flatMap(recentLabel(seasons:)) }
+    }
+
+    static func recentLabel(for show: MediaItem) async -> String? {
+        await seasons(for: show).flatMap(recentLabel(seasons:))
+    }
+
+    /// The seasons that came in last: every season added within a day of
+    /// the newest one, Specials aside. "Season 3", "Seasons 1–3" for a run,
+    /// "Seasons 2, 4" otherwise.
+    nonisolated static func recentLabel(seasons: [MediaItem]) -> String? {
+        let dated = seasons.compactMap { season -> (number: Int, added: Date)? in
+            guard let number = season.seasonNumber, number > 0, let added = season.addedAt else { return nil }
+            return (number, added)
+        }
+        guard let newest = dated.map(\.added).max() else { return nil }
+        let numbers = dated.filter { newest.timeIntervalSince($0.added) < 86_400 }.map(\.number).sorted()
+        guard let first = numbers.first, let last = numbers.last else { return nil }
+        if numbers.count == 1 { return "Season \(first)" }
+        if last - first == numbers.count - 1 { return "Seasons \(first)–\(last)" }
+        return "Seasons " + numbers.map(String.init).joined(separator: ", ")
+    }
+
+    /// A server show's seasons; nil for a TMDB title or a failed read.
+    private static func seasons(for show: MediaItem) async -> [MediaItem]? {
+        let ref = show.ref
+        if let known = lists[ref] { return known }
+        if let task = inFlight[ref] { return await task.value }
+        let task = Task<[MediaItem]?, Never> {
+            guard !show.isMetadataOnly,
+                  let provider = MediaProviderRegistry.shared.provider(for: ref.providerID),
+                  let children = try? await provider.children(of: ref) else { return nil }
+            return children.filter { $0.kind == .season }
+        }
+        inFlight[ref] = task
+        let list = await task.value
+        inFlight[ref] = nil
+        lists[ref] = .some(list)
+        return list
     }
 }
 

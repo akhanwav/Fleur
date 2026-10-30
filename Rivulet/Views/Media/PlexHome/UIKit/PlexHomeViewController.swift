@@ -3633,6 +3633,10 @@ final class PlexHomeViewController: UIViewController {
                 } else {
                     Perf.interval(.cellPrepare, key: perfKey) {
                         cell.configure(item: displayed(item))
+                        if case .rowGrid(let page) = mode, rowGridChoices.isDefault,
+                           Self.listsRecentlyAdded(page.query.rowKey) {
+                            cell.showRecentSeasons(for: item)
+                        }
                     }
                 }
             }
@@ -4828,6 +4832,8 @@ final class PlexHomeViewController: UIViewController {
                     // The tags name the server, so search drops the source badge.
                     cell.showVersionTags(for: item)
                     if item.kind == .show { cell.showSeasonCount(for: item) }
+                } else if Self.listsRecentlyAdded(section.hubKey) {
+                    cell.showRecentSeasons(for: item)
                 }
             }
             return cell
@@ -5631,6 +5637,13 @@ final class PlexHomeViewController: UIViewController {
             return true
         }
         return (hub.title ?? "").lowercased().contains("continue")
+    }
+
+    /// A Recently Added row's key: a show in it names the seasons that came
+    /// in (`PosterCell.showRecentSeasons`) instead of its year.
+    nonisolated static func listsRecentlyAdded(_ key: String?) -> Bool {
+        guard let key else { return false }
+        return key.contains("/recentlyAdded") || key.contains("sort=addedAt")
     }
 
     /// A row that pages from the server (a hub key, not Continue Watching)
