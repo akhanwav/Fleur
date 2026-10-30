@@ -33,6 +33,8 @@ nonisolated enum BelowFoldSectionKind: Hashable, Sendable {
     case collection
     case related
     case cast
+    /// English Dub Cast: an anime title's English voice actors (`EnglishDubCast`).
+    case dubCast
     case whereToWatch
     case servers
     case moreLikeThis
@@ -157,6 +159,14 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     private var showDetail: MediaItemDetail?
 
     private struct CastEntry { let person: MediaPerson; let subtitle: String? }
+
+    /// The English Dub Cast row, by item id ("dub:<AniList staff id>"): its
+    /// own store, so a reload's `ingest` keeps it.
+    private var dubEntriesByID: [String: CastEntry] = [:]
+    private var cachedDubOrder: [BelowFoldItem] = []
+    /// A dub actor's TMDB person, once looked up: nil when the name matched no
+    /// one, or more than one, with animation voice credits (no link).
+    private var dubPersonIDs: [String: Int?] = [:]
 
     // MARK: - Init
 
@@ -301,7 +311,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                     topInset: isPrimary ? max(0, peek - relatedLift) : 0,
                     sectionBottomInset: isPrimary ? 36 : 56
                 )
-            case .cast:
+            case .cast, .dubCast:
                 return self.shelfSection(
                     itemW: Self.castWidth,
                     itemH: CastCell.height,
@@ -523,7 +533,9 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
                 return cell
             case .cast(let id):
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: CastCollectionCell.reuseID, for: indexPath) as! CastCollectionCell
-                if let e = self.castEntriesByID[id] { cell.configure(person: e.person, fallbackSubtitle: e.subtitle) }
+                if let e = self.castEntriesByID[id] ?? self.dubEntriesByID[id] {
+                    cell.configure(person: e.person, fallbackSubtitle: e.subtitle)
+                }
                 return cell
             case .whereToWatch:
                 let cell = cv.dequeueReusableCell(withReuseIdentifier: WhereToWatchCollectionCell.reuseID, for: indexPath) as! WhereToWatchCollectionCell
@@ -563,6 +575,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             case .extras:  header.configure(title: "Extras")
             case .related: header.configure(title: "Related")
             case .cast:    header.configure(title: "Cast & Crew")
+            case .dubCast: header.configure(title: "English Dub Cast")
             case .episodes, .collection, .about, .info,
                  .whereToWatch, .servers, .moreLikeThis: header.configure(title: "")
             }
@@ -613,6 +626,45 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         )
     }
 
+    // MARK: - English Dub Cast
+
+    private func applyDubCast(_ credits: [EnglishDubCast.Credit]) {
+        var entries: [String: CastEntry] = [:]
+        var order: [BelowFoldItem] = []
+        for credit in credits {
+            let id = "dub:\(credit.actor.id)"
+            guard entries[id] == nil else { continue }
+            let person = MediaPerson(id: "anilist:\(credit.actor.id)", name: credit.actor.name,
+                                     role: credit.characters.prefix(2).joined(separator: " / "),
+                                     imageURL: credit.actor.image)
+            entries[id] = CastEntry(person: person, subtitle: nil)
+            order.append(.cast(id))
+        }
+        dubEntriesByID = entries
+        cachedDubOrder = order
+        applySnapshot()
+    }
+
+    /// An actor page only for a TMDB person matched with confidence
+    /// (`TMDBClient.voiceActorPersonId`); otherwise Select does nothing.
+    private func openDubActor(id: String, entry: CastEntry) {
+        func open(_ tmdbID: Int) {
+            var person = entry.person
+            person.tmdbPersonId = tmdbID
+            onSelectPerson?(person)
+        }
+        if let known = dubPersonIDs[id] {
+            if let known { open(known) }
+            return
+        }
+        Task { [weak self] in
+            let match = await TMDBClient.shared.voiceActorPersonId(name: entry.person.name)
+            guard let self else { return }
+            self.dubPersonIDs[id] = .some(match)
+            if let match { open(match) }
+        }
+    }
+
     // MARK: - Configure (fetch + populate)
 
     /// Load + render the below-fold for `item`. `detail` (if the chrome already
@@ -620,6 +672,10 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
     func configure(item: MediaItem, detail: MediaItemDetail?) {
         loadToken &+= 1
         let token = loadToken
+        if configuredItem?.ref != item.ref {
+            dubEntriesByID = [:]
+            cachedDubOrder = []
+        }
         configuredItem = item
         isLoadingEpisodes = false
         Task { [weak self] in
@@ -641,6 +697,15 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
             self.ingest(content)
             self.applySnapshot()
             self.scrollToInitialEpisode(item: self.activeCopy(for: item)?.show ?? item)
+            // English Dub Cast: its own task, adding the row under Cast & Crew
+            // once AniList answers; nothing for a title without one.
+            let dubDetail = content.detail, dubShowDetail = content.showDetail
+            Task { [weak self] in
+                let credits = await EnglishDubCastLoader.credits(item: item, detail: dubDetail,
+                                                                 showDetail: dubShowDetail)
+                guard let self, self.loadToken == token, !credits.isEmpty else { return }
+                self.applyDubCast(credits)
+            }
             // Cross-server check: its own task, patching the Servers cell in
             // place when it answers, so neither the render above nor the
             // advisory below waits on it. An owned title is found by the Plex
@@ -1128,6 +1193,7 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
         // shows on every Plex title.
         if !cachedEpisodes.isEmpty { add(.episodes, cachedEpisodes) }
         if !cachedCastOrder.isEmpty { add(.cast, cachedCastOrder.map { $0.1 }) }
+        if !cachedDubOrder.isEmpty { add(.dubCast, cachedDubOrder) }
         if serverAvailability != nil { add(.servers, [.servers]) }
         // Where to Watch and More Like This are TMDB's, for unowned titles only.
         if let avail = watchAvailability, !avail.options.isEmpty { add(.whereToWatch, [.whereToWatch]) }
@@ -1425,9 +1491,12 @@ final class BelowFoldCollectionView: UIView, UICollectionViewDelegate {
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         // Cast / crew cell Select → open the person detail page.
-        if case let .cast(id) = dataSource.itemIdentifier(for: indexPath),
-           let entry = castEntriesByID[id] {
-            onSelectPerson?(entry.person)
+        if case let .cast(id) = dataSource.itemIdentifier(for: indexPath) {
+            if let entry = castEntriesByID[id] {
+                onSelectPerson?(entry.person)
+            } else if let entry = dubEntriesByID[id] {
+                openDubActor(id: id, entry: entry)
+            }
         }
     }
 

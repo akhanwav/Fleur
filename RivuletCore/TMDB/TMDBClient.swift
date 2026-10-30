@@ -341,6 +341,36 @@ final class TMDBClient: @unchecked Sendable {
         return exact.max { ($0.popularity ?? 0) < ($1.popularity ?? 0) }?.id
     }
 
+    /// A voice actor known only by name (an English dub cast from AniList,
+    /// whose credits TMDB never lists on the anime itself): the one TMDB
+    /// person with exactly this name and a voice credit in animation. nil
+    /// when no one qualifies, or more than one does: a name two people share
+    /// is not guessed at.
+    func voiceActorPersonId(name: String) async -> Int? {
+        let target = Self.normalizedName(name)
+        guard !target.isEmpty, let search: TMDBPersonSearchResponse = try? await request(
+            path: "search/person", queryItems: [URLQueryItem(name: "query", value: name)]) else { return nil }
+        let candidates = (search.results ?? []).filter { $0.name.map(Self.normalizedName) == target }.prefix(4)
+        var qualifying: [Int] = []
+        for candidate in candidates {
+            guard let filmography = await personFilmography(personId: candidate.id) else { continue }
+            if Self.hasAnimationVoiceCredit(filmography.cast) { qualifying.append(candidate.id) }
+        }
+        return qualifying.count == 1 ? qualifying[0] : nil
+    }
+
+    /// A role in an Animation title (genre 16), which is a voice role: TMDB
+    /// marks one "(voice)", "(English Dub)" or not at all (measured: Brittney
+    /// Karbowski's "Hinata Hidaka (English Dub)", her unmarked "Sister" in
+    /// Halo Legends). Appearing as oneself is not.
+    static func hasAnimationVoiceCredit(_ cast: [TMDBPersonCredit]) -> Bool {
+        cast.contains { credit in
+            guard (credit.genreIds ?? []).contains(16) else { return false }
+            let character = (credit.character ?? "").lowercased()
+            return !["himself", "herself", "themselves", "self"].contains { character.contains($0) }
+        }
+    }
+
     /// Names compared without case, accents, punctuation or extra spaces:
     /// "Robert Downey Jr." and "Robert Downey Jr" are one person.
     static func normalizedName(_ name: String) -> String {

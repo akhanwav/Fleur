@@ -637,6 +637,8 @@ enum InfoPopupContent {
             row.alignment = .center
             stack.addArrangedSubview(row)
         }
+        stack.addArrangedSubview(label(OpenSourceLicenses.aniListAttribution, size: 24, weight: .regular,
+                                       color: .white.withAlphaComponent(0.85), lines: 0))
 
         for entry in OpenSourceLicenses.entries {
             if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(28, after: last) }

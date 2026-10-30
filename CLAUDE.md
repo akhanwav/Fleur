@@ -626,6 +626,33 @@ releases its tuner).
 - **Decoded images are dropped**, and the audio session is deactivated unless
   a song is playing or a video player is up.
 
+### English Dub Cast (anime)
+
+The detail page's row under Cast & Crew: an anime title's English voice actors
+and their characters (`Services/Anime/`). TMDB cannot supply it: measured on 33
+dubbed titles, its credits list only the Japanese cast, and words like
+"English" in them are characters ("Soldier of the English Army").
+
+- **Source: AniList's GraphQL API** (`AniListClient`), under its terms: free for
+  non-commercial use, no bulk collection. One batched query per page, each
+  entry cached on disk 30 days, requests spaced for the 30-a-minute limit
+  (90 when AniList is not degraded) and a 429's `Retry-After` honoured. Send
+  the named user agent: Cloudflare in front of it refuses generic clients (403).
+- **Matching: Fribb's anime-lists** (`AnimeIDMap`), the only map from TMDB/TVDB
+  to AniList. Downloaded weekly with `If-None-Match`, trimmed to the entries
+  linking them. A show is several AniList entries (Attack on Titan 9): a
+  season or episode page takes its season's, a show page combines them, main
+  characters first, each actor once (`EnglishDubCast.combine`). A film's TMDB
+  id is a list in that file (`{"movie": [129]}`), a show's a number.
+- **Shown only for animation with an English audio track on some copy** on the
+  servers (Ways to Watch's copies, a show's by the episode Play would start),
+  and only when AniList has an English cast.
+- **Actor links only on a confident TMDB match**
+  (`TMDBClient.voiceActorPersonId`): one person with exactly that name and a
+  role in an Animation title, else no link. TMDB marks a dub role "(voice)",
+  "(English Dub)" or not at all, so the rule cannot ask for the marker.
+- Credited on the tvOS Licenses & Legal screen (`aniListAttribution`).
+
 ### Plex Metadata Hierarchy
 
 For TV shows:
@@ -1001,6 +1028,7 @@ item's `ref.providerID` names the server it came from.
 | Music shared primitives | `Views/Music/UIKit/MusicChrome.swift` |
 | Music menus | `Views/Music/UIKit/MusicMenus.swift` |
 | End card (caught up on a show) | `Views/Player/UIKit/EndCardOverlayView.swift` |
+| English Dub Cast (anime) | `Services/Anime/EnglishDubCast.swift` |
 | Caption renderer | `Views/Player/UIKit/CaptionOverlayView.swift` |
 | libass layer (ASS/SSA) | `Views/Player/UIKit/ASSOverlayView.swift` |
 | Content filter sources | `Services/Plex/Playback/ContentFilter/ContentFilterSources.swift` |
