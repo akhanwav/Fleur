@@ -693,7 +693,7 @@ final class MediaDetailChromeView: UIView {
 
     private weak var playPill: FocusableActionButton?
 
-    /// Ways to Watch button after Info, once the title has a copy to list:
+    /// Ways to Watch button, last in the row, once the title has a copy to list:
     /// every owned title (one copy included, so its server and quality can
     /// always be read) and any unowned one another server holds.
     private func insertWaysToWatchButtonIfNeeded(force: Bool = false) {
@@ -703,12 +703,7 @@ final class MediaDetailChromeView: UIView {
             guard let self, let button, let host = self.hostViewController else { return }
             self.copySelection.present(from: host, sourceFrame: button.convert(button.bounds, to: nil))
         }
-        if let info = infoButton ?? metadataInfoButton,
-           let index = actionButtonsStack.arrangedSubviews.firstIndex(of: info) {
-            actionButtonsStack.insertArrangedSubview(button, at: index + 1)
-        } else {
-            actionButtonsStack.addArrangedSubview(button)
-        }
+        actionButtonsStack.addArrangedSubview(button)
         versionsButton = button
     }
 
@@ -721,7 +716,12 @@ final class MediaDetailChromeView: UIView {
         trailer.onPrimaryAction = {
             UIApplication.shared.open(url, options: [:], completionHandler: nil)
         }
-        actionButtonsStack.addArrangedSubview(trailer)
+        // Ways to Watch stays last.
+        if let versions = versionsButton, let index = actionButtonsStack.arrangedSubviews.firstIndex(of: versions) {
+            actionButtonsStack.insertArrangedSubview(trailer, at: index)
+        } else {
+            actionButtonsStack.addArrangedSubview(trailer)
+        }
     }
 
     // MARK: - Row builders
