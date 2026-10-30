@@ -417,9 +417,12 @@ final class PostVideoButtonView: UIControl {
     private let titleLabel = UILabel()
     private let stack = UIStackView()
     private var isPrimary: Bool
+    /// Every size multiplied: the end card's smaller panel (0.8). Up Next is 1.
+    private let scale: CGFloat
 
-    init(isPrimary: Bool) {
+    init(isPrimary: Bool, scale: CGFloat = 1) {
         self.isPrimary = isPrimary
+        self.scale = scale
         super.init(frame: .zero)
         setupViews()
         applyLook(focused: false)
@@ -439,7 +442,7 @@ final class PostVideoButtonView: UIControl {
         titleLabel.textColor = .white
 
         stack.axis = .horizontal
-        stack.spacing = 12
+        stack.spacing = 12 * scale
         stack.alignment = .center
         stack.isUserInteractionEnabled = false
         stack.addArrangedSubview(iconView)
@@ -454,8 +457,8 @@ final class PostVideoButtonView: UIControl {
 
     private func applyMetrics() {
         NSLayoutConstraint.deactivate(metricConstraints)
-        let h: CGFloat = isPrimary ? 32 : 28
-        let v: CGFloat = isPrimary ? 16 : 14
+        let h: CGFloat = (isPrimary ? 32 : 28) * scale
+        let v: CGFloat = (isPrimary ? 16 : 14) * scale
         metricConstraints = [
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: h),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -h),
@@ -463,7 +466,7 @@ final class PostVideoButtonView: UIControl {
             stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -v),
         ]
         NSLayoutConstraint.activate(metricConstraints)
-        titleLabel.font = .systemFont(ofSize: isPrimary ? 24 : 22, weight: isPrimary ? .semibold : .medium)
+        titleLabel.font = .systemFont(ofSize: (isPrimary ? 24 : 22) * scale, weight: isPrimary ? .semibold : .medium)
     }
 
     func configure(title: String, systemImage: String?) {
@@ -472,7 +475,7 @@ final class PostVideoButtonView: UIControl {
             iconView.image = UIImage(
                 systemName: systemImage,
                 withConfiguration: UIImage.SymbolConfiguration(
-                    pointSize: isPrimary ? 22 : 18, weight: .semibold))
+                    pointSize: (isPrimary ? 22 : 18) * scale, weight: .semibold))
             iconView.isHidden = false
         } else {
             iconView.image = nil

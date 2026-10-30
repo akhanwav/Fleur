@@ -10,8 +10,9 @@
 //  `UniversalPlayerViewModel.endCardSeconds` unless the person moves on it.
 //  Movies get no panel.
 //
-//  Like the Up Next card, the view IS the panel's footprint: the container
-//  pins it to the trailing edge, so the credits stay visible beside it.
+//  The view IS the panel's footprint, at 80% of the Up Next card: the
+//  container pins it to the trailing edge just above the progress bar, so the
+//  credits stay visible beside it and the bar and playhead stay clear.
 //
 
 import UIKit
@@ -19,12 +20,21 @@ import UIKit
 final class EndCardOverlayView: UIView {
 
     private enum Metrics {
-        // The Up Next card's (`PostVideoOverlayView`).
-        static let width: CGFloat = 640
-        static let padding: CGFloat = 40
-        static let cornerRadius: CGFloat = 40
+        /// The Up Next card's sizes (`PostVideoOverlayView`), all scaled together.
+        static let scale: CGFloat = 0.8
+        static let width: CGFloat = 640 * scale
+        static let padding: CGFloat = 40 * scale
+        static let cornerRadius: CGFloat = 40 * scale
         static let offscreen: CGFloat = 720
-        static let posterGap: CGFloat = 14
+        static let posterGap: CGFloat = 14 * scale
+        static let posterRadius: CGFloat = 10 * scale
+        static let titleSize: CGFloat = 32 * scale
+        static let headingSize: CGFloat = 22 * scale
+        static let captionSize: CGFloat = 20 * scale
+        static let spacing: CGFloat = 16 * scale
+        static let afterTitle: CGFloat = 28 * scale
+        static let afterPosters: CGFloat = 10 * scale
+        static let afterCaption: CGFloat = 24 * scale
     }
 
     /// A poster was selected.
@@ -41,7 +51,7 @@ final class EndCardOverlayView: UIView {
     private let postersRow = UIStackView()
     /// The focused poster's title and year, under the row.
     private let focusedTitleLabel = UILabel()
-    private let backButton = PostVideoButtonView(isPrimary: true)
+    private let backButton = PostVideoButtonView(isPrimary: true, scale: Metrics.scale)
     private var posters: [EndCardPosterView] = []
     private var hasShow = false
 
@@ -62,12 +72,12 @@ final class EndCardOverlayView: UIView {
         glass.layer.cornerRadius = Metrics.cornerRadius
         glass.layer.cornerCurve = .continuous
 
-        titleLabel.font = .systemFont(ofSize: 32, weight: .bold)
+        titleLabel.font = .systemFont(ofSize: Metrics.titleSize, weight: .bold)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 2
-        headingLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        headingLabel.font = .systemFont(ofSize: Metrics.headingSize, weight: .semibold)
         headingLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-        focusedTitleLabel.font = .systemFont(ofSize: 20, weight: .medium)
+        focusedTitleLabel.font = .systemFont(ofSize: Metrics.captionSize, weight: .medium)
         focusedTitleLabel.textColor = UIColor.white.withAlphaComponent(0.7)
         focusedTitleLabel.text = " "
 
@@ -81,12 +91,12 @@ final class EndCardOverlayView: UIView {
         backButton.onUserFocus = { [weak self] in self?.onUserFocusMove?() }
 
         contentStack.axis = .vertical
-        contentStack.spacing = 16
+        contentStack.spacing = Metrics.spacing
         contentStack.alignment = .leading
         [titleLabel, headingLabel, postersRow, focusedTitleLabel, backButton].forEach(contentStack.addArrangedSubview)
-        contentStack.setCustomSpacing(28, after: titleLabel)
-        contentStack.setCustomSpacing(10, after: postersRow)
-        contentStack.setCustomSpacing(24, after: focusedTitleLabel)
+        contentStack.setCustomSpacing(Metrics.afterTitle, after: titleLabel)
+        contentStack.setCustomSpacing(Metrics.afterPosters, after: postersRow)
+        contentStack.setCustomSpacing(Metrics.afterCaption, after: focusedTitleLabel)
 
         [glass, contentStack].forEach {
             addSubview($0)
@@ -122,7 +132,7 @@ final class EndCardOverlayView: UIView {
 
         posters.forEach { $0.removeFromSuperview() }
         posters = content.related.prefix(5).map { item in
-            let poster = EndCardPosterView(item: item)
+            let poster = EndCardPosterView(item: item, cornerRadius: Metrics.posterRadius)
             poster.onSelect = { [weak self] in self?.onSelect?(item) }
             poster.onFocus = { [weak self] focused, byUser in
                 guard let self else { return }
@@ -186,11 +196,11 @@ final class EndCardPosterView: UIControl {
     private let imageView = UIImageView()
     private var imageTask: Task<Void, Never>?
 
-    init(item: MediaItem) {
+    init(item: MediaItem, cornerRadius: CGFloat) {
         super.init(frame: .zero)
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
-        imageView.layer.cornerRadius = 10
+        imageView.layer.cornerRadius = cornerRadius
         imageView.layer.cornerCurve = .continuous
         imageView.backgroundColor = UIColor.white.withAlphaComponent(0.1)
         imageView.isUserInteractionEnabled = false

@@ -2224,6 +2224,10 @@ class PlayerContainerViewController: UIViewController {
         updateFocusIfNeeded()
     }
 
+    /// The end card's gap above the progress bar's top: the scrub ring reaches
+    /// 16 pt above the bar, and the rest is air.
+    private static let endCardBarClearance: CGFloat = 40
+
     /// Mounts or removes the end card. Up Next's card goes first: an episode
     /// with nothing after it reaches the end card through Up Next's loading.
     private func applyEndCard(_ show: Bool) {
@@ -2237,20 +2241,27 @@ class PlayerContainerViewController: UIViewController {
                 vm.openAfterExit(show)
             }
             overlay.onUserFocusMove = { [weak self] in self?.viewModel?.holdEndCard() }
-            // The Up Next card's scrim and place: the credits stay in view beside it.
+            // The Up Next card's scrim, so the credits stay in view beside it.
             let scrim = SideScrimView()
             scrim.alpha = 0
             view.addSubview(scrim)
             scrim.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(overlay)
             overlay.translatesAutoresizingMaskIntoConstraints = false
+            // Just above where the progress bar sits, shown or not: the bar
+            // never moves, so the panel can't cover it or its playhead.
+            let bottom = progressBar.map {
+                overlay.bottomAnchor.constraint(equalTo: $0.topAnchor, constant: -Self.endCardBarClearance)
+            } ?? overlay.bottomAnchor.constraint(
+                equalTo: view.bottomAnchor,
+                constant: -(PlayerRailView.railHeight - PlayerRailView.barTop) - Self.endCardBarClearance)
             NSLayoutConstraint.activate([
                 scrim.topAnchor.constraint(equalTo: view.topAnchor),
                 scrim.bottomAnchor.constraint(equalTo: view.bottomAnchor),
                 scrim.trailingAnchor.constraint(equalTo: view.trailingAnchor),
                 scrim.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.6),
                 overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -PlayerRailView.sideInset),
-                overlay.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+                bottom,
             ])
             endCardOverlay = overlay
             endCardScrim = scrim
