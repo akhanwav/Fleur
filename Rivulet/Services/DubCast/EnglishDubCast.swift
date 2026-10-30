@@ -5,15 +5,17 @@
 //  EnglishDubCast.swift
 //  Rivulet
 //
-//  The detail page's English Dub Cast row: an anime title's English voice
-//  actors and their characters, from AniList (`AniListClient`) through
-//  Fribb's id map (`AnimeIDMap`).
+//  The detail page's English Dub Cast row: an animated title's English voice
+//  actors and their characters. Anime comes from AniList (`AniListClient`)
+//  through Fribb's id map (`AnimeIDMap`); a season or an episode page lists
+//  its own season's entry, a show page combines every entry, main
+//  characters first, each actor once. Other non-English animation comes from
+//  The Dubbing Database (`DubDatabaseClient`), matched strictly, with photos
+//  and links from TMDB by name (`DubActorMatcher`).
 //
 //  Shown only for animation that some copy on the servers can play in
 //  English: an English audio track on any copy of a film or episode, or on
-//  the episode Play would start for any copy of a show. A season or an
-//  episode page lists its own season's entry; a show page combines every
-//  entry, main characters first, each actor once.
+//  the episode Play would start for any copy of a show.
 //
 
 import Foundation
@@ -22,7 +24,10 @@ nonisolated enum EnglishDubCast {
 
     /// One actor in the row, with every character they voice in it.
     struct Credit: Equatable, Sendable {
-        let actor: AniListClient.VoiceActor
+        /// Unique in a row: the source and its id for the actor.
+        let key: String
+        let name: String
+        let image: URL?
         let characters: [String]
     }
 
@@ -46,7 +51,25 @@ nonisolated enum EnglishDubCast {
                 }
             }
         }
-        return order.prefix(limit).map { Credit(actor: $0, characters: characters[$0.id] ?? []) }
+        return order.prefix(limit).map {
+            Credit(key: "anilist:\($0.id)", name: $0.name, image: $0.image, characters: characters[$0.id] ?? [])
+        }
+    }
+
+    /// A Dubbing Database cast in the page's order, each actor once with all
+    /// their characters. Photos come later, from TMDB.
+    static func credits(_ roles: [DubDatabaseClient.Role], limit: Int = limit) -> [Credit] {
+        var order: [String] = []
+        var characters: [String: [String]] = [:]
+        for role in roles {
+            if characters[role.actor] == nil { order.append(role.actor) }
+            if !role.character.isEmpty, !(characters[role.actor] ?? []).contains(role.character) {
+                characters[role.actor, default: []].append(role.character)
+            }
+        }
+        return order.prefix(limit).map {
+            Credit(key: "dubdb:\($0)", name: $0, image: nil, characters: characters[$0] ?? [])
+        }
     }
 
     /// An English track, as Plex ("English") or Jellyfin ("eng") names it.
@@ -85,7 +108,8 @@ nonisolated enum EnglishDubCast {
 @MainActor
 enum EnglishDubCastLoader {
 
-    /// The row for a page, or empty when it has none to show.
+    /// The row for a page, or empty when it has none to show: AniList's
+    /// cast for anime it has, else The Dubbing Database's.
     static func credits(item: MediaItem, detail: MediaItemDetail?,
                         showDetail: MediaItemDetail?) async -> [EnglishDubCast.Credit] {
         guard item.ref.isPlex, !item.isMetadataOnly,
@@ -94,11 +118,36 @@ enum EnglishDubCastLoader {
               await anyCopyHasEnglishAudio(item: item, detail: detail, showDetail: showDetail)
         else { return [] }
         let entries = await AnimeIDMap.shared.entries(for: title)
-        guard !entries.isEmpty else { return [] }
-        // A long franchise has a dozen entries; the row needs the first few.
-        let ids = Array(entries.map(\.anilist).prefix(12))
-        let characters = await AniListClient.shared.characters(for: ids)
-        return EnglishDubCast.combine(ids.compactMap { characters[$0] })
+        if !entries.isEmpty {
+            // A long franchise has a dozen entries; the row needs the first few.
+            let ids = Array(entries.map(\.anilist).prefix(12))
+            let characters = await AniListClient.shared.characters(for: ids)
+            let credits = EnglishDubCast.combine(ids.compactMap { characters[$0] })
+            if !credits.isEmpty { return credits }
+        }
+        return await dubDatabaseCredits(for: title)
+    }
+
+    /// A non-English original's English dub on The Dubbing Database, with
+    /// each actor's TMDB photo where the name matches one person.
+    private static func dubDatabaseCredits(for title: AnimeIDMap.Title) async -> [EnglishDubCast.Credit] {
+        let tmdb: (id: Int, isMovie: Bool)
+        switch title {
+        case .movie(let id): tmdb = (id, true)
+        case .show(let id?, _, _): tmdb = (id, false)
+        case .show(nil, _, _): return []
+        }
+        guard let original = await TMDBClient.shared.originalTitle(tmdbId: tmdb.id, isMovie: tmdb.isMovie),
+              original.language != "en",
+              let roles = await DubDatabaseClient.shared.englishCast(
+                for: .init(tmdbId: tmdb.id, isMovie: tmdb.isMovie, original: original)),
+              !roles.isEmpty else { return [] }
+        let credits = EnglishDubCast.credits(roles)
+        let matches = await DubActorMatcher.matches(for: credits.map(\.name))
+        return credits.map { credit in
+            EnglishDubCast.Credit(key: credit.key, name: credit.name,
+                                  image: matches[credit.name]?.profileURL, characters: credit.characters)
+        }
     }
 
     /// An English track on this page's copy, or on any copy the servers hold
@@ -129,5 +178,40 @@ enum EnglishDubCastLoader {
             if found() { return true }
         }
         return found()
+    }
+}
+
+/// A dub actor's TMDB person, by exact name with a role in animation
+/// (`TMDBClient.voiceActor`): their photo for a Dubbing Database cast, and
+/// the actor page link for every dub cast. Read once per name per session.
+@MainActor
+enum DubActorMatcher {
+    private static var known: [String: TMDBVoiceActor?] = [:]
+    private static var inFlight: [String: Task<TMDBVoiceActor?, Never>] = [:]
+
+    static func match(_ name: String) async -> TMDBVoiceActor? {
+        if let known = known[name] { return known }
+        if let task = inFlight[name] { return await task.value }
+        let task = Task { await TMDBClient.shared.voiceActor(name: name) }
+        inFlight[name] = task
+        let match = await task.value
+        inFlight[name] = nil
+        known[name] = .some(match)
+        return match
+    }
+
+    /// Several names, four at a time.
+    static func matches(for names: [String]) async -> [String: TMDBVoiceActor] {
+        var result: [String: TMDBVoiceActor] = [:]
+        var index = 0
+        while index < names.count {
+            let batch = names[index..<min(index + 4, names.count)]
+            await withTaskGroup(of: (String, TMDBVoiceActor?).self) { group in
+                for name in batch { group.addTask { (name, await match(name)) } }
+                for await (name, match) in group { if let match { result[name] = match } }
+            }
+            index += 4
+        }
+        return result
     }
 }
