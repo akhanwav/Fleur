@@ -6866,16 +6866,13 @@ final class PlexHomeViewController: UIViewController {
                 // screen before the modal disappears so focus does not flash
                 // on the old source tile or visibly jump to the new one.
                 let rowPath = IndexPath(item: 0, section: indexPath.section)
-                // Search rows rest where its minimal reveal left them, not
-                // centred, so centring here moved the page under the exit
-                // flight. The row the carousel opened from is still on screen:
-                // leave it there.
-                let keepsPlace: Bool
-                if case .search = mode {
-                    keepsPlace = collectionView.indexPathsForVisibleItems.contains(rowPath)
-                } else {
-                    keepsPlace = false
-                }
+                // A row the page left fully on screen stays exactly there:
+                // centring it moved the page under the exit flight (the hero
+                // shifted when coming back to the top row, Search's minimal
+                // reveal jumped), and the scroll realized tiles afresh just
+                // before the flight snapshots them. Only a row partly off
+                // screen is brought into view.
+                let keepsPlace = isFullyVisible(rowPath)
                 if !keepsPlace {
                     collectionView.scrollToItem(at: rowPath, at: .centeredVertically, animated: false)
                 }
@@ -6887,12 +6884,21 @@ final class PlexHomeViewController: UIViewController {
                         row.prepareFocusRestoreLayout(on: indexPath.item)
                     }
                 }
-            } else {
+            } else if !isFullyVisible(indexPath) {
                 collectionView.scrollToItem(at: indexPath, at: [.centeredVertically, .centeredHorizontally], animated: false)
                 collectionView.layoutIfNeeded()
             }
         }
         return true
+    }
+
+    /// Whether an item sits wholly inside the visible part of the page.
+    private func isFullyVisible(_ indexPath: IndexPath) -> Bool {
+        guard let attributes = collectionView.layoutAttributesForItem(at: indexPath) else { return false }
+        let visible = collectionView.bounds.inset(by: collectionView.adjustedContentInset)
+        // A row may run past the screen edges sideways (its tiles scroll
+        // within it); only the vertical extent decides.
+        return attributes.frame.minY >= visible.minY - 0.5 && attributes.frame.maxY <= visible.maxY + 0.5
     }
 
     private func resetVisibleFocusAppearance(except target: PreviewSourceTarget?) {
@@ -7167,6 +7173,11 @@ final class PlexHomeViewController: UIViewController {
     private var offsetTargetY: CGFloat = 0
     private var offsetVelocity: CGFloat = 0
     private var offsetLastTick: CFTimeInterval = 0
+    /// The scroll's own unrounded position. The scroll view rounds its offset
+    /// to whole points, so easing from the value read back lost every step
+    /// under a point: the page stalled 2-3 pt short of its target and crept
+    /// the rest seconds later, a visible shift on coming back from a detail.
+    private var offsetExactY: CGFloat = 0
 
     /// Follows `targetY` with the system's focus-scroll model. A scroll already
     /// in flight is retargeted and keeps its speed, so rapid moves never restart.
@@ -7175,6 +7186,7 @@ final class PlexHomeViewController: UIViewController {
         guard offsetLink == nil else { return }
         offsetVelocity = 0
         offsetLastTick = CACurrentMediaTime()
+        offsetExactY = collectionView.contentOffset.y
         // WEAK proxy target: CADisplayLink retains its target strongly, and
         // this VC has no deinit hook SwiftUI is guaranteed to trigger — a
         // discarded instance (the launch double-build) with a live link would
@@ -7201,11 +7213,15 @@ final class PlexHomeViewController: UIViewController {
 
     @objc fileprivate func stepOffset(_ link: CADisplayLink) {
         let now = CACurrentMediaTime()
-        let step = FocusScrollMotion.follow(from: collectionView.contentOffset.y, to: offsetTargetY,
+        // Moved by someone else (a snapshot keeping the focused row still):
+        // follow from where the page really is.
+        if abs(collectionView.contentOffset.y - offsetExactY) > 1 { offsetExactY = collectionView.contentOffset.y }
+        let step = FocusScrollMotion.follow(from: offsetExactY, to: offsetTargetY,
                                             velocity: offsetVelocity, dt: now - offsetLastTick,
                                             viewport: collectionView.bounds.height)
         offsetLastTick = now
         offsetVelocity = step.velocity
+        offsetExactY = step.y
         collectionView.contentOffset = CGPoint(x: 0, y: step.y)
         if step.done {
             link.invalidate()
@@ -8196,9 +8212,15 @@ extension PlexHomeViewController: UICollectionViewDelegate {
             stripIdleWork?.cancel()
             setAlphabetBarVisible(false)
             updateLeftEdgeGuide(for: nil)
-            // Focus left the page (sidebar, modal). Chrome must be back
-            // before the sidebar can be interacted with.
-            postFocusBelowTop(false)
+            // Focus left the page for the sidebar: chrome must be back before
+            // the sidebar can be interacted with. Not for a page presented
+            // over this one (a title's detail): the pill would fade in under
+            // the opening card and out again on the way back, a flash of
+            // "Home" each way. The presented page is outside the root view.
+            if let next = context.nextFocusedView, let root = view.window?.rootViewController?.view,
+               next.isDescendant(of: root) {
+                postFocusBelowTop(false)
+            }
             // ...unless focus is still INSIDE the page and only the section
             // lookup failed, which it does for a tile inside a shelf row's
             // nested collection view. `isScrollEnabled = false` means the engine

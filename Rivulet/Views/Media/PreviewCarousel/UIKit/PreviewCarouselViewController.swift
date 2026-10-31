@@ -1940,6 +1940,11 @@ final class PreviewCarouselViewController: UIViewController {
         entrySnapshotContainer.alpha = 1
 
         var windows: [(window: EntryMorphWindowView, tile: PreviewEntrySnapshot)] = []
+        // Windows whose card is mostly off screen: they fade in where their
+        // tile rests instead of flying in from past the screen edge, which
+        // showed a poster cut in half until it landed.
+        var fadeIns: [EntryMorphWindowView] = []
+        var fadedIndices = Set<Int>()
         for tile in tiles where items.indices.contains(tile.itemIndex) {
             let window = EntryMorphWindowView(
                 content: tile.snapshotView,
@@ -1949,14 +1954,26 @@ final class PreviewCarouselViewController: UIViewController {
             window.layer.zPosition = tile.itemIndex == selectedIndex
                 ? 100
                 : CGFloat(50 - abs(tile.itemIndex - selectedIndex))
-            window.setWindow(carouselFrameInView(for: tile.itemIndex))
-            window.tileAlpha = 0
-            window.dimAlpha = flightDim(for: tile.itemIndex)
+            let start = carouselFrameInView(for: tile.itemIndex)
+            let onScreen = start.intersection(view.bounds)
+            if tile.itemIndex != selectedIndex, onScreen.width < start.width / 2 {
+                window.setWindow(view.convert(tile.sourceFrame, from: nil))
+                window.layer.cornerRadius = tile.cornerRadius
+                window.tileAlpha = 1
+                window.dimAlpha = 0
+                window.alpha = 0
+                fadeIns.append(window)
+                fadedIndices.insert(tile.itemIndex)
+            } else {
+                window.setWindow(start)
+                window.tileAlpha = 0
+                window.dimAlpha = flightDim(for: tile.itemIndex)
+                windows.append((window, tile))
+            }
             flightParent(for: tile.itemIndex).addSubview(window)
-            windows.append((window, tile))
         }
         applySourceClip()
-        let peeks = tilelessPeekWindows(flying: Set(windows.map(\.tile.itemIndex)))
+        let peeks = tilelessPeekWindows(flying: Set(windows.map(\.tile.itemIndex)).union(fadedIndices))
 
         backdropPlane.alpha = 0
         collectionView.alpha = 0
@@ -1972,6 +1989,7 @@ final class PreviewCarouselViewController: UIViewController {
                 window.dimAlpha = 0
             }
             peeks.forEach { $0.alpha = 0 }
+            fadeIns.forEach { $0.alpha = 1 }
             self.backdrop.alpha = 0
         }
         morpher.addCompletion { [weak self] _ in
