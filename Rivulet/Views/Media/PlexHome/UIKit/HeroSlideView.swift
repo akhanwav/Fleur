@@ -60,15 +60,9 @@ final class HeroSlideView: UIView {
         logoImageView.translatesAutoresizingMaskIntoConstraints = false
         logoImageView.setContentHuggingPriority(.required, for: .horizontal)
 
-        // Fallback title (serif heavy, two lines max).
-        // SwiftUI uses `.font(.system(size: 72, weight: .heavy, design: .serif))`.
-        // UIFont system fonts gain `.serif` via UIFontDescriptor.withDesign.
-        let baseFont = UIFont.systemFont(ofSize: 72, weight: .heavy)
-        if let serifDescriptor = baseFont.fontDescriptor.withDesign(.serif) {
-            fallbackTitleLabel.font = UIFont(descriptor: serifDescriptor, size: 72)
-        } else {
-            fallbackTitleLabel.font = baseFont
-        }
+        // Fallback title (two lines max), in the app's own family: SF Pro,
+        // as the detail page's description, bold.
+        fallbackTitleLabel.font = .systemFont(ofSize: 72, weight: .bold)
         fallbackTitleLabel.textColor = .white
         fallbackTitleLabel.numberOfLines = 2
         fallbackTitleLabel.shadowColor = UIColor.black.withAlphaComponent(0.5)
