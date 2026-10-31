@@ -517,6 +517,22 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
   text, then PGS, full before forced-only, plain before SDH; none, off. Last
   Used keeps the old global memory (`TrackIntentStore`).
 
+### Movies with several cuts
+
+`MovieCuts` decides when a movie's copies are different cuts: two edition
+titles that differ in substance (`cutKey`: "Extended" and "Extended Cut" are
+one cut, "Extended Fan Cut" another), or files more than five minutes apart.
+An untitled copy is not a different title. Only then:
+
+- **Runtime is the selected file's** (`DetailCopySelection.selectedCutRuntime`):
+  the info line and Resume's time left follow Ways to Watch. One cut keeps the
+  metadata runtime.
+- **The cut is named after the quality**: in Ways to Watch rows
+  (`VersionPicker.rowLabel(_:cut:)`), as a box in the info row, and on the
+  Continue Watching tag (`TitleQuality.cut`). An untitled copy takes the name its
+  same-length titled copies agree on, else its runtime.
+- The card sees only its own item, so there an edition title alone counts.
+
 ### Content Filter (VOD)
 
 A local VidAngel/ClearPlay-style filter: mute language, skip scenes, never touch the

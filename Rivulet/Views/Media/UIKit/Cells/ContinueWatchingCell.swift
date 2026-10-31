@@ -225,6 +225,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
             season: isEpisode ? item.seasonNumber : nil, episode: isEpisode ? item.episodeNumber : nil,
             offsetSeconds: item.userState.viewOffset, runtimeSeconds: item.runtime)
         caption.configure(title: text.title, detail: text.detail)
+        captionItem = item
         if let knownQuality {
             showQuality(knownQuality)
         } else {
@@ -253,6 +254,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         qualityTag.isHidden = true
         serverTag.isHidden = true
         newEpisodeTag.isHidden = true
+        captionItem = nil
         infoBar.reset()
         caption.configure(title: nil, detail: nil)
     }
@@ -262,8 +264,25 @@ final class ContinueWatchingCell: UICollectionViewCell {
     private func showQuality(_ label: String?) {
         qualityTask?.cancel()
         qualityTask = nil
-        qualityTag.text = label
-        qualityTag.isHidden = label == nil
+        applyQuality(label)
+    }
+
+    /// The item the caption describes, so a cut read later can correct it.
+    private var captionItem: MediaItem?
+
+    /// The tag, with a multi-cut movie's cut after its quality ("4K DV ·
+    /// Extended Edition"), and the time left measured against that cut's file.
+    private func applyQuality(_ label: String?) {
+        let cut = captionItem.flatMap { TitleQuality.cut(for: $0.ref) }
+        let text = [label, cut?.name].compactMap { $0 }.joined(separator: " · ")
+        qualityTag.text = text.isEmpty ? nil : text
+        qualityTag.isHidden = text.isEmpty
+        if let item = captionItem, let cut, item.kind == .movie {
+            let text = PosterCaptionView.continueWatchingText(
+                title: item.title, year: item.year, show: nil, season: nil, episode: nil,
+                offsetSeconds: item.userState.viewOffset, runtimeSeconds: cut.runtime)
+            caption.configure(title: text.title, detail: text.detail)
+        }
     }
 
     /// The tag for the version this card would play, fetched once per title.
@@ -276,8 +295,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         qualityTask = Task { [weak self] in
             let label = await TitleQuality.label(for: item)
             guard !Task.isCancelled, let self else { return }
-            self.qualityTag.text = label
-            self.qualityTag.isHidden = label == nil
+            self.applyQuality(label)
         }
     }
 
@@ -423,6 +441,31 @@ enum TitleQuality {
     private static var labels: [MediaItemRef: String?] = [:]
     private static var inFlight: [MediaItemRef: Task<String?, Never>] = [:]
 
+    /// A movie that is one of several cuts: the cut's name and its file's
+    /// length, read with the label. The card only knows its own item, so a
+    /// cut is an edition title (Plex keeps each cut as its own item) or
+    /// versions of the item differing by more than `MovieCuts.tolerance`.
+    struct Cut: Equatable {
+        let name: String?
+        let runtime: TimeInterval
+    }
+    private static var cuts: [MediaItemRef: Cut] = [:]
+
+    static func cut(for ref: MediaItemRef) -> Cut? { cuts[ref] }
+
+    static func cut(of detail: MediaItemDetail) -> Cut? {
+        guard detail.item.kind == .movie,
+              let best = VersionRanking.ordered(detail.mediaSources).first, best.duration > 0 else { return nil }
+        let edition = detail.item.editionTitle
+        let versions = detail.mediaSources.map { MovieCuts.Version(copyID: "", edition: edition, source: $0) }
+        let own = MovieCuts.Version(copyID: "", edition: edition, source: best)
+        if MovieCuts.isMultiCut(versions) {
+            return Cut(name: MovieCuts.name(of: own, among: versions), runtime: best.duration)
+        }
+        guard let edition = edition?.trimmingCharacters(in: .whitespaces), !edition.isEmpty else { return nil }
+        return Cut(name: edition, runtime: best.duration)
+    }
+
     /// The label already read for `ref` (`.some(nil)` when there is none), or
     /// nil before the first read.
     static func known(for ref: MediaItemRef) -> String?? { labels[ref] }
@@ -446,6 +489,7 @@ enum TitleQuality {
                 target = episode.ref
             }
             guard let detail = try? await provider.fullDetail(for: target) else { return nil }
+            cuts[ref] = cut(of: detail)
             return DetailCopySelection.qualityText(VersionRanking.ordered(detail.mediaSources).first)
         }
         inFlight[ref] = task

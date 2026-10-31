@@ -1160,8 +1160,14 @@ final class MediaDetailChromeView: UIView {
         } else if let year = item.year {
             parts.append(String(year))
         }
-        if let runtime = item.runtime, runtime > 0 { parts.append(Self.formatRuntime(runtime)) }
-        if let edition = detail?.item.editionTitle ?? item.editionTitle, !edition.isEmpty { parts.append(edition) }
+        // A movie whose copies are different cuts runs as long as the selected
+        // file, and names its cut in a box beside the quality instead.
+        let cutRuntime = item.kind == .movie ? copySelection.selectedCutRuntime : nil
+        let cutName = cutRuntime == nil ? nil : copySelection.selectedCutName
+        if let runtime = cutRuntime ?? item.runtime, runtime > 0 { parts.append(Self.formatRuntime(runtime)) }
+        if cutRuntime == nil, let edition = detail?.item.editionTitle ?? item.editionTitle, !edition.isEmpty {
+            parts.append(edition)
+        }
 
         if !parts.isEmpty {
             qualityRow.addArrangedSubview(
@@ -1194,6 +1200,7 @@ final class MediaDetailChromeView: UIView {
                 qualityRow.addArrangedSubview(Self.makeBadge(badge, alpha: Self.qualityRowAlpha))
             }
         }
+        if let cutName { qualityRow.addArrangedSubview(Self.makeBadge(cutName, alpha: Self.qualityRowAlpha)) }
         // The video stream's own bitrate, else the file's.
         if let bitrate = technical.flatMap({ $0.videoTracks.first?.bitrate ?? $0.bitrate }), bitrate > 0 {
             qualityRow.addArrangedSubview(
@@ -1294,6 +1301,8 @@ final class MediaDetailChromeView: UIView {
     /// the hero item for a movie/episode, and the resolved episode for a show.
     /// The bar shows only while the title says Resume, so the two never disagree.
     private func setPlayTarget(_ target: MediaItem) {
+        // A multi-cut movie's time left is measured against the selected file.
+        let target = target.kind == .movie ? target.withRuntime(copySelection.selectedCutRuntime) : target
         let resumes = target.isInProgress
         playProgressTrack?.isHidden = !resumes
         playProgressFillWidth?.constant = resumes

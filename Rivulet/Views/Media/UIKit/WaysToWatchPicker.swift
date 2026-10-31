@@ -110,6 +110,34 @@ final class DetailCopySelection {
         return detail
     }
 
+    // MARK: Cuts
+
+    /// Every file of every copy of a movie, for `MovieCuts`; empty for a show.
+    var cutVersions: [MovieCuts.Version] {
+        copies.filter { $0.item.kind == .movie }.flatMap { copy in
+            copy.sources.map { MovieCuts.Version(copyID: copy.id, edition: Self.edition(of: copy), source: $0) }
+        }
+    }
+
+    /// The file the page would play: the picked version, else the copy's best.
+    var selectedCutVersion: MovieCuts.Version? {
+        guard let copy = selected, copy.item.kind == .movie,
+              let source = selectedDetail?.mediaSources.first else { return nil }
+        return MovieCuts.Version(copyID: copy.id, edition: Self.edition(of: copy), source: source)
+    }
+
+    /// The selected file's length when the movie's copies are different cuts.
+    var selectedCutRuntime: TimeInterval? { MovieCuts.runtime(of: selectedCutVersion, among: cutVersions) }
+
+    /// The selected cut's name ("Extended Edition"), for the info boxes.
+    var selectedCutName: String? {
+        selectedCutVersion.flatMap { MovieCuts.name(of: $0, among: cutVersions) }
+    }
+
+    private static func edition(of copy: DetailCopy) -> String? {
+        copy.detail?.item.editionTitle ?? copy.item.editionTitle
+    }
+
     func reset() {
         token &+= 1
         hasLookedUp = false
@@ -268,6 +296,7 @@ final class DetailCopySelection {
     /// row switches the page to it.
     func present(from host: UIViewController, sourceFrame: CGRect?) {
         var actions: [TileMenuAction] = []
+        let cuts = cutVersions
         for (index, copy) in copies.enumerated() {
             let resume = Self.resumeText(copy.item)
             let sources = copy.sources
@@ -278,7 +307,12 @@ final class DetailCopySelection {
                 actions.append(row(label, selected: index == selectedIndex, copyID: copy.id, mediaID: nil))
                 continue
             }
-            for (sourceIndex, (source, label)) in zip(sources, VersionPicker.labels(for: sources)).enumerated() {
+            let cutLabels = sources.map { source in
+                MovieCuts.label(of: MovieCuts.Version(copyID: copy.id, edition: Self.edition(of: copy), source: source),
+                                among: cuts)
+            }
+            let labels = VersionPicker.labels(for: sources, cuts: cutLabels)
+            for (sourceIndex, (source, label)) in zip(sources, labels).enumerated() {
                 let isSelected = index == selectedIndex
                     && (selectedMediaID.map { $0 == source.id } ?? (sourceIndex == 0))
                 let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")

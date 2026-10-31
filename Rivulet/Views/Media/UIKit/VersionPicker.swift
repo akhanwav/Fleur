@@ -19,8 +19,11 @@ enum VersionPicker {
     }
 
     /// One row label per version, same order. Identical labels get the file name.
-    static func labels(for sources: [MediaSource]) -> [String] {
-        let base = sources.map(rowLabel)
+    /// `cuts` names each version's cut (`MovieCuts.label`), placed after its quality.
+    static func labels(for sources: [MediaSource], cuts: [String?] = []) -> [String] {
+        let base = sources.enumerated().map { index, source in
+            rowLabel(source, cut: cuts.indices.contains(index) ? cuts[index] : nil)
+        }
         return zip(sources, base).map { source, label in
             guard base.filter({ $0 == label }).count > 1, let stem = fileStem(source.fileName) else { return label }
             return "\(label) · \(stem)"
@@ -61,9 +64,12 @@ enum VersionPicker {
         }
     }
 
-    static func rowLabel(_ source: MediaSource) -> String {
+    static func rowLabel(_ source: MediaSource) -> String { rowLabel(source, cut: nil) }
+
+    /// "4K · DV · Extended Edition · 41.8 Mbps · HEVC · TrueHD 7.1 · 80 GB".
+    static func rowLabel(_ source: MediaSource, cut: String?) -> String {
         let name = source.versionName.flatMap { isResolutionName($0) ? nil : $0 }
-        return [name, source.resolutionBadge, source.rangeBadge,
+        return [name, source.resolutionBadge, source.rangeBadge, cut,
                 source.bitrate.map(PlayerInfoSheetStyle.bitrate),
                 source.videoTracks.first.flatMap { codecName($0.codec) },
                 source.audioBadge, source.fileSize.map(PlayerInfoSheetStyle.fileSize)]
