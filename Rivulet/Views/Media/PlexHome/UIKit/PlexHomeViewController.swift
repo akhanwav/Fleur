@@ -1291,6 +1291,7 @@ final class PlexHomeViewController: UIViewController {
         } else {
             // A new query's suggestions start at their first tile.
             shelfOffsets[.searchSuggestions] = nil
+            searchRowFocus[.searchSuggestions] = nil
             suggestionQuery = query
         }
         suggestionItems = items
@@ -1449,6 +1450,9 @@ final class PlexHomeViewController: UIViewController {
         // press away. (The query is also in the rows' content token, so a
         // search returning the same titles rebinds at the start too.)
         shelfOffsets = shelfOffsets.filter {
+            !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) || Self.isSuggestionRow($0.key)
+        }
+        searchRowFocus = searchRowFocus.filter {
             !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) || Self.isSuggestionRow($0.key)
         }
         applySnapshot(animated: false)
@@ -2333,6 +2337,12 @@ final class PlexHomeViewController: UIViewController {
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        // Leaving Search ends the visit (another tab). A title opened over it
+        // never makes it disappear, so coming back from one keeps the places.
+        if case .search = mode {
+            searchRowFocus = [:]
+            shelfOffsets = shelfOffsets.filter { !$0.key.raw.hasPrefix(HomeSectionID.searchGroup("").raw) }
+        }
         // Only a real dismissal. A carousel presented over the collection page
         // (.overFullScreen) never makes it disappear at all.
         if isBeingDismissed { onDismiss?() }
@@ -4623,6 +4633,17 @@ final class PlexHomeViewController: UIViewController {
 
     /// Resting scroll offset per shelf section, restored across cell reuse.
     private var shelfOffsets: [HomeSectionID: CGFloat] = [:]
+    /// Search: the tile each row was last on in this visit, where Up or Down
+    /// re-enters it (`searchEntryItem`). Dropped with the row's offset when its
+    /// results change, and all of it when the page leaves the screen.
+    private var searchRowFocus: [HomeSectionID: Int] = [:]
+
+    /// Search rows are entered from above or below at the tile last browsed
+    /// there this visit, else the first; Recently Searched's grid has no row.
+    private func searchEntryItem(_ sectionID: HomeSectionID) -> (() -> Int)? {
+        guard case .search = mode else { return nil }
+        return { [weak self] in self?.searchRowFocus[sectionID] ?? 0 }
+    }
 
     /// Tiles switched to another server's copy from Ways to Watch, by the
     /// tile's own item: the tile draws that copy (its poster or artwork,
@@ -4725,8 +4746,10 @@ final class PlexHomeViewController: UIViewController {
         cell.onOffsetChanged = { [weak self] offset in
             self?.shelfOffsets[sectionID] = offset
         }
+        cell.verticalEntryItem = searchEntryItem(sectionID)
         cell.onFocusItem = { [weak self] itemIndex in
             guard let self, let section = self.shelfSection(id: sectionID) else { return }
+            if case .search = self.mode { self.searchRowFocus[sectionID] = itemIndex }
             self.prefetchWaysToWatch(Self.waysToWatchTitle(in: section, at: itemIndex))
         }
         cell.configure(

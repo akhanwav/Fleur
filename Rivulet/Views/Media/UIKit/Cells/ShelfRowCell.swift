@@ -87,6 +87,16 @@ final class ShelfRowCell: UICollectionViewCell {
     var onLongPressItem: ((Int) -> Void)?
     /// Focus landed on a tile (Live TV Browse describes it in its header).
     var onFocusItem: ((Int) -> Void)?
+    /// The tile focus lands on when it enters the row from above or below,
+    /// instead of the one geometrically nearest. nil leaves the engine's pick.
+    /// Caught by `entryGuides`, a strip just above the tiles and one just
+    /// below: the engine reaches a guide before any tile, and the guide hands
+    /// it this row (`preferredFocusEnvironments`), which scrolls to the tile.
+    var verticalEntryItem: (() -> Int)? {
+        didSet { updateEntryGuides() }
+    }
+    private let topEntryGuide = UIFocusGuide()
+    private let bottomEntryGuide = UIFocusGuide()
     /// Reports resting offsets so the owner can restore them across reuse.
     var onOffsetChanged: ((CGFloat) -> Void)?
 
@@ -267,6 +277,46 @@ final class ShelfRowCell: UICollectionViewCell {
             rowCollectionView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             rowWidthConstraint,
         ])
+        for guide in [topEntryGuide, bottomEntryGuide] {
+            contentView.addLayoutGuide(guide)
+            guide.preferredFocusEnvironments = [self]
+            guide.isEnabled = false
+            NSLayoutConstraint.activate([
+                guide.leadingAnchor.constraint(equalTo: rowCollectionView.leadingAnchor),
+                guide.widthAnchor.constraint(equalTo: rowCollectionView.widthAnchor),
+                guide.heightAnchor.constraint(equalToConstant: 2),
+            ])
+        }
+        NSLayoutConstraint.activate([
+            topEntryGuide.topAnchor.constraint(equalTo: rowCollectionView.topAnchor),
+            bottomEntryGuide.bottomAnchor.constraint(equalTo: rowCollectionView.bottomAnchor),
+        ])
+    }
+
+    private var focusIsInRow: Bool {
+        (UIFocusSystem.focusSystem(for: self)?.focusedItem as? UIView)?.isDescendant(of: rowCollectionView) == true
+    }
+
+    /// On only while focus is outside the row: inside it, they would catch
+    /// Up and Down on the way out and send focus straight back.
+    private func updateEntryGuides(focusInRow: Bool? = nil) {
+        let on = verticalEntryItem != nil && !(focusInRow ?? focusIsInRow)
+        topEntryGuide.isEnabled = on
+        bottomEntryGuide.isEnabled = on
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        updateEntryGuides(focusInRow: context.nextFocusedView?.isDescendant(of: rowCollectionView) == true)
+    }
+
+    override func shouldUpdateFocus(in context: UIFocusUpdateContext) -> Bool {
+        // Before the move resolves: a guide still on while focus is in the row
+        // would catch a sideways move and hand focus back to the same tile.
+        if context.previouslyFocusedView?.isDescendant(of: rowCollectionView) == true {
+            updateEntryGuides(focusInRow: true)
+        }
+        return super.shouldUpdateFocus(in: context)
     }
 
     override func layoutSubviews() {
@@ -287,6 +337,7 @@ final class ShelfRowCell: UICollectionViewCell {
     override func prepareForReuse() {
         super.prepareForReuse()
         pendingFocusIndex = nil
+        verticalEntryItem = nil
         // Belongs to the row this cell WAS showing; carrying it into a
         // different row would restore focus to an unrelated tile index.
         lastFocusedItemIndex = nil
@@ -486,6 +537,13 @@ final class ShelfRowCell: UICollectionViewCell {
             pendingFocusIndex = nil
             return [cell]
         }
+        // Entered through an entry guide: the chosen tile, scrolled into view.
+        if let entry = verticalEntryItem, realCount > 0, !focusIsInRow {
+            let index = min(max(entry(), 0), realCount - 1)
+            setOffset(clampedTo: snappedOffset(toShow: index), animated: false)
+            rowCollectionView.layoutIfNeeded()
+            if let cell = rowCollectionView.cellForItem(at: IndexPath(item: index, section: 0)) { return [cell] }
+        }
         return [rowCollectionView]
     }
 
@@ -680,6 +738,7 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
     func collectionView(_ collectionView: UICollectionView,
                         didUpdateFocusIn context: UICollectionViewFocusUpdateContext,
                         with coordinator: UIFocusAnimationCoordinator) {
+        updateEntryGuides(focusInRow: context.nextFocusedView?.isDescendant(of: collectionView) == true)
         guard let next = context.nextFocusedIndexPath else { return }
         lastFocusedItemIndex = next.item
         if next.item < realCount { onFocusItem?(next.item) }
@@ -710,4 +769,5 @@ extension ShelfRowCell: UICollectionViewDataSource, UICollectionViewDelegate {
         }
         return false
     }
+
 }
