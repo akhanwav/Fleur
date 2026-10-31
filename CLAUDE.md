@@ -527,12 +527,13 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
 `MovieCuts` decides when a movie's copies are different cuts: two edition
 titles that differ in substance (`cutKey`: "Extended" and "Extended Cut" are
 one cut, "Extended Fan Cut" another), or files more than five minutes apart.
-An untitled copy is not a different title. Only then:
+An untitled copy is not a different title.
 
-- **Runtime is the selected file's** (`DetailCopySelection.selectedCutRuntime`):
-  the info line and Resume's time left follow Ways to Watch. One cut keeps the
-  metadata runtime.
-- **The cut is named after the quality**: in Ways to Watch rows
+- **Runtime is the selected file's for every owned movie**, cuts or not
+  (`DetailCopySelection.selectedRuntime`, `TitleQuality.cut` on Continue Watching):
+  the info line and Resume's time left follow Ways to Watch, even a minute apart.
+  TMDB's runtime is only for titles on no server.
+- **Only for several cuts, the cut is named after the quality**: in Ways to Watch rows
   (`VersionPicker.rowLabel(_:cut:)`), as a box in the info row, and on the
   Continue Watching tag (`TitleQuality.cut`). An untitled copy takes the name its
   same-length titled copies agree on, else its runtime.

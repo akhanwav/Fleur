@@ -211,9 +211,22 @@ final class MediaItemDetailPageViewController: UIViewController {
         }
     }
 
+    /// The action-row button focus last landed on: a popup opened from it
+    /// (Info, Ways to Watch, Watched) hands focus back to it when it closes.
+    /// Play when it is gone (the row rebuilt) or none was focused yet.
+    private weak var lastFocusedAction: UIView?
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
+        if let last = lastFocusedAction, let actionRow, last.isDescendant(of: actionRow),
+           !last.isHidden, last.alpha > 0 { return [last] }
         if let playButton { return [playButton] }
         return super.preferredFocusEnvironments
+    }
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        guard let row = actionRow, let next = context.nextFocusedView, next.isDescendant(of: row) else { return }
+        lastFocusedAction = next
     }
 
     override func viewWillDisappear(_ animated: Bool) {

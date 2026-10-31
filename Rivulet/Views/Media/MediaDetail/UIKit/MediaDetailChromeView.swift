@@ -128,8 +128,24 @@ final class MediaDetailChromeView: UIView {
     /// The Play pill (rebuilt per item). Exposed so the host cell can point the
     /// focus engine at Play when the detail expands.
     private(set) var playButton: FocusableActionButton?
-    /// Preferred focus target for the action row (Play), or nil before detail loads.
-    var playFocusable: UIView? { playButton }
+    /// Preferred focus target for the action row, or nil before detail loads:
+    /// the button that last held focus (a popup opened from Info, Audio or Ways
+    /// to Watch hands focus back to it when it closes), else Play when that
+    /// button is gone (the row rebuilt) or none was focused yet.
+    var playFocusable: UIView? {
+        if let last = lastFocusedAction, last.isDescendant(of: actionButtonsStack),
+           !last.isHidden, last.alpha > 0 { return last }
+        return playButton
+    }
+
+    /// The action-row button focus last landed on.
+    private weak var lastFocusedAction: UIView?
+
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        guard let next = context.nextFocusedView, next.isDescendant(of: actionButtonsStack) else { return }
+        lastFocusedAction = next
+    }
 
     /// Fill width of the Play pill's watch-progress bar, held so the fraction can
     /// be set after the pill is built — on a show/season the bar belongs to the
@@ -1162,12 +1178,14 @@ final class MediaDetailChromeView: UIView {
         }
         // A movie whose copies are different cuts runs as long as the selected
         // file, and names its cut in a box beside the quality instead.
-        let cutRuntime = item.kind == .movie ? copySelection.selectedCutRuntime : nil
-        let cutName = cutRuntime == nil ? nil : copySelection.selectedCutName
-        if let runtime = cutRuntime ?? item.runtime, runtime > 0 { parts.append(Self.formatRuntime(runtime)) }
-        if cutRuntime == nil, let edition = detail?.item.editionTitle ?? item.editionTitle, !edition.isEmpty {
-            parts.append(edition)
-        }
+        let fileRuntime = item.kind == .movie ? copySelection.selectedRuntime : nil
+        let cutName = item.kind == .movie ? copySelection.selectedCutName : nil
+        if let runtime = fileRuntime ?? item.runtime, runtime > 0 { parts.append(Self.formatRuntime(runtime)) }
+        // A lone edition (no other cut to tell apart) stays in the text; the
+        // selected copy's, so switching copies updates it.
+        let edition = item.kind == .movie && copySelection.selected != nil
+            ? copySelection.selectedEdition : (detail?.item.editionTitle ?? item.editionTitle)
+        if cutName == nil, let edition, !edition.isEmpty { parts.append(edition) }
 
         if !parts.isEmpty {
             qualityRow.addArrangedSubview(
@@ -1302,7 +1320,7 @@ final class MediaDetailChromeView: UIView {
     /// The bar shows only while the title says Resume, so the two never disagree.
     private func setPlayTarget(_ target: MediaItem) {
         // A multi-cut movie's time left is measured against the selected file.
-        let target = target.kind == .movie ? target.withRuntime(copySelection.selectedCutRuntime) : target
+        let target = target.kind == .movie ? target.withRuntime(copySelection.selectedRuntime) : target
         let resumes = target.isInProgress
         playProgressTrack?.isHidden = !resumes
         playProgressFillWidth?.constant = resumes

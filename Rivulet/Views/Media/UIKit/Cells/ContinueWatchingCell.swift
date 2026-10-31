@@ -441,10 +441,11 @@ enum TitleQuality {
     private static var labels: [MediaItemRef: String?] = [:]
     private static var inFlight: [MediaItemRef: Task<String?, Never>] = [:]
 
-    /// A movie that is one of several cuts: the cut's name and its file's
-    /// length, read with the label. The card only knows its own item, so a
-    /// cut is an edition title (Plex keeps each cut as its own item) or
-    /// versions of the item differing by more than `MovieCuts.tolerance`.
+    /// A movie's file as the card describes it: its length (the time left is
+    /// measured against it, as on the detail page), and the cut's name when it
+    /// is one of several. The card only knows its own item, so a cut is an
+    /// edition title (Plex keeps each cut as its own item) or versions of the
+    /// item differing by more than `MovieCuts.tolerance`.
     struct Cut: Equatable {
         let name: String?
         let runtime: TimeInterval
@@ -462,8 +463,8 @@ enum TitleQuality {
         if MovieCuts.isMultiCut(versions) {
             return Cut(name: MovieCuts.name(of: own, among: versions), runtime: best.duration)
         }
-        guard let edition = edition?.trimmingCharacters(in: .whitespaces), !edition.isEmpty else { return nil }
-        return Cut(name: edition, runtime: best.duration)
+        let name = edition?.trimmingCharacters(in: .whitespaces)
+        return Cut(name: name?.isEmpty == false ? name : nil, runtime: best.duration)
     }
 
     /// The label already read for `ref` (`.some(nil)` when there is none), or

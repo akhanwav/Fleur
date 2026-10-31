@@ -97,6 +97,14 @@ final class DetailCopySelection {
 
     private var token: UInt64 = 0
 
+    /// The open Ways to Watch, refreshed in place while it is up.
+    private weak var openPopup: TileMenuPopupViewController?
+
+    private func changed() {
+        onChange?()
+        openPopup?.update(sections: [rows()])
+    }
+
     var selected: DetailCopy? { selectedIndex.flatMap { copies.indices.contains($0) ? copies[$0] : nil } }
     var isRemoteSelected: Bool { selected?.remote != nil }
 
@@ -126,8 +134,15 @@ final class DetailCopySelection {
         return MovieCuts.Version(copyID: copy.id, edition: Self.edition(of: copy), source: source)
     }
 
-    /// The selected file's length when the movie's copies are different cuts.
-    var selectedCutRuntime: TimeInterval? { MovieCuts.runtime(of: selectedCutVersion, among: cutVersions) }
+    /// The selected file's own length, for any movie on the servers: the page's
+    /// runtime follows the copy picked in Ways to Watch, even a minute apart.
+    var selectedRuntime: TimeInterval? { MovieCuts.runtime(of: selectedCutVersion) }
+
+    /// The selected copy's edition title, whatever the other copies are.
+    var selectedEdition: String? {
+        guard let copy = selected, copy.item.kind == .movie else { return nil }
+        return Self.edition(of: copy)
+    }
 
     /// The selected cut's name ("Extended Edition"), for the info boxes.
     var selectedCutName: String? {
@@ -164,7 +179,7 @@ final class DetailCopySelection {
                 copies.append(pending)
                 selectedIndex = 1
             }
-            onChange?()
+            changed()
             if item.kind == .show || item.kind == .season {
                 Task { @MainActor [weak self] in
                     guard let provider = MediaProviderRegistry.shared.provider(for: item.ref.providerID),
@@ -175,7 +190,7 @@ final class DetailCopySelection {
                           let index = self.copies.firstIndex(where: \.isMainServer) else { return }
                     self.copies[index].playTarget = target
                     self.copies[index].playTargetDetail = detail
-                    self.onChange?()
+                    self.changed()
                 }
             }
         }
@@ -186,7 +201,7 @@ final class DetailCopySelection {
             copiesLog.info("[Copies] \(item.title, privacy: .public): guid \(guid ?? "none", privacy: .public), \(remote.count, privacy: .public) server copies")
             guard let self, self.token == current else { return }
             self.hasLookedUp = true
-            guard let guid else { self.onChange?(); return }
+            guard let guid else { self.changed(); return }
             // `self.copies`, not a fresh copy: the main copy may already hold
             // its resolved Play target.
             var own = self.copies.filter(\.isMainServer)
@@ -220,7 +235,7 @@ final class DetailCopySelection {
             self.copies = all
             self.selectedIndex = all.isEmpty ? nil : (index ?? 0)
             self.selectedMediaID = nil
-            self.onChange?()
+            self.changed()
         }
     }
 
@@ -288,13 +303,39 @@ final class DetailCopySelection {
                 ?? copies.firstIndex(where: { $0.machineId == copyID }) else { return }
         selectedIndex = index
         selectedMediaID = mediaID
-        onChange?()
+        changed()
     }
 
     /// Ways to Watch: every copy's versions, the selected one checked, each
     /// row naming its server and that server's own resume time. Picking a
     /// row switches the page to it.
     func present(from host: UIViewController, sourceFrame: CGRect?) {
+        let popup = TileMenuPopupViewController(sections: [rows()], sourceFrame: sourceFrame,
+                                                header: TileMenuHeader(title: "Ways to Watch"))
+        // Opens on the copy the page shows, as Audio and Subtitles open on theirs.
+        popup.initialFocusKey = selectedRowKey
+        popup.growsWhileOpen = true
+        openPopup = popup
+        host.topmostPresented.present(popup, animated: false)
+    }
+
+    /// A row's identity across refreshes: the main server's copy keeps its key
+    /// when the lookup learns its machine id, so focus stays on it.
+    private static func rowKey(_ copy: DetailCopy, mediaID: String?) -> String {
+        let server = copy.isMainServer ? "main" : copy.machineId
+        return "\(server):\(copy.remote?.ratingKey ?? copy.item.ref.itemID)|\(mediaID ?? "")"
+    }
+
+    private var selectedRowKey: String? {
+        guard let copy = selected else { return nil }
+        let sources = copy.sources
+        let mediaID = sources.isEmpty || copy.isSeries ? nil : (selectedMediaID ?? sources.first?.id)
+        return Self.rowKey(copy, mediaID: mediaID)
+    }
+
+    /// Every copy's versions, then a "Checking other servers…" line until the
+    /// other servers have answered.
+    private func rows() -> [TileMenuAction] {
         var actions: [TileMenuAction] = []
         let cuts = cutVersions
         for (index, copy) in copies.enumerated() {
@@ -304,7 +345,7 @@ final class DetailCopySelection {
                 // A show has no file of its own: one row per server, about
                 // the episode Play would start there.
                 let label = ([copy.serverName] + Self.seriesSummary(copy)).joined(separator: " · ")
-                actions.append(row(label, selected: index == selectedIndex, copyID: copy.id, mediaID: nil))
+                actions.append(row(label, selected: index == selectedIndex, copy: copy, mediaID: nil))
                 continue
             }
             let cutLabels = sources.map { source in
@@ -316,20 +357,25 @@ final class DetailCopySelection {
                 let isSelected = index == selectedIndex
                     && (selectedMediaID.map { $0 == source.id } ?? (sourceIndex == 0))
                 let text = [copy.serverName, label, resume].compactMap { $0 }.joined(separator: " · ")
-                actions.append(row(text, selected: isSelected, copyID: copy.id, mediaID: source.id))
+                actions.append(row(text, selected: isSelected, copy: copy, mediaID: source.id))
             }
         }
-        if actions.isEmpty {
+        if !hasLookedUp {
+            actions.append(TileMenuAction(title: "Checking other servers…", systemImage: "ellipsis",
+                                          isEnabled: false, id: "checking") {})
+        } else if actions.isEmpty {
             // An unowned title no server holds: say so, rather than no list.
             actions = [TileMenuAction(title: "Not on your servers", systemImage: "xmark.circle") {}]
         }
-        let popup = TileMenuPopupViewController(sections: [actions], sourceFrame: sourceFrame,
-                                                header: TileMenuHeader(title: "Ways to Watch"))
-        host.topmostPresented.present(popup, animated: false)
+        return actions
     }
 
-    private func row(_ title: String, selected: Bool, copyID: String, mediaID: String?) -> TileMenuAction {
-        TileMenuAction(title: title, systemImage: selected ? "checkmark.circle.fill" : "circle") { [weak self] in
+    private func row(_ title: String, selected: Bool, copy: DetailCopy, mediaID: String?) -> TileMenuAction {
+        let copyID = copy.id
+        return TileMenuAction(title: title, systemImage: selected ? "checkmark.circle.fill" : "circle",
+                              id: Self.rowKey(copy, mediaID: mediaID)) { [weak self] in
+            // Picked: the popup is closing, so it takes no more refreshes.
+            self?.openPopup = nil
             self?.select(copyID: copyID, mediaID: mediaID)
         }
     }

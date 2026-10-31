@@ -28,7 +28,7 @@ final class MovieCutsTests: XCTestCase {
         let one = [v("1", nil, 117), v("2", nil, 118), v("3", "Final Cut", 117), v("4", "The Final Cut", 117)]
         XCTAssertFalse(MovieCuts.isMultiCut(one), "one cut on several servers, worded two ways")
         XCTAssertNil(MovieCuts.label(of: one[0], among: one))
-        XCTAssertNil(MovieCuts.runtime(of: one[0], among: one))
+        XCTAssertEqual(MovieCuts.runtime(of: one[1]), 118 * 60, "the file's own length, cuts or not")
     }
 
     func test_ownTitle_elseTheSameLengthsTitle() {
@@ -53,7 +53,8 @@ final class MovieCutsTests: XCTestCase {
     }
 
     func test_runtime_isTheSelectedFiles() {
-        XCTAssertEqual(MovieCuts.runtime(of: fellowship[1], among: fellowship), 228 * 60)
+        XCTAssertEqual(MovieCuts.runtime(of: fellowship[1]), 228 * 60)
+        XCTAssertNil(MovieCuts.runtime(of: v("x", nil, 0)), "no file length: the metadata runtime stays")
     }
 
     func test_cutKey() {

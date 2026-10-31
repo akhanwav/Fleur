@@ -7,9 +7,9 @@
 //
 //  A movie whose copies are different cuts (theatrical, extended, director's,
 //  final): copies with different edition titles, or files whose lengths differ
-//  by more than five minutes. Only then does a page take the runtime from the
-//  selected copy's own file and name the cut beside its quality; a movie with
-//  one cut keeps its metadata runtime and says nothing.
+//  by more than five minutes. Only then is the cut named beside its quality.
+//  The runtime is every owned movie's selected file (`runtime(of:)`), cuts or
+//  not; TMDB's is left for titles on no server.
 //
 //  Plex names a cut with the item's `editionTitle`, and servers word one cut
 //  differently ("Extended", "Extended Cut"), so titles compare by `cutKey`.
@@ -70,10 +70,10 @@ nonisolated enum MovieCuts {
         return edition(version.edition) == nil ? [name, runtime].compactMap { $0 }.joined(separator: " · ") : name
     }
 
-    /// The selected file's own length, for a movie with several cuts; nil
-    /// keeps the metadata runtime.
-    static func runtime(of version: Version?, among versions: [Version]) -> TimeInterval? {
-        guard let version, version.duration > 0, isMultiCut(versions) else { return nil }
+    /// The selected file's own length, for any movie on the servers; nil
+    /// (no file read yet, or a title on none) keeps the metadata runtime.
+    static func runtime(of version: Version?) -> TimeInterval? {
+        guard let version, version.duration > 0 else { return nil }
         return version.duration
     }
 
