@@ -37,7 +37,7 @@ enum SettingsDescriptorStore {
         // MARK: Root Categories
         "cat_appearance": SettingDescriptor(
             icon: "paintbrush.fill",
-            description: "Customize how Rivulet looks — display size, hero banners, sidebar libraries, and content discovery rows."
+            description: "Customize how \(AppName.display) looks — display size, hero banners, sidebar libraries, and content discovery rows."
         ),
         "cat_playback": SettingDescriptor(
             icon: "play.fill",
@@ -53,7 +53,7 @@ enum SettingsDescriptorStore {
         ),
         "cat_about": SettingDescriptor(
             icon: "info.circle.fill",
-            description: "App version, changelog, and other information about Rivulet."
+            description: "App version, changelog, and other information about \(AppName.display)."
         ),
 
         // MARK: Appearance
@@ -161,7 +161,7 @@ enum SettingsDescriptorStore {
         ),
         "noPlexServers": SettingDescriptor(
             icon: "server.rack",
-            description: "Your servers appear here once Rivulet has looked for them. Open any title's page, then come back."
+            description: "Your servers appear here once \(AppName.display) has looked for them. Open any title's page, then come back."
         ),
         "instantResume": SettingDescriptor(
             icon: "play.rectangle.on.rectangle",
@@ -291,7 +291,7 @@ enum SettingsDescriptorStore {
         ),
         "jellyfinPassword": SettingDescriptor(
             icon: "key",
-            description: "Used once, to sign in. Rivulet keeps the access token Jellyfin returns, not the password."
+            description: "Used once, to sign in. \(AppName.display) keeps the access token Jellyfin returns, not the password."
         ),
         "jellyfinSignIn": SettingDescriptor(
             icon: "link",
@@ -307,11 +307,11 @@ enum SettingsDescriptorStore {
         ),
         "profilePickerOnLaunch": SettingDescriptor(
             icon: "person.2.circle",
-            description: "Shows the profile picker each time Rivulet launches, allowing you to choose which profile to use."
+            description: "Shows the profile picker each time \(AppName.display) launches, allowing you to choose which profile to use."
         ),
         "liveTVSources": SettingDescriptor(
             icon: "tv.and.mediabox",
-            description: "Add and manage your own Live TV sources — your Plex server's Live TV, or an M3U/IPTV playlist from a provider you subscribe to. Rivulet does not provide any channels or content of its own."
+            description: "Add and manage your own Live TV sources — your Plex server's Live TV, or an M3U/IPTV playlist from a provider you subscribe to. \(AppName.display) does not provide any channels or content of its own."
         ),
         "plexLiveTVSource": SettingDescriptor(
             icon: "play.rectangle.fill",
@@ -343,11 +343,11 @@ enum SettingsDescriptorStore {
         ),
         "addOwnServer": SettingDescriptor(
             icon: "server.rack",
-            description: "A server you run yourself that serves a playlist and a guide, such as Dispatcharr, Threadfin, xTeVe, ErsatzTV, or Cabernet. You give Rivulet the address and it finds the rest."
+            description: "A server you run yourself that serves a playlist and a guide, such as Dispatcharr, Threadfin, xTeVe, ErsatzTV, or Cabernet. You give \(AppName.display) the address and it finds the rest."
         ),
         "addPlaylistURL": SettingDescriptor(
             icon: "list.bullet.rectangle",
-            description: "A playlist link from an IPTV provider you subscribe to. Rivulet supplies no channels of its own."
+            description: "A playlist link from an IPTV provider you subscribe to. \(AppName.display) supplies no channels of its own."
         ),
         "serverURL": SettingDescriptor(
             icon: "globe",
@@ -359,11 +359,11 @@ enum SettingsDescriptorStore {
         ),
         "usernameField": SettingDescriptor(
             icon: "person",
-            description: "Dispatcharr only. Sign in with your Dispatcharr user so Rivulet can schedule recordings and series from the guide. Leave it empty to just watch."
+            description: "Dispatcharr only. Sign in with your Dispatcharr user so \(AppName.display) can schedule recordings and series from the guide. Leave it empty to just watch."
         ),
         "passwordField": SettingDescriptor(
             icon: "key",
-            description: "Used once, to fetch your Dispatcharr API key. Rivulet keeps the key, not the password."
+            description: "Used once, to fetch your Dispatcharr API key. \(AppName.display) keeps the key, not the password."
         ),
         "channelProfileField": SettingDescriptor(
             icon: "line.3.horizontal.decrease.circle",
@@ -379,17 +379,17 @@ enum SettingsDescriptorStore {
         ),
         "addSourceConfirm": SettingDescriptor(
             icon: "plus.circle.fill",
-            description: "Checks the connection and adds the source if it works. If it does not, Rivulet tells you why."
+            description: "Checks the connection and adds the source if it works. If it does not, \(AppName.display) tells you why."
         ),
 
         // MARK: About
         "changelog": SettingDescriptor(
             icon: "list.bullet.rectangle",
-            description: "Release notes for every version of Rivulet."
+            description: "Release notes for every version of \(AppName.display)."
         ),
         "licensesLegal": SettingDescriptor(
             icon: "doc.text.fill",
-            description: "Rivulet's license and the open-source software it uses, including FFmpeg (LGPL), libdovi, and Sentry."
+            description: "\(AppName.display)'s license and the open-source software it uses, including FFmpeg (LGPL), libdovi, and Sentry."
         ),
         "inputDiagnostics": SettingDescriptor(
             icon: "dot.radiowaves.left.and.right",
@@ -397,7 +397,7 @@ enum SettingsDescriptorStore {
         ),
         "inputTest": SettingDescriptor(
             icon: "checklist",
-            description: "Asks you to press a short list of buttons, then records what your remote actually sent for each one. The result goes to Rivulet's diagnostics so a reported problem can be traced. Nothing about what you watch is included."
+            description: "Asks you to press a short list of buttons, then records what your remote actually sent for each one. The result goes to \(AppName.display)'s diagnostics so a reported problem can be traced. Nothing about what you watch is included."
         ),
 
         // MARK: Content Filtering
@@ -407,11 +407,11 @@ enum SettingsDescriptorStore {
         ),
         "cf_master": SettingDescriptor(
             icon: "hand.raised.fill",
-            description: "Turn the local content filter on. Rivulet then mutes and skips in real time based on the categories below. While it's on, a button in the player pauses filtering for the title you're watching."
+            description: "Turn the local content filter on. \(AppName.display) then mutes and skips in real time based on the categories below. While it's on, a button in the player pauses filtering for the title you're watching."
         ),
         "cf_profanity": SettingDescriptor(
             icon: "exclamationmark.bubble.fill",
-            description: "Mutes profane words in the dialogue. Rivulet reads the title's subtitles even when they are off, including ones inside the video file. Use Profanity Strength to choose how much is filtered."
+            description: "Mutes profane words in the dialogue. \(AppName.display) reads the title's subtitles even when they are off, including ones inside the video file. Use Profanity Strength to choose how much is filtered."
         ),
         "cf_strength": SettingDescriptor(
             icon: "dial.medium.fill",
@@ -447,7 +447,7 @@ enum SettingsDescriptorStore {
         ),
         "cf_sourceURL": SettingDescriptor(
             icon: "link",
-            description: "Optional. Where per-title filter files live, in the open MCF (movie content filter) or EDL format. For a folder, Rivulet looks for a file named after the video file, then the IMDb id (tt0133093.edl), then the Plex rating key. An address can use {file}, {imdb}, {tmdb}, {tvdb} or {id} instead. From moviecontentfilter.com, download the EDL format with your copy's start and end times. Rivulet ships no filter data of its own."
+            description: "Optional. Where per-title filter files live, in the open MCF (movie content filter) or EDL format. For a folder, \(AppName.display) looks for a file named after the video file, then the IMDb id (tt0133093.edl), then the Plex rating key. An address can use {file}, {imdb}, {tmdb}, {tvdb} or {id} instead. From moviecontentfilter.com, download the EDL format with your copy's start and end times. \(AppName.display) ships no filter data of its own."
         ),
     ]
 

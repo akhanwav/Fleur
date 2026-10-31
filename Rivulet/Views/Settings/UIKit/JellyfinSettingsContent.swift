@@ -85,7 +85,7 @@ extension SettingsContent {
         case JellyfinSignInError.notJellyfin:
             "That address isn't a Jellyfin server. Check the port."
         case JellyfinSignInError.serverTooOld(let version):
-            "This server runs Jellyfin \(version). Rivulet needs "
+            "This server runs Jellyfin \(version). \(AppName.display) needs "
                 + "\(JellyfinSession.minimumVersion.major).\(JellyfinSession.minimumVersion.minor) or newer."
         case JellyfinSignInError.untrustedCertificate:
             "This server's HTTPS certificate isn't trusted. Try its http:// address."

@@ -155,7 +155,7 @@ final class InputTestViewController: UIViewController {
         } else {
             promptLabel.text = "Done"
             progressLabel.text = didCapture
-                ? "Results sent to Rivulet's diagnostics."
+                ? "Results sent to \(AppName.display)'s diagnostics."
                 : "No presses were recorded."
             hintLabel.text = "Press Back to close this screen."
         }
@@ -176,7 +176,7 @@ final class InputTestViewController: UIViewController {
     private static var header: String {
         let short = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "?"
         let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
-        return "Rivulet \(short) (\(build)) · tvOS \(UIDevice.current.systemVersion)"
+        return "\(AppName.display) \(short) (\(build)) · tvOS \(UIDevice.current.systemVersion)"
             + " · hold threshold \(InputPressTracker.ms(InputConfig.holdThreshold))"
     }
 

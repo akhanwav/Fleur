@@ -14,7 +14,7 @@ import Foundation
 
 struct PlayMediaIntent: AppIntent {
     static var title: LocalizedStringResource = "Play Media"
-    static var description = IntentDescription("Play a movie or TV show on Rivulet")
+    static var description = IntentDescription("Play a movie or TV show")
     static var openAppWhenRun: Bool = true
 
     @Parameter(title: "Media", requestValueDialog: "What would you like to play?")

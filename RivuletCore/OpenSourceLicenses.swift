@@ -44,31 +44,31 @@ enum OpenSourceLicenses {
     static let aetherSourceURL = "https://github.com/superuser404notfound/AetherEngine"
 
     /// Shown at the top of the Licenses & Legal screen.
-    static let appLicense = """
-    Rivulet is distributed under the PolyForm Noncommercial License 1.0.0, which permits \
-    use for noncommercial purposes. The complete license text is included with the source \
-    distribution.
+    static var appLicense: String { """
+    \(AppName.display) is based on Rivulet by Bain Gurley. Rivulet is distributed under the PolyForm \
+    Noncommercial License 1.0.0, which permits use for noncommercial purposes. The complete \
+    license text is included with the source distribution.
 
-    Rivulet is a client for media you provide. It does not host, supply, or distribute any \
+    \(AppName.display) is a client for media you provide. It does not host, supply, or distribute any \
     video, audio, or channel content of its own.
 
     This product uses the TMDB API but is not endorsed or certified by TMDB. Metadata and \
     artwork in Discover and recommendations are provided by The Movie Database (themoviedb.org).
-    """
+    """ }
 
     /// The Apple TV app's English Dub Cast row (iOS has none).
-    static let dubCastAttribution = """
+    static var dubCastAttribution: String { """
     English dub casts and voice actor photos for anime are provided by AniList (anilist.co), \
-    used under the AniList API terms for non-commercial use. Rivulet is not affiliated with \
+    used under the AniList API terms for non-commercial use. \(AppName.display) is not affiliated with \
     AniList. Titles are matched to AniList with Fribb's anime-lists \
     (github.com/Fribb/anime-lists), built from anime-offline-database and Anime-Lists.
 
     English dub casts for other animation come from The Dubbing Database \
     (dubdb.fandom.com) and from English Wikipedia (en.wikipedia.org), found through \
     Wikidata (wikidata.org). Their text is available under the Creative Commons \
-    Attribution-ShareAlike license (CC BY-SA). Rivulet is not affiliated with The Dubbing \
+    Attribution-ShareAlike license (CC BY-SA). \(AppName.display) is not affiliated with The Dubbing \
     Database, Fandom, Wikipedia or the Wikimedia Foundation.
-    """
+    """ }
 
     static var entries: [Entry] {
         [

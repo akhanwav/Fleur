@@ -38,6 +38,11 @@ The video player is **AetherPlayer** — an adapter around AetherEngine (FFmpeg 
 - **AetherEngine**: consumed as an **upstream** SwiftPM dependency (`superuser404notfound/AetherEngine`), pinned `exactVersion` (7.49.0). **There is no fork** — engine fixes need an upstream release or a host-side workaround; do not propose editing engine sources. Bumping it has a procedure: use the `aether-update` skill. Every bump gets a changelog line. FFmpeg + libdovi arrive **only transitively through Aether**; there is no app-level FFmpeg layer and no direct FFmpegBuild dependency. Since FFmpegBuild 2.0.0 the FFmpeg libs ship as **embedded dynamic frameworks** in `Rivulet.app/Frameworks/` — their `MinimumOSVersion` (26.0) must stay >= `TVOS_DEPLOYMENT_TARGET` (26.0), so do not raise the deployment target.
 - **Design Guide**: See `Docs/DESIGN_GUIDE.md` for UI/UX patterns
 - **Repo is public**: keep commit messages short and plain; no internal detail.
+- **User-facing name**: "PLOX" on Apple TV. It lives once, as `CFBundleDisplayName` in
+  `Rivulet/Info.plist`, and code reads it through `AppName.display`; never write the
+  name into a user-facing string. Types, modules, bundle IDs, logging subsystems and
+  the IPTV user agent (`LiveTVClientIdentity`) stay "Rivulet", and Licenses & Legal
+  keeps Rivulet's credit and licence.
 
 ## Project Structure
 

@@ -435,7 +435,7 @@ struct WhatsNewView: View {
         ("1.0.3 (65)", [
             "Updated AetherEngine to 5.0.5. Fixes duplicate subtitles after rewinding, subtitle timing during fast skipping, and playback resuming on its own when skipping while paused",
             "The changelog in Settings now shows the full release history",
-            "Security improvements for Rivulet's online features",
+            "Security improvements for \(AppName.display)'s online features",
         ]),
         ("1.0.3 (64)", [
             "Continue Watching now stays up to date after you finish watching and when you return to the app",
@@ -443,7 +443,7 @@ struct WhatsNewView: View {
         ]),
         ("1.0.3 (63)", [
             "Fixed duplicate subtitle lines stacking up after rewinding",
-            "Rivulet now remembers your audio and subtitle choices, including forced subtitles, and applies them to the next thing you watch",
+            "\(AppName.display) now remembers your audio and subtitle choices, including forced subtitles, and applies them to the next thing you watch",
             "Removed the audio and subtitle language settings. The player now learns your preference from what you pick",
             "You can now swipe through the Home carousel",
             "The ambient glow on Home now follows the featured artwork",

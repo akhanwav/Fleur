@@ -1121,7 +1121,7 @@ extension PlexAuthManager {
         guard case .waitingForPIN(let code, _) = state else { return nil }
 
         var components = URLComponents(string: "https://app.plex.tv/auth")!
-        components.fragment = "?clientID=\(PlexAPI.clientIdentifier)&code=\(code)&context[device][product]=Rivulet"
+        components.fragment = "?clientID=\(PlexAPI.clientIdentifier)&code=\(code)&context[device][product]=\(PlexAPI.productName)"
         return components.url
     }
 }

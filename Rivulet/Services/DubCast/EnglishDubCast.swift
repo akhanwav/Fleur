@@ -35,7 +35,7 @@ nonisolated enum EnglishDubCast {
     /// front of AniList refuses generic clients).
     static var userAgent: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1"
-        return "Fleur/\(version) (Apple TV media player; https://github.com/akhanwav/Fleur)"
+        return "\(AppName.display)/\(version) (Apple TV media player; https://github.com/akhanwav/Fleur)"
     }
 
     /// One actor in the row, with every character they voice in it.

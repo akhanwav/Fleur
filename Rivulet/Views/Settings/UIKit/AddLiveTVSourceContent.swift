@@ -147,7 +147,7 @@ extension SettingsContent {
             SettingsRowItem(id: "serverURL", title: "Server URL",
                             kind: .textEntry(value: { draft.serverURL },
                                              placeholder: "http://\(baseHost):9191",
-                                             hint: "Base URL. Rivulet reads /output/m3u and /output/epg.",
+                                             hint: "Base URL. \(AppName.display) reads /output/m3u and /output/epg.",
                                              suggestions: serverSuggestions,
                                              keyboardType: .URL,
                                              set: { draft.serverURL = $0; draft.status = .idle })),

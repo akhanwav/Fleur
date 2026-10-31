@@ -573,7 +573,7 @@ struct TVSidebarView: View {
                 .foregroundStyle(.white.opacity(0.3))
 
             VStack(spacing: 12) {
-                Text("Welcome to Rivulet")
+                Text("Welcome to \(AppName.display)")
                     .font(.system(size: 46, weight: .semibold))
 
                 Text("Connect your Plex server in Settings to get started.")

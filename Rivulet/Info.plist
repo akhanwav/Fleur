@@ -4,6 +4,10 @@
 <dict>
 	<key>AVInitialRouteSharingPolicy</key>
 	<string>LongFormAudio</string>
+	<!-- The name under the icon, and the one name every user-facing sentence
+	     reads (AppName.display). Change it here to rename the app. -->
+	<key>CFBundleDisplayName</key>
+	<string>PLOX</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -27,7 +31,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Rivulet connects to media servers on your local network, such as your Plex server, to stream your library.</string>
+	<string>Connects to media servers on your local network, such as your Plex server, to stream your library.</string>
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>com.rivulet.viewMedia</string>

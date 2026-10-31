@@ -77,7 +77,7 @@ enum ConnectionAlert {
         let name = PlexAuthManager.shared.savedServerName ?? "your Plex server"
         let popup = ConfirmationPopupViewController(
             title: "Can't Reach Your Server",
-            message: "Rivulet can't connect to \(name). Check that the server is "
+            message: "\(AppName.display) can't connect to \(name). Check that the server is "
                 + "running and your network is connected. Recently loaded content "
                 + "is still available to browse.",
             confirmTitle: "Retry",

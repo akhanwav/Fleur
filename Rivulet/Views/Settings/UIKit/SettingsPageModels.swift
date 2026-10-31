@@ -500,7 +500,7 @@ enum SettingsContent {
                     guard !isOn else { return }
                     vc.present(ConfirmationPopupViewController(
                         title: "Erase What For You Learned?",
-                        message: "Suggestions are off. Erase what Rivulet learned from what you watch, or keep it for if you turn them back on.",
+                        message: "Suggestions are off. Erase what \(AppName.display) learned from what you watch, or keep it for if you turn them back on.",
                         confirmTitle: "Erase", cancelTitle: "Keep", destructive: true,
                         onConfirm: { LiveTVDataStore.shared.forgetViewings() }), animated: true)
                 })),
