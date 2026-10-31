@@ -79,8 +79,8 @@ enum SettingsPage: Hashable, CaseIterable {
         case .cache: return "Cache & Storage"
         case .displaySizePicker: return "Display Size"
         case .autoplayCountdownPicker: return "Autoplay Countdown"
-        case .skipIntervalPicker: return "Skip Forward Length"
-        case .skipBackIntervalPicker: return "Skip Back Length"
+        case .skipIntervalPicker: return "Skip Forward"
+        case .skipBackIntervalPicker: return "Skip Back"
         case .homeQualityPicker: return "Home Streaming"
         case .awayQualityPicker: return "Away Streaming"
         case .resumeBehaviorPicker: return "When Resuming"
@@ -164,13 +164,17 @@ enum DolbyVisionOutput: String, CaseIterable, CustomStringConvertible {
 // MARK: - Skip Length
 
 /// Single Left/Right tap-skip length (seconds). Drives `InputConfig.tapSeekSeconds`.
-/// Values are limited to magnitudes SF Symbols ships numbered goforward/gobackward
-/// glyphs for, so the on-screen seek indicator always shows the number.
+/// The seek indicator shows the number: SF Symbols' numbered goforward/gobackward
+/// glyph, or for 20 (which it lacks) the plain arrow with the number drawn in
+/// (`SeekIndicator.image`).
 enum SkipInterval: Int, CaseIterable, CustomStringConvertible {
     case fiveSeconds = 5
     case tenSeconds = 10
     case fifteenSeconds = 15
+    case twentySeconds = 20
     case thirtySeconds = 30
+    case fortyFiveSeconds = 45
+    case sixtySeconds = 60
 
     /// UserDefaults key backing the Skip Length setting.
     static let storageKey = "skipSeconds"

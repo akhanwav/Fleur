@@ -51,8 +51,8 @@ final class SkipIntervalSettingTests: XCTestCase {
 
     // MARK: Enum integrity
 
-    func testSkipIntervalOptionsAreNumberedGlyphMagnitudes() {
-        XCTAssertEqual(SkipInterval.allCases.map(\.rawValue), [5, 10, 15, 30])
+    func testSkipIntervalOptions() {
+        XCTAssertEqual(SkipInterval.allCases.map(\.rawValue), [5, 10, 15, 20, 30, 45, 60])
     }
 
     func testSkipIntervalDescriptionRendersSeconds() {

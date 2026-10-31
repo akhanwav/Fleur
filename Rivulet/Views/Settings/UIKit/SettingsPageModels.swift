@@ -380,13 +380,13 @@ enum SettingsContent {
                                              let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
                                              SettingsStore.setString(DolbyVisionOutput.storageKey, next.rawValue)
                                          })),
-            SettingsRowItem(id: "skipLength", title: "Skip Forward Length",
-                            kind: .navigationValue(.skipIntervalPicker, value: {
-                                SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
-                            })),
-            SettingsRowItem(id: "skipBackLength", title: "Skip Back Length",
+            SettingsRowItem(id: "skipBackLength", title: "Skip Back",
                             kind: .navigationValue(.skipBackIntervalPicker, value: {
                                 SkipInterval(rawValue: Int(InputConfig.tapSeekBackSeconds))?.description ?? ""
+                            })),
+            SettingsRowItem(id: "skipLength", title: "Skip Forward",
+                            kind: .navigationValue(.skipIntervalPicker, value: {
+                                SkipInterval(rawValue: SettingsStore.int(SkipInterval.storageKey, default: SkipInterval.defaultValue.rawValue))?.description ?? ""
                             })),
             SettingsRowItem(id: "audioSyncOffset", title: "Audio Sync",
                             kind: .stepperEntry(

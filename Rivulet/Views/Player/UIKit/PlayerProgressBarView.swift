@@ -489,7 +489,8 @@ final class PlayerProgressBarView: UIView {
                 levelOrigin = CGPoint(x: leadingEdge - Metrics.scanNumberGap - scanLevelLabel.bounds.width, y: rowTop)
             }
             let placeGlyph = {
-                self.indicatorGlyph.image = UIImage(systemName: indicator.symbol, withConfiguration: Self.indicatorConfig)
+                self.indicatorGlyph.image = indicator.seek?.image(pointSize: 29, weight: .semibold)
+                    ?? UIImage(systemName: indicator.symbol, withConfiguration: Self.indicatorConfig)
                 self.indicatorGlyph.bounds.size = indicator.size
                 self.indicatorGlyph.center = glyphCenter
             }
@@ -641,6 +642,8 @@ final class PlayerProgressBarView: UIView {
         let size: CGSize
         let forward: Bool
         let level: String?
+        /// A skip: its glyph carries the number (`SeekIndicator.image`).
+        var seek: SeekIndicator? = nil
     }
 
     /// Scanning wins over a skip; AVKit numbers scan levels from 2.
@@ -652,7 +655,8 @@ final class PlayerProgressBarView: UIView {
         }
         guard let skipIndicator else { return nil }
         let forward = if case .forward = skipIndicator { true } else { false }
-        return Indicator(symbol: skipIndicator.systemImage, size: Metrics.skipGlyph, forward: forward, level: nil)
+        return Indicator(symbol: skipIndicator.systemImage, size: Metrics.skipGlyph, forward: forward, level: nil,
+                         seek: skipIndicator)
     }
 
     private func applyAppearanceColors() {

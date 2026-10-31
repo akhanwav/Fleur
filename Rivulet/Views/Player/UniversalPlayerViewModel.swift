@@ -62,6 +62,34 @@ enum SeekIndicator: Equatable {
         case .forward(let s), .backward(let s): return s
         }
     }
+
+    /// The glyph with the number in it: the numbered symbol where SF Symbols
+    /// has one, else the plain arrow with the number drawn where the symbol
+    /// would put it (20 seconds has none).
+    func image(pointSize: CGFloat, weight: UIImage.SymbolWeight) -> UIImage? {
+        let configuration = UIImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
+        if let numbered = UIImage(systemName: systemImage, withConfiguration: configuration),
+           systemImage.contains(".") { return numbered }
+        // The plain arrow draws a lighter ring than the numbered ones: one
+        // weight up matches them.
+        let heavier = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
+        guard let arrow = UIImage(systemName: systemImage, withConfiguration: heavier) else { return nil }
+        let number = "\(abs(seconds))" as NSString
+        let size = arrow.size
+        // Sized and weighted like the numbers inside goforward.10/.30.
+        let font = UIFont.systemFont(ofSize: pointSize * 0.47, weight: .bold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.black]
+        let textSize = number.size(withAttributes: attributes)
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.scale = max(format.scale, 2)
+        let drawn = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            arrow.withTintColor(.black).draw(in: CGRect(origin: .zero, size: size))
+            number.draw(at: CGPoint(x: (size.width - textSize.width) / 2,
+                                    y: (size.height - textSize.height) / 2 + size.height * 0.04),
+                        withAttributes: attributes)
+        }
+        return drawn.withRenderingMode(.alwaysTemplate)
+    }
 }
 
 @MainActor
