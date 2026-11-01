@@ -410,7 +410,10 @@ enum SettingsContent {
                                              let all = DefaultSubtitles.allCases
                                              let next = all[((all.firstIndex(of: .current) ?? 0) + 1) % all.count]
                                              SettingsStore.setString(DefaultSubtitles.settingKey, next.rawValue)
-                                         }))
+                                         })),
+            SettingsRowItem(id: "subtitleStyle", title: "Subtitle Style",
+                            kind: .cycle(value: { SubtitleStylePreset.selected.title },
+                                         next: { SubtitleStylePreset.selected = SubtitleStylePreset.selected.advanced(bySteps: 1) }))
         ]
     }
 

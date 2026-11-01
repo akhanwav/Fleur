@@ -59,7 +59,7 @@ enum OpenSourceLicenses {
     /// The Apple TV app's supporting text (iOS does not bundle it). Its license
     /// file ships beside the font, Rivulet/Resources/Fonts/LibreFranklin-OFL.txt.
     static let libreFranklinName = "Libre Franklin"
-    static let libreFranklinSummary = "Typeface for descriptions, details and tags on Apple TV. Copyright 2020 The Libre Franklin Project Authors (github.com/googlefonts/Libre-Franklin). Bundled from Google Fonts and used under the SIL Open Font License, Version 1.1."
+    static let libreFranklinSummary = "Typeface for descriptions, details and bios, and a subtitle style, on Apple TV. Copyright 2020 The Libre Franklin Project Authors (github.com/googlefonts/Libre-Franklin). Bundled from Google Fonts and used under the SIL Open Font License, Version 1.1."
 
     /// The Apple TV app's English Dub Cast row (iOS has none).
     static var dubCastAttribution: String { """

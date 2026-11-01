@@ -982,7 +982,8 @@ weight is an axis value) sets only descriptions, synopses, bios, details lines a
 Information, Languages and Accessibility values, including long text in the info
 pop-ups. Everything else is SF Pro: titles and headings, poster captions, pop-up labels
 and menu choices, Settings, Music, and info boxes and card tags, whose text Libre
-Franklin's metrics sit off centre.
+Franklin's metrics sit off centre. Subtitles never read `AppTheme.Fonts`: their fonts
+come from `SubtitleStylePreset` and the system caption settings alone.
 
 ### Image Loading
 

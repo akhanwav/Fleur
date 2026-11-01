@@ -187,6 +187,10 @@ enum SettingsDescriptorStore {
             icon: "captions.bubble",
             description: "What a title starts with when you have not picked subtitles for it on its page. English turns on English text subtitles, then English image subtitles, and stays off when there are none. Last Used follows your last choice in the player. A title's own choice always wins."
         ),
+        "subtitleStyle": SettingDescriptor(
+            icon: "textformat",
+            description: "How subtitles look. Use System Setting follows Accessibility in Apple TV Settings. The player's Subtitles panel changes this too, with a live preview."
+        ),
         "autoplayLimit": SettingDescriptor(
             icon: "moon.zzz",
             description: "After this many episodes play in a row, the next one waits for you instead of starting on its own."

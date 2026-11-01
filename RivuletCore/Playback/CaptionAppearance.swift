@@ -238,6 +238,8 @@ enum SubtitleStylePreset: String, CaseIterable {
     case transparentBackground
     case classic
     case outline
+    case helveticaNeue
+    case libreFranklin
 
     var title: String {
         switch self {
@@ -247,6 +249,8 @@ enum SubtitleStylePreset: String, CaseIterable {
         case .transparentBackground: return "Transparent Background"
         case .classic: return "Classic"
         case .outline: return "Outline"
+        case .helveticaNeue: return "Helvetica Neue"
+        case .libreFranklin: return "Libre Franklin"
         }
     }
 
@@ -299,7 +303,24 @@ enum SubtitleStylePreset: String, CaseIterable {
                 backgroundColor: .black, backgroundOpacity: 0.0,
                 fontScale: 1.0, allowsContentFontSize: false,
                 fontDescriptor: nil, allowsContentFont: false, edge: .uniform)
+        case .helveticaNeue:
+            return Self.defaultLook(font: CTFontDescriptorCreateWithNameAndSize("HelveticaNeue-Medium" as CFString, 0))
+        case .libreFranklin:
+            // Named here, not through the app's theme: captions stay independent
+            // of the UI fonts. Only the tvOS app bundles it and offers this preset.
+            let wghtAxis = 0x7767_6874  // 'wght'
+            return Self.defaultLook(font: CTFontDescriptorCreateWithAttributes([
+                kCTFontFamilyNameAttribute: "Libre Franklin",
+                kCTFontVariationAttribute: [wghtAxis: 500]
+            ] as CFDictionary))
         }
+    }
+
+    /// The Default preset in another typeface.
+    private static func defaultLook(font: CTFontDescriptor) -> CaptionStyle? {
+        var style = SubtitleStylePreset.defaultStyle.captionStyle
+        style?.fontDescriptor = font
+        return style
     }
 
     private static let defaultsKey = "subtitleStylePreset"
