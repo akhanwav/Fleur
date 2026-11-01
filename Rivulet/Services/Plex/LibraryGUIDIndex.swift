@@ -174,6 +174,9 @@ actor LibraryGUIDIndex {
     /// `section << 32 | entry`, so no entry is ever stored twice.
     private var sections: [Section] = []
     private var byTypedTmdbId: [TypedKey: Int] = [:]
+    /// The main server's ratingKey to its title, for opening it elsewhere
+    /// while that server is down (the index is saved, so it is known offline).
+    private var byRatingKey: [String: Int] = [:]
     private var byGuid: [String: Int] = [:]
 
     /// Live network data always supersedes a disk-hydrated snapshot. Once a real
@@ -245,6 +248,7 @@ actor LibraryGUIDIndex {
         self.sections = sections
         byTypedTmdbId.removeAll(keepingCapacity: true)
         byGuid.removeAll(keepingCapacity: true)
+        byRatingKey.removeAll(keepingCapacity: true)
 
         for (sectionIndex, section) in sections.enumerated() {
             for (entryIndex, entry) in section.entries.enumerated() {
@@ -277,6 +281,10 @@ actor LibraryGUIDIndex {
 
     func lookup(guid: String) -> PlexMetadata? {
         byGuid[guid].map(metadata(at:))
+    }
+
+    func lookup(ratingKey: String) -> PlexMetadata? {
+        byRatingKey[ratingKey].map(metadata(at:))
     }
 
     func contains(guid: String) -> Bool {
@@ -355,6 +363,7 @@ actor LibraryGUIDIndex {
         case "show": plexType = .show
         default: return
         }
+        if let ratingKey = item.ratingKey { byRatingKey[ratingKey] = position }
 
         for raw in item.externalGuids {
             byGuid[raw] = position

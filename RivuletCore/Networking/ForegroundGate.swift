@@ -73,6 +73,21 @@ nonisolated final class ForegroundGate: Sendable {
     /// asked for it (`holdsInBackground`) or `always` is set.
     func data(for request: URLRequest, in session: URLSession,
               always: Bool = false) async throws -> (Data, URLResponse) {
+        // The main server's health sees every request to it (`MainServerHealth`).
+        let health = MainServerHealth.shared
+        try await health.admit(request)
+        do {
+            let result = try await heldData(for: request, in: session, always: always)
+            health.report(request, error: nil)
+            return result
+        } catch {
+            health.report(request, error: error)
+            throw error
+        }
+    }
+
+    private func heldData(for request: URLRequest, in session: URLSession,
+                          always: Bool) async throws -> (Data, URLResponse) {
         guard always || Self.holdsInBackground else { return try await session.data(for: request) }
         while true {
             try await waitForForeground()

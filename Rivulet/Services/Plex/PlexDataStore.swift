@@ -330,6 +330,17 @@ class PlexDataStore: ObservableObject {
     private init() {
         setupPollingObservers()
 
+        // The main server down: the other servers' Continue Watching still
+        // counts, though the pass otherwise follows the main server's fetch.
+        NotificationCenter.default.addObserver(
+            forName: MainServerHealth.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, MainServerHealth.shared.isOffline else { return }
+                self.refreshOtherServersContinueWatching()
+            }
+        }
+
         // Hiding a Home row is a projection change, not a data change: the hubs
         // are already in memory. Re-project immediately so Home repaints on the
         // way back out of Settings instead of at the next 3 minute poll.
@@ -1366,7 +1377,7 @@ class PlexDataStore: ObservableObject {
         } else if let cached = homeItems.first(where: \.isContinueWatching),
                   Self.carriesOverContinueWatching(hasFetched: hasFetchedContinueWatching,
                                                    isHidden: HomeRowSettings.isHidden(cached.hubIdentifier)) {
-            rail.append(cached)
+            rail.append(withOtherServersWhileMainOffline(cached))
             carriedContinueWatching = true
         }
 
@@ -1939,7 +1950,7 @@ class PlexDataStore: ObservableObject {
 
     /// Another server's items resolve to its own provider: opening, playing
     /// and removing one talks to that server (`PlexItemServer`).
-    private static func registerProvider(for server: OtherServersAvailabilityChecker.ServerAccess) {
+    static func registerProvider(for server: OtherServersAvailabilityChecker.ServerAccess) {
         let registry = MediaProviderRegistry.shared
         let id = "plex:\(server.machineId)"
         if let existing = registry.provider(for: id) as? PlexProvider,
@@ -1954,6 +1965,24 @@ class PlexDataStore: ObservableObject {
     /// movie. Its items come whole from the hubs (Plex caps each list), so
     /// the row does not paginate: a page offset into one server's hub means
     /// nothing in the merged row.
+    /// The saved row while the main server has not answered: the other
+    /// servers' cards (fetched live, playable) first, then its own saved ones,
+    /// which Home marks unavailable.
+    private func withOtherServersWhileMainOffline(_ cached: CachedHomeHub) -> CachedHomeHub {
+        guard MainServerHealth.shared.isOffline, !otherServersContinueWatching.isEmpty else { return cached }
+        let mainID = MediaProviderRegistry.shared.plexProvider?.id
+        let others = otherServersContinueWatching.flatMap { other in
+            other.metas.map {
+                PlexMediaMapper.item($0, providerID: "plex:\(other.server.machineId)",
+                                     serverURL: other.server.serverURL, authToken: other.server.token)
+            }
+        }
+        .sorted { ($0.userState.lastViewedAt ?? .distantPast) > ($1.userState.lastViewedAt ?? .distantPast) }
+        var row = cached
+        row.items = others + cached.items.filter { $0.ref.providerID == mainID }
+        return row
+    }
+
     private func continueWatchingRow(_ cw: PlexHub) -> CachedHomeHub {
         let serverURL = authManager.selectedServerURL ?? ""
         let token = authManager.selectedServerToken ?? ""

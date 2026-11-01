@@ -1044,6 +1044,20 @@ name, URL, token, `isMain`). Each gets its own `PlexProvider`, registered with
 `MediaProviderRegistry.registerAdditionalPlex` under `plex:<machineId>`, so an
 item's `ref.providerID` names the server it came from.
 
+- **The main server going down never changes which server is main.**
+  `MainServerHealth` (RivuletCore) watches every request through
+  `ForegroundGate.data`: a connection failure to the main server starts a 4s
+  `/identity` probe; while it is down, requests to it fail at once and it is
+  re-probed every 10s, posting `didChange` both ways. Home and the library pages
+  say "<server> is offline. Try Search or Watchlist." (`ConnectionAlert`); Search
+  asks the other servers (`otherServersSearch`); Watchlist skips main-server
+  matching so titles open as TMDB pages whose Ways to Watch picks a live copy;
+  a tapped main-server movie or show reroutes the same way through the saved
+  library index (`LibraryGUIDIndex.lookup(ratingKey:)`); Continue Watching
+  leads with the other servers' cards and marks the main server's
+  "Unavailable". Only the main server's own plays wait on it
+  (`PlayerPresenter`). Test with `PLOX_SIMULATE_MAIN_OFFLINE=<seconds>` (Debug):
+  `SIMCTL_CHILD_PLOX_SIMULATE_MAIN_OFFLINE=180 xcrun simctl launch …`.
 - **Resolve an item's server with `PlexItemServer`** (`access(for:)`,
   `name(for:)`, `machineId(for:)`). `access(for:)` returns nil for a
   non-main provider that is not registered yet. It never falls back to the main

@@ -67,12 +67,16 @@ class PlexAuthManager: ObservableObject {
     /// `username`. Persisted so it survives relaunch without a refetch.
     @Published var userThumbURL: URL?
     @Published var selectedServer: PlexDevice?
-    @Published var selectedServerURL: String?
+    @Published var selectedServerURL: String? {
+        didSet { MainServerHealth.shared.setMainServer(url: selectedServerURL, token: selectedServerToken) }
+    }
 
     /// The token every content request uses. It is the account's server token
     /// only while the account itself is the profile in use; a Plex Home profile
     /// gets its own, and nil withholds content until that profile is entered.
-    @Published private(set) var selectedServerToken: String?
+    @Published private(set) var selectedServerToken: String? {
+        didSet { MainServerHealth.shared.setMainServer(url: selectedServerURL, token: selectedServerToken) }
+    }
 
     /// Whether we can currently reach the Plex server (separate from authentication)
     @Published var isConnected: Bool = true
@@ -146,6 +150,9 @@ class PlexAuthManager: ObservableObject {
         case .profile(let token): selectedServerToken = token
         case .withheld, .unresolved: selectedServerToken = nil
         }
+
+        // Property observers do not run in init: tell the health check here.
+        MainServerHealth.shared.setMainServer(url: selectedServerURL, token: selectedServerToken)
 
         if authToken != nil {
             state = .authenticated

@@ -208,7 +208,11 @@ final class ContinueWatchingCell: UICollectionViewCell {
     /// `knownQuality` is the tag when the caller has the versions already (another
     /// server's copy, which no provider here can look up); nil looks it up.
     /// `serverName` names the card's server; nil shows none.
-    func configure(item: MediaItem, knownQuality: String?? = nil, serverName: String? = nil) {
+    /// `unavailable`: the card's server does not answer. The card is dimmed
+    /// and tagged, and opening it says so (`PlexHomeViewController`).
+    func configure(item: MediaItem, knownQuality: String?? = nil, serverName: String? = nil,
+                   unavailable: Bool = false) {
+        artworkImageView.alpha = unavailable ? 0.35 : 1
         serverTag.text = serverName
         serverTag.isHidden = serverName == nil
         newEpisodeTag.isHidden = !NewEpisodeTag.applies(to: item)
@@ -226,7 +230,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
             offsetSeconds: item.userState.viewOffset, runtimeSeconds: item.runtime)
         caption.configure(title: text.title, detail: text.detail)
         captionItem = item
-        if let knownQuality {
+        if unavailable {
+            showQuality("Unavailable")
+        } else if let knownQuality {
             showQuality(knownQuality)
         } else {
             loadQuality(for: item)
@@ -247,6 +253,7 @@ final class ContinueWatchingCell: UICollectionViewCell {
         artworkLoadTask = nil
         currentArtworkURL = nil
         artworkImageView.image = nil
+        artworkImageView.alpha = 1
         placeholderView.isHidden = false
         placeholderIcon.isHidden = true
         qualityTask?.cancel()

@@ -54,8 +54,29 @@ enum ConnectionAlert {
     static func presentOnceIfOffline(from presenter: UIViewController) {
         let auth = PlexAuthManager.shared
         guard auth.hasCredentials else { return }
-        guard gate.shouldPresent(isConnected: auth.isConnected) else { return }
+        guard gate.shouldPresent(isConnected: isMainServerReachable) else { return }
         present(from: presenter, retry: nil)
+    }
+
+    /// The offline card on demand (a card for a title on the server that is down).
+    static func presentOffline(from presenter: UIViewController) {
+        present(from: presenter, retry: nil)
+    }
+
+    /// The main server answers: its launch check passed and it has not gone
+    /// quiet since (`MainServerHealth`).
+    static var isMainServerReachable: Bool {
+        PlexAuthManager.shared.isConnected && !MainServerHealth.shared.isOffline
+    }
+
+    /// "Sesama is offline. Try Search or Watchlist.": the other servers and
+    /// the account's own lists still work while the main one is down.
+    static var offlineMessage: String {
+        "\(serverName) is offline. Try Search or Watchlist."
+    }
+
+    static var serverName: String {
+        PlexAuthManager.shared.mainServerName ?? PlexAuthManager.shared.savedServerName ?? "Your Plex server"
     }
 
     /// Gate for anything that needs a live server. Returns true when the
@@ -64,7 +85,7 @@ enum ConnectionAlert {
     /// the item and press Play a second time.
     static func allowPlayback(from presenter: UIViewController,
                               retry: (() -> Void)? = nil) -> Bool {
-        guard !PlexAuthManager.shared.isConnected else { return true }
+        guard !isMainServerReachable else { return true }
         present(from: presenter, retry: retry)
         return false
     }
@@ -74,12 +95,9 @@ enum ConnectionAlert {
         // Never stack two of these — a flap and a double Play press both get here.
         guard !(host is ConfirmationPopupViewController) else { return }
 
-        let name = PlexAuthManager.shared.savedServerName ?? "your Plex server"
         let popup = ConfirmationPopupViewController(
-            title: "Can't Reach Your Server",
-            message: "\(AppName.display) can't connect to \(name). Check that the server is "
-                + "running and your network is connected. Recently loaded content "
-                + "is still available to browse.",
+            title: "\(serverName) Is Offline",
+            message: offlineMessage + " Recently loaded content is still here to browse.",
             confirmTitle: "Retry",
             cancelTitle: "OK",
             onConfirm: { retryConnection(from: presenter, then: retry) }
@@ -94,7 +112,9 @@ enum ConnectionAlert {
                                         then retry: (() -> Void)?) {
         Task { @MainActor in
             await PlexAuthManager.shared.verifyAndFixConnection()
-            guard PlexAuthManager.shared.isConnected else {
+            MainServerHealth.shared.probeSoon()
+            try? await Task.sleep(for: .seconds(MainServerHealth.probeTimeout + 0.5))
+            guard isMainServerReachable else {
                 present(from: presenter, retry: retry)
                 return
             }

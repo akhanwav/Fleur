@@ -1402,6 +1402,35 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
+    /// Every other enabled server's results, while the main one is down: the
+    /// same `/search` each server answers, mapped to that server's provider
+    /// so a tile opens and plays there.
+    private func otherServersSearch(_ query: String) async -> [MediaItem] {
+        let servers = await OtherServersAvailabilityChecker.shared.enabledServers().filter { !$0.isMain }
+        let kinds: Set<String> = ["movie", "show", "episode", "season"]
+        let found = await withTaskGroup(of: (Int, [PlexMetadata]).self) { group in
+            for (index, server) in servers.enumerated() {
+                group.addTask {
+                    let results = (try? await PlexNetworkManager.shared.search(
+                        serverURL: server.serverURL, authToken: server.token, query: query, start: 0, size: 40)) ?? []
+                    return (index, results.filter { kinds.contains($0.type ?? "") })
+                }
+            }
+            var out: [Int: [PlexMetadata]] = [:]
+            for await (index, metas) in group { out[index] = metas }
+            return out
+        }
+        var items: [MediaItem] = []
+        for (index, server) in servers.enumerated() {
+            PlexDataStore.registerProvider(for: server)
+            let providerID = "plex:\(server.machineId)"
+            items += (found[index] ?? []).map {
+                PlexMediaMapper.item($0, providerID: providerID, serverURL: server.serverURL, authToken: server.token)
+            }
+        }
+        return items
+    }
+
     private func jellyfinSearch(_ query: String) async -> Result<[MediaItem], Error> {
         guard let account = JellyfinDataStore.shared.account,
               let provider = MediaProviderRegistry.shared.provider(for: account.providerID) else { return .success([]) }
@@ -1426,11 +1455,16 @@ final class PlexHomeViewController: UIViewController {
         // The shows' begins-with read is the slow one on a large server
         // (~6 s against ~0.5 s for movies), so it fills the TV Shows row in
         // after the rest has shown rather than holding every row back.
-        let showMatches = Task { await plexTitleMatches(query, type: 2) }
-        async let plex = plexSearch(query)
-        async let movieMatches = plexTitleMatches(query, type: 1)
+        // The main server down: its rows come from the other servers instead,
+        // each tile naming its server (the version tags).
+        let mainDown = !ConnectionAlert.isMainServerReachable
+        let showMatches = Task { mainDown ? [] : await plexTitleMatches(query, type: 2) }
+        async let plex = mainDown ? .success([]) : plexSearch(query)
+        async let movieMatches = mainDown ? [] : plexTitleMatches(query, type: 1)
         async let jellyfin = jellyfinSearch(query)
-        let (plexResult, movies, jellyfinResult) = await (plex, movieMatches, jellyfin)
+        async let others = mainDown ? otherServersSearch(query) : []
+        let (plexResult, movies, jellyfinOnly, otherItems) = await (plex, movieMatches, jellyfin, others)
+        let jellyfinResult = jellyfinOnly.map { $0 + otherItems }
         guard token == searchToken else { showMatches.cancel(); return }
 
         let filteredPlex = plexResult.map { filterSearchResults($0) }
@@ -2391,6 +2425,76 @@ final class PlexHomeViewController: UIViewController {
         }
     }
 
+    // MARK: - Main server offline
+
+    /// Re-vend every visible row's tiles (their content token covers the
+    /// main server's state).
+    private func reconfigureVisibleShelfRows() {
+        for case let row as ShelfRowCell in collectionView.visibleCells {
+            guard let path = collectionView.indexPath(for: row), path.section < sectionsSnapshot.count else { continue }
+            configureShelfRow(row, sectionID: sectionsSnapshot[path.section].id)
+        }
+    }
+
+    /// An item on the main server while it does not answer.
+    static func isOnOfflineServer(_ item: MediaItem) -> Bool {
+        guard !ConnectionAlert.isMainServerReachable, !item.isMetadataOnly else { return false }
+        return item.ref.providerID == MediaProviderRegistry.shared.plexProvider?.id
+    }
+
+    /// A main-server title while that server is down: its TMDB title, whose
+    /// page finds and selects a copy on a server that answers (the saved
+    /// library index names it with no request). An episode, or a title the
+    /// index does not know, has nowhere else to go: say the server is offline.
+    private func openElsewhereWhileMainOffline(_ item: MediaItem) {
+        guard item.kind == .movie || item.kind == .show else {
+            ConnectionAlert.presentOffline(from: self)
+            return
+        }
+        Task { @MainActor in
+            guard let meta = await LibraryGUIDIndex.shared.lookup(ratingKey: item.ref.itemID),
+                  let tmdbId = (meta.Guid ?? []).compactMap(\.id).first(where: { $0.hasPrefix("tmdb://") })
+                    .flatMap({ Int($0.dropFirst("tmdb://".count)) }) else {
+                ConnectionAlert.presentOffline(from: self)
+                return
+            }
+            let type: TMDBMediaType = item.kind == .movie ? .movie : .tv
+            let ref = MediaItemRef(providerID: TMDBMediaMapper.providerID,
+                                   itemID: TMDBMediaMapper.encodeItemID(tmdbId: tmdbId, type: type))
+            let source = MetadataSourceRegistry.shared.source(for: TMDBMediaMapper.providerID)
+            guard let title = (try? await source?.itemDetail(ref))?.item else {
+                ConnectionAlert.presentOffline(from: self)
+                return
+            }
+            presentStandaloneExpandedDetail(title)
+        }
+    }
+
+    /// Home and the library pages read the main server; Search, Watchlist and
+    /// Discover keep working from elsewhere.
+    private var pageReadsMainServer: Bool {
+        switch mode {
+        case .home, .library, .collection, .rowGrid: return true
+        case .search, .watchlist, .discover: return false
+        }
+    }
+
+    /// Offline: say so once (Home and the library pages keep their content),
+    /// and redraw so Continue Watching marks the cards it cannot open. Back:
+    /// reload as after any change on the server.
+    private func mainServerHealthChanged() {
+        reconfigureVisibleShelfRows()
+        updateHomeState()
+        if !ConnectionAlert.isMainServerReachable {
+            guard pageReadsMainServer, view.window != nil, presentedViewController == nil else { return }
+            ConnectionAlert.presentOnceIfOffline(from: self)
+        } else if case .home = mode {
+            // Once, from Home: the other pages refresh on the same notice.
+            ConnectionAlert.presentOnceIfOffline(from: self)  // re-arms the once-per-outage gate
+            NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
+        }
+    }
+
     // MARK: - Initial focus (hero Play)
 
     /// Launch focus must land on the hero's Play button, not on whatever the
@@ -3039,7 +3143,9 @@ final class PlexHomeViewController: UIViewController {
             backdropView.isHidden = true
             showsLoading = true
         } else if let error = hubsError, hubsEmpty {
-            stateView.configure(kind: .error(message: error))
+            // The main server down: say so, and where to go instead.
+            let mainDown = !ConnectionAlert.isMainServerReachable && pageReadsMainServer
+            stateView.configure(kind: .error(message: mainDown ? ConnectionAlert.offlineMessage : error))
             stateView.isHidden = false
             collectionView.isHidden = true
             backdropView.isHidden = true
@@ -3776,6 +3882,12 @@ final class PlexHomeViewController: UIViewController {
             .sink { [weak self] _ in
                 self?.updateHomeState()
             }
+            .store(in: &dataStoreObservers)
+
+        // The main server going down or coming back.
+        NotificationCenter.default.publisher(for: MainServerHealth.didChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.mainServerHealthChanged() }
             .store(in: &dataStoreObservers)
 
         // Refresh hubs after playback dismissals etc.
@@ -4709,6 +4821,8 @@ final class PlexHomeViewController: UIViewController {
             hasher.combine(lastSubmittedQuery)
         }
         hasher.combine(section.viewAll)
+        // Continue Watching marks the main server's cards while it is down.
+        if section.kind == .continueWatching { hasher.combine(ConnectionAlert.isMainServerReachable) }
         if section.kind == .watchlist {
             for item in section.watchlistItems { hasher.combine(item.id) }
         } else {
@@ -4834,7 +4948,8 @@ final class PlexHomeViewController: UIViewController {
             Perf.interval(.cellPrepare, key: perfKey) {
                 // Always its own copy: the card's tag names the file it resumes.
                 cell.configure(item: item, serverName: mixesServers
-                    ? Self.serverName(providerID: item.ref.providerID, kind: .plex) : nil)
+                    ? Self.serverName(providerID: item.ref.providerID, kind: .plex) : nil,
+                    unavailable: Self.isOnOfflineServer(item))
             }
             return cell
         case .recentlyAdded, .recommendations, .discoverList, .searchGrid:
@@ -4875,6 +4990,13 @@ final class PlexHomeViewController: UIViewController {
         guard itemIndex < shelfRealCount(section) else { return }
         if Self.isViewAllTile(itemIndex, in: section) {
             openViewAll(for: section)
+            return
+        }
+        let tapped = section.items.indices.contains(itemIndex) ? section.items[itemIndex] : nil
+        if let tapped, Self.isOnOfflineServer(tapped), section.kind != .watchlist {
+            // On the server that is down: its card says so; any other title
+            // opens on another server's copy where it has one.
+            openElsewhereWhileMainOffline(tapped)
             return
         }
         switch section.kind {
@@ -6555,7 +6677,9 @@ final class PlexHomeViewController: UIViewController {
     /// entries. Returns `(sourceID, item)` pairs so callers can match on
     /// the originating watchlist entry id (see `openWatchlistPreview`).
     private func buildWatchlistMediaItems(from entries: [PlexWatchlistItem]) async -> [(sourceID: String, item: MediaItem)] {
-        let serverURL = authManager.selectedServerURL ?? ""
+        // The main server down: every entry opens as its TMDB title, whose
+        // Ways to Watch lists the copies on the servers that answer.
+        let serverURL = ConnectionAlert.isMainServerReachable ? (authManager.selectedServerURL ?? "") : ""
         let token = authManager.selectedServerToken ?? ""
         let providerID = MediaProviderRegistry.shared.plexProvider?.id ?? "plex:\(serverURL)"
 

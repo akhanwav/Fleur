@@ -55,7 +55,10 @@ enum PlayerPresenter {
         animated: Bool = true,
         onDismiss: (() -> Void)? = nil
     ) -> Bool {
-        if requiresPlexConnection(for: viewModel.source) {
+        // Only the main server's own copies wait on it: another server's play
+        // while the main one is down.
+        if requiresPlexConnection(for: viewModel.source),
+           viewModel.serverURL == PlexAuthManager.shared.selectedServerURL {
             let allowed = ConnectionAlert.allowPlayback(from: presenter) {
                 present(viewModel: viewModel, from: presenter,
                         animated: animated, onDismiss: onDismiss)
