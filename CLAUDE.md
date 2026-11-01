@@ -517,6 +517,11 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
 - **The player applies it at Play** (`UniversalPlayerViewModel`, tier 1b of
   `applyAudioPreference` / `applySubtitlePreference`), matched by shape on
   whichever copy plays. A saved track the copy lacks falls through.
+- **Search Subtitles… is the player's search** (`SubtitleSearch`): Plex's own
+  server-side search, saved next to the media, so only on servers the account
+  administers (`canAdministerServer`), never shared ones or restricted
+  profiles. A download is selected by Plex's per-file selection and clears the
+  title's saved subtitle shape, so the new stream wins at Play.
 - **With no choice, Settings → Playback → Default Subtitles decides.**
   English (the default, `EnglishSubtitleDefault`): SRT, then other English
   text, then PGS, full before forced-only, plain before SDH; none, off. Last

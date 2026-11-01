@@ -52,6 +52,12 @@ enum TitleTrackChoices {
         update(key) { $0.subtitle = intent }
     }
 
+    /// Back to the file's own selection (a subtitle just downloaded is picked
+    /// by its stream on the server, which a shape could confuse with another).
+    static func clearSubtitle(for key: String) {
+        update(key) { $0.subtitle = nil }
+    }
+
     private static func update(_ key: String, _ change: (inout TitleTrackChoice) -> Void) {
         var choices = all()
         var choice = choices[key] ?? TitleTrackChoice()

@@ -1699,11 +1699,8 @@ class PlayerContainerViewController: UIViewController {
                                          subtitle: nil, trackId: nil, isSelected: false)]
                 : found.enumerated().map { index, result in
                     CardTrackListView.Row(
-                        title: result.title ?? result.displayTitle ?? "Subtitle",
-                        subtitle: [result.language, result.codec?.uppercased(),
-                                   result.hearingImpaired == true ? "SDH" : nil,
-                                   result.forced == true ? "Forced" : nil]
-                            .compactMap { $0 }.joined(separator: " • "),
+                        title: SubtitleSearch.title(of: result),
+                        subtitle: SubtitleSearch.detail(of: result),
                         trackId: index, isSelected: false)
                 }
             _ = self.presentRailPanel(

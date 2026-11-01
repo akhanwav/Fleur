@@ -923,6 +923,13 @@ final class CardTrackRowButton: UIControl {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let isFocused = context.nextFocusedView === self
+        // A name too long for the row (a downloaded subtitle's) scrolls while
+        // focused, the system marquee Ways to Watch uses, and ends in "…" at
+        // rest. Turning it off does not restore the mode, hence the order.
+        for label in [titleLabel, subtitleLabel] {
+            label.enablesMarqueeWhenAncestorFocused = isFocused
+            if !isFocused { label.lineBreakMode = .byTruncatingTail }
+        }
         coordinator.animateFocusChange(gained: isFocused) {
             self.applyFocus(isFocused)
         }
