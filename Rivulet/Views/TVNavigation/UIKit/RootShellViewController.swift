@@ -109,7 +109,7 @@ final class RootShellViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        view.backgroundColor = AppTheme.pageBackground
 
         mountContent(for: currentTab)
 

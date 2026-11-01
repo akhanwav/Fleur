@@ -51,7 +51,8 @@ final class HeroBackdropView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     private func setUp() {
-        backgroundColor = .black
+        // Transparent past the art: the page's own background shows there.
+        backgroundColor = .clear
         isUserInteractionEnabled = false
 
         // Placeholder gradient (dark grey -> nearly-black) shows before the
@@ -92,20 +93,31 @@ final class HeroBackdropView: UIView {
         horizontalScrim.endPoint = CGPoint(x: 1, y: 0.5)
         layer.addSublayer(horizontalScrim)
 
-        // Vertical scrim — clear -> 0.15 -> 0.85 at 0/0.55/1 so content rows
-        // below blend into the bottom of the art.
-        verticalScrim.colors = [
-            UIColor.clear.cgColor,
-            UIColor.black.withAlphaComponent(0.15).cgColor,
-            UIColor.black.withAlphaComponent(0.85).cgColor
-        ]
-        verticalScrim.locations = [0.0, 0.55, 1.0]
+        // Vertical scrim: the art fades into the page background below the
+        // hero (its section is the screen less 200 pt), solid from there down.
+        applyVerticalScrimColors()
+        verticalScrim.locations = [0.0, 0.5, 0.74, 0.84]
         verticalScrim.startPoint = CGPoint(x: 0.5, y: 0)
         verticalScrim.endPoint = CGPoint(x: 0.5, y: 1)
         layer.addSublayer(verticalScrim)
 
         boostScrim.alpha = 0
         addSubview(boostScrim)
+    }
+
+    private func applyVerticalScrimColors() {
+        let base = AppTheme.pageBackground.resolvedColor(with: traitCollection)
+        verticalScrim.colors = [
+            base.withAlphaComponent(0).cgColor,
+            base.withAlphaComponent(0.15).cgColor,
+            base.withAlphaComponent(0.85).cgColor,
+            base.cgColor
+        ]
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        applyVerticalScrimColors()
     }
 
     /// Where the hero's text can sit, in this view. The hero section is the

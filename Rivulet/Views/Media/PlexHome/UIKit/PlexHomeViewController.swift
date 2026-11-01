@@ -577,10 +577,6 @@ final class PlexHomeViewController: UIViewController {
     /// the hero art translates up on scroll it reveals this surface instead of
     /// flat black, matching the Apple TV+ home. Stays visible when the hero is
     /// off too.
-    /// Backmost ambient wash (artwork diffused by the frost above it);
-    /// latched once per screen — see updateAmbientIfNeeded().
-    private var ambientView: AmbientBackdropView!
-    private var backgroundBlurView: UIVisualEffectView!
     private var backdropView: HeroBackdropView!
     private var collectionView: UICollectionView!
     private var dataSource: UICollectionViewDiffableDataSource<HomeSectionID, HomeItemID>!
@@ -908,17 +904,9 @@ final class PlexHomeViewController: UIViewController {
         super.viewDidLoad()
         if case .library = mode { StartupTimer.mark("PlexHomeVC.viewDidLoad (library)") }
         else { StartupTimer.mark("PlexHomeVC.viewDidLoad (home)") }
-        // No opaque base behind `backgroundBlurView`: let the blur sample
-        // whatever sits behind the home view (the SwiftUI shell / system)
-        // rather than a flat colour. Search keeps the same clear root: with
-        // its three background layers (ambient/blur/backdrop) kept out of the
-        // hierarchy, a clear background lets the uniform system search
-        // surround show through seamlessly — an opaque fill there instead reads
-        // as a darker panel inset from the surround.
-        view.backgroundColor = .clear
-        // Collection page: presented over the library through
-        // BlurFadeAnimator, which assumes an opaque page.
-        if isGridPage { view.backgroundColor = .black }
+        // Every browsing page, Search included, sits on the one theme colour;
+        // the Home hero's art (where shown) fades into it below the hero.
+        view.backgroundColor = AppTheme.pageBackground
 
         Perf.event(.homeFirstRender, message: "viewDidLoad start")
 
@@ -2582,15 +2570,8 @@ final class PlexHomeViewController: UIViewController {
     // MARK: - Backdrop
 
     private func configureBackdrop() {
-        // The three background layers, back to front: the ambient artwork wash,
-        // the frosted material that diffuses it, and the hero art. All are
-        // allocated up front so references elsewhere stay valid even when the
-        // surface doesn't use them.
-        ambientView = AmbientBackdropView()
-        ambientView.translatesAutoresizingMaskIntoConstraints = false
-        backgroundBlurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
-        backgroundBlurView.translatesAutoresizingMaskIntoConstraints = false
-        backgroundBlurView.isUserInteractionEnabled = false
+        // The hero art, in front of the page's solid background. Allocated up
+        // front so references elsewhere stay valid on pages without a hero.
         backdropView = HeroBackdropView()
         backdropView.translatesAutoresizingMaskIntoConstraints = false
         // Gate the startup splash on the hero image: it reports when the first
@@ -2598,37 +2579,8 @@ final class PlexHomeViewController: UIViewController {
         backdropView.onFirstImageLoaded = { [weak self] in
             self?.markHeroReady()
         }
-
-        // Search has NO ambient wash, frosted base, or hero — it renders on a
-        // flat opaque surface inside the system search container. Keep
-        // all three background layers OUT of the hierarchy entirely (they stay
-        // allocated so the rest of the code's references are valid, just never
-        // parented), so none can paint an image into the search surface.
+        // Search has no hero: never parented, so it can paint nothing there.
         if case .search = mode { return }
-
-        // Backmost: the ambient wash — a single artwork image the frosted
-        // material (next layer) diffuses into an Apple TV -style color field.
-        // Latched once per screen by updateAmbientIfNeeded().
-        view.addSubview(ambientView)
-        NSLayoutConstraint.activate([
-            ambientView.topAnchor.constraint(equalTo: view.topAnchor),
-            ambientView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            ambientView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            ambientView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-        ])
-
-        // Frost in front of the ambient: a standard tvOS material that adapts
-        // to light/dark and diffuses the wash. The hero art (added next, in
-        // front) bleeds full-screen at the top and translates up on scroll;
-        // past it this surface shows instead of black. Static and
-        // non-interactive. Visible even when the hero is off.
-        view.addSubview(backgroundBlurView)
-        NSLayoutConstraint.activate([
-            backgroundBlurView.topAnchor.constraint(equalTo: view.topAnchor),
-            backgroundBlurView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            backgroundBlurView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            backgroundBlurView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-        ])
 
         view.addSubview(backdropView)
         NSLayoutConstraint.activate([
@@ -2704,10 +2656,6 @@ final class PlexHomeViewController: UIViewController {
     /// image is on screen.
     private func setHeroBackdrop(url: URL?, fallback: ArtworkFallback.Query? = nil) {
         backdropView.setBackdrop(url: url, fallback: fallback)
-        // The ambient wash tracks the hero: same artwork, diffused by the
-        // frosted material in front of it. Every hero page change lands here,
-        // so this is the only place the wash needs driving.
-        ambientView.setAmbient(url: url)
         if url == nil {
             markHeroReady()
         }
@@ -4725,7 +4673,6 @@ final class PlexHomeViewController: UIViewController {
         // Shelf rows keep a single diffable identity, so content growth /
         // refresh inside a row must be pushed to the visible cells by hand.
         updateVisibleShelfRows()
-        updateAmbientIfNeeded()
         // Cold launch: the hero cell materializes only after this apply's
         // layout pass — re-assert the launch focus once it exists.
         DispatchQueue.main.async { [weak self] in
@@ -5399,37 +5346,6 @@ final class PlexHomeViewController: UIViewController {
             })
         }
         presentTileMenu(sections: [first, [remove]])
-    }
-
-    /// Seed the ambient wash on surfaces that have no hero to drive it (hero
-    /// switched off, or none loaded). Uses the first featured row's first item
-    /// and runs once. When a hero IS present it owns the wash — every page
-    /// change recolors it via `setHeroBackdrop(url:)` — so this backs off.
-    private func updateAmbientIfNeeded() {
-        guard !ambientView.hasAmbient else { return }
-        // Collection page: the collection's own art when it has some (12 of
-        // 112 on the measured server), else its first loaded member. Never
-        // Home's rows, which are not on this page.
-        if case .collection(let collection) = mode {
-            let member = sectionsSnapshot.first?.items.first?.heroBackdropRequest()
-            guard let url = collection.heroBackdropRequest().backdropURL
-                    ?? member?.backdropURL ?? member?.thumbnailURL else { return }
-            ambientView.setAmbient(url: url)
-            return
-        }
-        // Discover's hero is MediaItem-backed (`heroMediaItems`); everywhere
-        // else it's `heroItems`. Either one means a hero owns the wash.
-        let heroSection = sectionsSnapshot.first(where: { $0.kind == .hero })
-        let hasHero = !heroItems.isEmpty || !(heroSection?.heroMediaItems.isEmpty ?? true)
-        if showHomeHero, hasHero { return }
-
-        // MediaItem artwork URLs are already fully qualified, so no
-        // server/auth args are needed.
-        let firstItem = sectionsSnapshot.first(where: { !$0.items.isEmpty })?.items.first
-            ?? dataStore.homeItems.first?.items.first
-        guard let firstItem else { return }
-        let request = firstItem.heroBackdropRequest()
-        ambientView.setAmbient(url: request.backdropURL ?? request.thumbnailURL)
     }
 
     private func computeSections() -> [HomeSectionData] {
