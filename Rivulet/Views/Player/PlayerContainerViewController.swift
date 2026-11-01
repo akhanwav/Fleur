@@ -1780,6 +1780,10 @@ class PlayerContainerViewController: UIViewController {
         // checks `activeRailPanel`, not `activeTopPanel`) found nothing to
         // close and exited the player right behind it.
         panel.onMenuHandled = { [weak self] in self?.blockDismissTemporarily() }
+        // Stops the remote's ring jog and other GameController seeks behind the
+        // panel, as any panel does: they never pass through this controller's
+        // press handling, so `contentOwnsPress` cannot stop them.
+        vm.isRailPanelOpen = true
         // Disabling the anchor (now that `anchorEnabled` accounts for
         // `activeTopPanel`) and THEN asking for an update is what actually
         // moves focus — a bare setNeedsFocusUpdate does nothing while the
@@ -1789,6 +1793,7 @@ class PlayerContainerViewController: UIViewController {
         panel.onDismiss = { [weak self, weak panel] in
             guard let self, self.activeTopPanel === panel else { return }
             self.activeTopPanel = nil
+            self.viewModel?.isRailPanelOpen = self.activeRailPanel != nil || self.descriptionOverlay != nil
             // Re-enables the anchor; `anchorNeedsFocusUpdate` inside this
             // call won't fire for this transition (the anchor isn't the one
             // losing focus here, the panel's row is), so the explicit,

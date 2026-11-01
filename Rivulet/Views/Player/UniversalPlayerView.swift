@@ -754,7 +754,7 @@ struct UniversalPlayerView: View {
             }
             remoteInput.isControlsFocusCheck = { [weak viewModel] in
                 guard let viewModel else { return false }
-                // A presented rail panel (Info, Up Next, Insights) owns Left/Right
+                // A presented panel (Quick Adjust, Info, Up Next, Insights) owns Left/Right
                 // for its own content, and focus inside it is NOT inside the rail,
                 // so `controlsFocusActive` is false there. Without this term the
                 // GameController path kept seeking behind an open popup — the
