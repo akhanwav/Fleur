@@ -2143,11 +2143,24 @@ final class UniversalPlayerViewModel: ObservableObject {
 
             let transcodeReady = await waitForHLSTranscodeReady(url: hlsURL, headers: streamHeaders)
             if !transcodeReady {
+                // A quality step is a choice, and the file is still there: a
+                // server that won't convert it plays the original.
+                if activeStreamPlan.step != nil, !preflightFoundServerDown, let original = originalPlan() {
+                    diagnostics.step("quality_step_preflight_failed_playing_original")
+                    stopOutgoingTranscode()
+                    activeStreamPlan = .original
+                    streamURL = nil
+                    streamHeaders = [:]
+                    playbackPlan = original
+                    activeRoute = original.primary
+                    try await startWithFallback(plan: original, startTime: startTime)
+                    return
+                }
                 // HLS as the PRIMARY route (no direct-play URL existed), not a
                 // fallback. Tagged separately from `fallback_preflight_failed`
                 // so the two don't grind together in one Sentry issue: this one
                 // means the server is slow, that one means Aether ALSO broke.
-                let error = PlayerError.loadFailed("HLS transcode session failed to start")
+                let error = preflightFailure
                 diagnostics.step("hls_primary_preflight_failed")
                 diagnostics.capture(error, event: "primary_preflight_failed", extraTags: [
                     "player_type": "avplayer"
@@ -2240,6 +2253,10 @@ final class UniversalPlayerViewModel: ObservableObject {
                     kind: kind
                 )
                 guard planHasHLSFallback(plan) else { throw error }
+                // A 503 for the file is the server, not the file: its transcoder
+                // is no likelier to answer, and waiting on it hid the cause
+                // behind "taking too long" (FLEUR-7).
+                if (error as? PlayerError)?.isServiceUnavailable == true { throw error }
                 // A hang and a thrown startup error get separate reason strings
                 // so they do not merge into one Sentry issue. They have
                 // different causes and only the hang is #245.
@@ -3082,7 +3099,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             // that sent us here, plus what the server said on all 8 preflight
             // polls. Reported as `fallback_preflight_failed` — the user got
             // NOTHING, both routes died.
-            let error = PlayerError.loadFailed("HLS transcode session failed to start")
+            let error = preflightFailure
             diagnostics.step("hls_fallback_preflight_failed")
             diagnostics.capture(error, event: "fallback_preflight_failed", extraTags: [
                 "fallback_reason": reason,
@@ -3238,8 +3255,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         let measured = QualityDecision.needsProbe(setting: setting, isRelay: isRelay) ? await throughputKbps() : nil
         let cap = QualityDecision.capKbps(setting: setting, measuredKbps: measured, isRelay: isRelay)
         applyVersion(baseVersionChoice, to: serverOrderedMedia, capKbps: cap)
-        activeStreamPlan = QualityDecision.decide(setting: setting, sourceKbps: metadata.Media?.first?.sourceKbps,
-                                                  measuredKbps: measured, isRelay: isRelay)
+        activeStreamPlan = metadata.isDolbyVisionOnly ? .original : QualityDecision.decide(
+            setting: setting, sourceKbps: metadata.Media?.first?.sourceKbps, measuredKbps: measured, isRelay: isRelay)
         diagnostics.step("quality_decided", detail: "setting=\(setting.rawValue) plan=\(activeStreamPlan.step?.kbps ?? 0)")
     }
 
@@ -3335,7 +3352,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         // The watchdog's seek-and-kick would race the reload.
         cancelAetherStallWatchdog()
         enqueueStreamWork { vm in
-            guard let step = QualityDecision.stepDown(from: vm.activeStreamPlan,
+            guard !vm.metadata.isDolbyVisionOnly,
+                  let step = QualityDecision.stepDown(from: vm.activeStreamPlan,
                                                       sourceKbps: vm.metadata.Media?.first?.sourceKbps) else { return }
             let before = vm.planSnapshot
             vm.activeStreamPlan = .transcode(step)
@@ -3407,6 +3425,14 @@ final class UniversalPlayerViewModel: ObservableObject {
             diagnostics.step("quality_reload_unsupported", detail: "reason=\(reason)")
         } catch {
             if isCancellationError(error) || Task.isCancelled { return }
+            // Auto stepped down to help, and the server would not convert:
+            // back on the file at the playhead rather than ending the session.
+            if reason == "quality_step_down", !preflightFoundServerDown, snapshot.plan == .original, originalPlan() != nil {
+                diagnostics.step("quality_step_down_failed_back_to_original")
+                activeStreamPlan = .original
+                await reloadStream(toOriginal: true, reason: "quality_step_down_failed", tracks: tracks, restoring: snapshot)
+                return
+            }
             errorMessage = (error as? PlayerError)?.userFacingDescription
                 ?? PlayerError.loadFailed(error.localizedDescription).userFacingDescription
             updatePlaybackState(.failed(.loadFailed(error.localizedDescription)))
@@ -3445,7 +3471,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         try Task.checkCancellation()
         beginHLSSwitch(to: hls)
         guard await waitForHLSTranscodeReady(url: hls.url, headers: hls.headers) else {
-            throw PlayerError.loadFailed("HLS transcode session failed to start")
+            throw preflightFailure
         }
         try Task.checkCancellation()
         try await finishHLSSwitch(to: hls, resumeTime: time)
@@ -3784,6 +3810,13 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// - Returns: true if the transcode is ready, false if it failed to start
     private func waitForHLSTranscodeReady(url: URL, headers: [String: String]) async -> Bool {
         hlsMasterPlaylist = nil
+        preflightFoundServerDown = false
+        if MainServerHealth.shared.isOffline, MainServerHealth.shared.isMainServer(url) {
+            preflightFoundServerDown = true
+            return false
+        }
+        var connectionFailures = 0
+        var serverErrors = 0
         await prepareHLSRelay(for: url)
         let url = avPlayerURL(url)
         await PlexNetworkManager.shared.startTranscodeDecision(hlsURL: url, headers: headers)
@@ -3842,6 +3875,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                         }
                     } else if httpResponse.statusCode == 404 || httpResponse.statusCode == 503 {
                         // Transcode not started yet
+                        if httpResponse.statusCode == 503 { serverErrors += 1 }
                         diagnostics.recordPreflightAttempt(attempt, outcome: "HTTP \(httpResponse.statusCode) (transcode not started)")
                     } else {
                         let body = String(data: data.prefix(500), encoding: .utf8) ?? "<\(data.count) non-UTF8 bytes>"
@@ -3857,6 +3891,15 @@ final class UniversalPlayerViewModel: ObservableObject {
                     attempt,
                     outcome: "transport error \(nsError.domain) code=\(nsError.code): \(error.localizedDescription)"
                 )
+                // Up to 90 s of polls against a server that is not there, which
+                // the viewer sat through to read "taking too long".
+                if MainServerHealth.isConnectionFailure(error) {
+                    connectionFailures += 1
+                    if connectionFailures >= 2 {
+                        preflightFoundServerDown = true
+                        return false
+                    }
+                }
             }
 
             // Wait before retrying (increasing delay: 0.5s, 1s, 1.5s, 2s, 2.5s, 3s, 3.5s, 4s)
@@ -3867,7 +3910,25 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
 
         print("🎬 [HLSPreflight] Transcode failed to start after 8 attempts")
+        preflightFoundServerDown = serverErrors == 8
         return false
+    }
+
+    /// The last preflight's server: gone, or answering 503 to every poll.
+    private var preflightFoundServerDown = false
+
+    private var preflightFailure: PlayerError {
+        .loadFailed(preflightFoundServerDown ? PlayerError.serverUnavailableMessage
+                                             : "HLS transcode session failed to start")
+    }
+
+    /// This item's plan with no quality step, when it has a file to play.
+    private func originalPlan() -> PlaybackPlan? {
+        guard case .plex = source, let server = URL(string: serverURL) else { return nil }
+        let plan = ContentRouter.plan(for: ContentRoutingContext(
+            metadata: metadata, serverURL: server, authToken: authToken, playbackPolicy: .directPlayFirst))
+        if case .aether = plan.primary { return plan }
+        return nil
     }
 
     /// The first variant playlist a master names, resolved against `baseURL`.

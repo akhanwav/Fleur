@@ -45,6 +45,8 @@ public enum SentryStartup {
         // issue tagged `debug`. XCTest sets this variable in the host process;
         // Debug runs from Xcode do not, and keep reporting.
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        // Before the SDK reads its state from the run that ended.
+        let reinstalled = InstallStamp.changedSinceLastLaunch()
         SentrySDK.start { options in
             options.dsn = Secrets.sentryDSN
             options.debug = false
@@ -63,6 +65,8 @@ public enum SentryStartup {
             // alerts and dashboards separate the two.
             options.initialScope = { scope in
                 scope.setTag(value: platform.rawValue, key: "platform")
+                // Xcode or devicectl, against TestFlight and the App Store.
+                scope.setTag(value: InstallStamp.isSideloaded ? "sideloaded" : "distributed", key: "install")
                 return scope
             }
             // Transactions we deliberately measure stay at full fidelity;
@@ -110,6 +114,13 @@ public enum SentryStartup {
             options.enableReportNonFullyBlockingAppHangs = true
 
             options.beforeSend = { event in
+                // Installing over a running app kills it the way the OS's
+                // watchdog would. The SDK cannot tell: a local build keeps its
+                // release name and vendor id, and devicectl attaches no
+                // debugger. Real watchdog kills (with no install) still report.
+                if reinstalled, event.exceptions?.contains(where: { $0.type == "WatchdogTermination" }) == true {
+                    return nil
+                }
                 // Drop cancelled URL request errors — these are normal when
                 // navigating away. "CancellationError" is listed explicitly:
                 // Swift's structured-concurrency error stringifies as
@@ -142,5 +153,32 @@ public enum SentryStartup {
             }
         }
         SentryBridge.isActive = true
+    }
+}
+
+/// Whether the app on disk changed since it last launched.
+nonisolated enum InstallStamp {
+    private static let key = "sentryInstallStamp"
+
+    /// An install moves the bundle to a new container; a rebuild also changes
+    /// the executable's date.
+    static var current: String {
+        let executable = Bundle.main.executablePath ?? ""
+        let modified = (try? FileManager.default.attributesOfItem(atPath: executable))?[.modificationDate] as? Date
+        return "\(Bundle.main.bundlePath)|\(modified?.timeIntervalSince1970 ?? 0)"
+    }
+
+    /// Reads and updates the stored stamp, so call once a launch. False on the
+    /// first launch that has one to compare.
+    static func changedSinceLastLaunch(defaults: UserDefaults = .standard) -> Bool {
+        let stamp = current
+        defer { defaults.set(stamp, forKey: key) }
+        guard let previous = defaults.string(forKey: key) else { return false }
+        return previous != stamp
+    }
+
+    /// A provisioning profile ships only in development and ad hoc builds.
+    static var isSideloaded: Bool {
+        Bundle.main.path(forResource: "embedded", ofType: "mobileprovision") != nil
     }
 }

@@ -156,6 +156,19 @@ struct ContentRouter {
         var reasoning: [String] = []
         let hls = buildHLSRoute(context: context)
 
+        // Dolby Vision with no fallback layer is never transcoded, whatever
+        // the quality setting or the connection: the file, or a clear failure.
+        if context.metadata.isDolbyVisionOnly, let aetherRoute = buildAetherRoute(context: context) {
+            reasoning.append("dolby_vision_only_never_transcoded")
+            playerDebugLog("[ContentRouter] \(container) → Aether (Dolby Vision only, no transcode)")
+            return PlaybackPlan(
+                policy: context.playbackPolicy,
+                primary: aetherRoute,
+                fallbacks: [],
+                reasoning: reasoning
+            )
+        }
+
         // A relay-tunneled server cannot serve raw parts for direct play
         // (HTTP 500 above its remote-bitrate policy), so Aether has nothing
         // it can ingest. Route straight to the capped HLS transcode, which

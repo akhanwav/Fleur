@@ -499,6 +499,16 @@ most servers and fails on the ones behind a raw-IP or private certificate (#314,
 2. `.aether` — whenever a direct-play URL is available (AetherEngine handles demux + remux + HDR internally; software-decodes AV1 / VP9 / MPEG-2 / VC-1 / MPEG-4p2). DV P7 plays as HDR10 base.
 3. `.hls` — server-side transcode; primary when no direct-play URL exists, and the fallback after an Aether startup failure. `requiresVideoTranscode` codecs force a video transcode (not just remux) on this route.
 
+#### When a transcode cannot start
+- **Dolby Vision with no fallback layer (Profile 5) is never transcoded**
+  (`PlexMetadata.isDolbyVisionOnly`): the router gives it Aether with no fallback,
+  and no quality setting or step-down applies.
+- **A quality step that won't start plays the file** (`originalPlan`), at launch and
+  on Auto's step-down, unless the server itself is down.
+- **A server that is gone says so.** The preflight stops after two connection
+  failures, or 503 on all eight polls, and an Aether 503 skips the fallback:
+  `PlayerError.serverUnavailableMessage`, not "taking too long".
+
 #### Live TV
 Two layouts: What's On (`LiveBrowseViewController`, the default) and the Guide (`GuideLayoutView`). Both play through `LiveTVAetherPlayerViewController` on the VOD glass rail. Multiview (`LiveMultiviewViewController`) runs **AetherPlayer** per slot (`MultiStreamViewModel` instantiates `AetherPlayer()`, each tile binds the engine surface), up to 4 concurrent slots. HDHomeRun delivers a direct stream; DVB tuners require a Plex transcode URL with full client-profile parameters (see Plex Live TV section below).
 iOS reads the same `LiveTVDataStore` and saved sources and adds sources through the same `LiveTVSourceConnector`. Dispatcharr API keys live in the Keychain (`liveTVSourceToken_<sourceId>`); the saved source JSON keeps one only if the Keychain write fails, and older plain-text keys are migrated on load.
@@ -1063,6 +1073,10 @@ item's `ref.providerID` names the server it came from.
   "Unavailable". Only the main server's own plays wait on it
   (`PlayerPresenter`). Test with `PLOX_SIMULATE_MAIN_OFFLINE=<seconds>` (Debug):
   `SIMCTL_CHILD_PLOX_SIMULATE_MAIN_OFFLINE=180 xcrun simctl launch …`.
+- **Copies are read per server, in one request**
+  (`PlexNetworkManager.getMetadataBatch`: `/library/metadata/1,2,3`, at most 10 ids,
+  files, streams and cast included, no extras). `getFullMetadata` shares one
+  request among concurrent askers. A 429 backs off per host (`RateLimitBackoff`).
 - **Resolve an item's server with `PlexItemServer`** (`access(for:)`,
   `name(for:)`, `machineId(for:)`). `access(for:)` returns nil for a
   non-main provider that is not registered yet. It never falls back to the main
@@ -1297,6 +1311,13 @@ canonical form working Plex clients ship; do not "fix" it back to raw commas.
 | `HTTP 500 on /hubs` | Plex server issue (not client-side) |
 | `NSURLErrorDomain -999 cancelled` | User navigated away, request timeout |
 | Aether/AVPlayer startup fatal → auto HLS fallback | Expected: ContentRouter falls back to `.hls` once at current playback time |
+
+### Watchdog terminations
+Sentry's heuristic reports any unexplained death of a foreground app. Installing over
+a running local build counts: the release name and vendor id do not change and
+devicectl attaches no debugger. `InstallStamp` drops those events; a kill with no
+install still reports, tagged `install:sideloaded` or `distributed`. A rebooted device
+reports nothing (the boot time differs), so a freeze needing a restart never appears.
 
 ### Performance tracing
 

@@ -55,6 +55,9 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return normalized.isEmpty ? "/" : "/" + normalized
     }
 
+    /// Full-metadata reads on the wire, so concurrent askers share one.
+    private var fullMetadataInFlight: [String: Task<PlexMetadata, any Error>] = [:]
+
     // URL session with custom delegate for self-signed certs
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.default
@@ -145,8 +148,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await ForegroundGate.shared.data(
-                for: request, in: timeout == nil ? session : longHoldSession)
+            (data, response) = try await sendRespectingRateLimit(request, in: timeout == nil ? session : longHoldSession)
         } catch {
             // Transport-level failures (timeout -1001, connection lost -1005,
             // cannot-connect -1004) previously escaped this function completely
@@ -192,7 +194,10 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
             // address now answered by another server (RIVULET-2): server state,
             // so a log. Other 4xx can mean we sent a bad request, so capture.
             let status = httpResponse.statusCode
-            if status == 404 || status == 421 {
+            // 429 is logged with its host where it is handled (`sendRespectingRateLimit`).
+            if status == 429 {
+                // Nothing more to report.
+            } else if status == 404 || status == 421 {
                 SentryBridge.log(.warn, "Plex request returned \(status)", attributes: [
                     "component": "plex_network",
                     "error_type": "http",
@@ -292,8 +297,7 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         let netStart = ProcessInfo.processInfo.systemUptime
-        let (data, response) = try await ForegroundGate.shared.data(
-            for: request, in: timeout == nil ? session : longHoldSession)
+        let (data, response) = try await sendRespectingRateLimit(request, in: timeout == nil ? session : longHoldSession)
         let netMs = Int((ProcessInfo.processInfo.systemUptime - netStart) * 1000)
         if netMs > 750 {
             StartupTimer.mark("SLOW net \(netMs)ms \(url.path) (\(data.count)B)")
@@ -308,6 +312,42 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         }
 
         return data
+    }
+
+    /// Sends `request`, keeping off a host that answered 429 (`RateLimitBackoff`).
+    /// A short wait is sat out and a GET sent once more; the 429 that remains
+    /// is returned for the caller to throw, and logged with the host, the only
+    /// way to tell which one it was.
+    private func sendRespectingRateLimit(_ request: URLRequest, in session: URLSession) async throws -> (Data, URLResponse) {
+        let backoff = RateLimitBackoff.shared
+        let host = request.url?.host
+        func waitOut() async throws {
+            let wait = backoff.remainingWait(host: host)
+            guard wait > 0 else { return }
+            guard wait <= RateLimitBackoff.maxWait else {
+                throw PlexAPIError.httpError(statusCode: 429, data: Data())
+            }
+            try await Task.sleep(for: .seconds(wait))
+        }
+        var mayRetry = request.httpMethod == nil || request.httpMethod == "GET"
+        while true {
+            try await waitOut()
+            let result = try await ForegroundGate.shared.data(for: request, in: session)
+            guard let http = result.1 as? HTTPURLResponse, http.statusCode == 429 else {
+                backoff.noteAnswered(host: host)
+                return result
+            }
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After")
+            let delay = backoff.noteRateLimited(host: host, retryAfter: retryAfter)
+            SentryBridge.log(.warn, "Plex request rate limited", attributes: [
+                "component": "plex_network",
+                "host": SensitiveDataRedactor.safeHost(host),
+                "endpoint": request.url.map(Self.sentryEndpoint(for:)) ?? "unknown",
+                "retry_after_seconds": Int(delay),
+            ])
+            guard mayRetry, delay <= RateLimitBackoff.maxWait else { return result }
+            mayRetry = false
+        }
     }
 
     // MARK: - Authentication
@@ -547,6 +587,58 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
 
     /// Get full metadata including cast, crew, and extras
     func getFullMetadata(
+        serverURL: String,
+        authToken: String,
+        ratingKey: String
+    ) async throws -> PlexMetadata {
+        // A detail page asks for one item from several places as it opens (the
+        // chrome, the below-fold loader, the copies): one request answers them
+        // all. Nothing is kept once it lands, so a later read is always fresh.
+        let key = "\(serverURL)|\(authToken)|\(ratingKey)"
+        if let running = fullMetadataInFlight[key] { return try await running.value }
+        let task = Task { try await fetchFullMetadata(serverURL: serverURL, authToken: authToken, ratingKey: ratingKey) }
+        fullMetadataInFlight[key] = task
+        defer { fullMetadataInFlight[key] = nil }
+        return try await task.value
+    }
+
+    /// The most items asked for in one request. A proxy in front of a shared
+    /// server refused 60 ids (measured on one server; 10 passed on all four).
+    static let metadataBatchSize = 10
+
+    /// Several items of one server in as few requests as possible, each with
+    /// its files, streams and cast (`/library/metadata/1,2,3`), for what lists
+    /// copies and needs no extras, chapters or markers. Measured: 4 items in
+    /// 156 ms, against about 100 ms each, one at a time. By rating key; an
+    /// item the server did not return is absent. Throws only if every request
+    /// failed, so one bad chunk costs that chunk.
+    func getMetadataBatch(serverURL: String, authToken: String,
+                          ratingKeys: [String]) async throws -> [String: PlexMetadata] {
+        let chunks = stride(from: 0, to: ratingKeys.count, by: Self.metadataBatchSize).map {
+            Array(ratingKeys[$0..<min($0 + Self.metadataBatchSize, ratingKeys.count)])
+        }
+        var found: [String: PlexMetadata] = [:]
+        var failure: (any Error)?
+        for chunk in chunks {
+            do {
+                guard var components = URLComponents(string: "\(serverURL)/library/metadata/\(chunk.joined(separator: ","))") else {
+                    throw PlexAPIError.invalidURL
+                }
+                components.queryItems = [URLQueryItem(name: "includeGuids", value: "1")]
+                guard let url = components.url else { throw PlexAPIError.invalidURL }
+                let container: PlexMediaContainerWrapper = try await request(url, headers: plexHeaders(authToken: authToken))
+                for meta in container.MediaContainer.Metadata ?? [] {
+                    if let key = meta.ratingKey { found[key] = meta }
+                }
+            } catch {
+                failure = error
+            }
+        }
+        if found.isEmpty, let failure { throw failure }
+        return found
+    }
+
+    private func fetchFullMetadata(
         serverURL: String,
         authToken: String,
         ratingKey: String

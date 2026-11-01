@@ -102,7 +102,9 @@ enum PlayerError: Error, Equatable, Sendable {
         case .invalidURL:
             return "This video couldn't be played. The link may be invalid."
         case .loadFailed(let message):
-            if message.contains("HLS transcode session failed") {
+            if message == Self.serverUnavailableMessage {
+                return Self.serverUnavailableText
+            } else if message.contains("HLS transcode session failed") {
                 return "Your Plex server is taking too long to prepare the video. Please try again."
             } else if message.contains("transcode") {
                 return "Your server couldn't prepare this video for playback. It may be busy with other streams."
@@ -127,6 +129,8 @@ enum PlayerError: Error, Equatable, Sendable {
             // failure, because to the viewer it is one.
             switch kind {
             case EngineFailureKind.sourceRateLimited:
+                // 429 and 509 are a busy server. 503 is one not serving at all.
+                if isServiceUnavailable { return Self.serverUnavailableText }
                 return "Your server is refusing new streams right now. Wait a moment and try again."
             case EngineFailureKind.sourceRefused:
                 return "Your server refused this video. It may have moved, or your access to it may have changed."
@@ -136,6 +140,18 @@ enum PlayerError: Error, Equatable, Sendable {
                 return "This video couldn't be played. Please try again."
             }
         }
+    }
+
+    /// The server stopped answering, or answers only that it is unavailable.
+    /// Carried as `.loadFailed`'s message, like the other host-authored failures.
+    static let serverUnavailableMessage = "Server unavailable"
+    static let serverUnavailableText = "This server is unavailable right now. Try again in a moment, or pick another server in Ways to Watch."
+
+    /// The origin answered 503: nothing on that server will serve this, a
+    /// transcode included.
+    var isServiceUnavailable: Bool {
+        guard case .engineFailure(let kind, let message) = self else { return false }
+        return kind == EngineFailureKind.sourceRateLimited && message.contains("503")
     }
 
     /// AetherEngine's own classification of this failure, when it has one.

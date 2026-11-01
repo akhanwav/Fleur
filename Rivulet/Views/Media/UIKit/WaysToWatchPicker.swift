@@ -280,8 +280,14 @@ final class DetailCopySelection {
         await onGuid?(guid)
         guard let guid else { return (nil, tmdbKey, []) }
         let copies = await checker.copies(plexGuid: guid) { machineId, found in
+            // One request for all of this server's copies, not one each: a
+            // title on several libraries was a burst per page (FLEUR-A).
+            let metas = await batchedMetadata(for: found)
             let copies = await withTaskGroup(of: DetailCopy?.self) { group in
-                for copy in found { group.addTask { await remoteCopy(copy) } }
+                for copy in found {
+                    guard let meta = metas[copy.ratingKey] else { continue }
+                    group.addTask { await remoteCopy(copy, meta: meta) }
+                }
                 var copies: [DetailCopy] = []
                 for await copy in group {
                     guard let copy else { continue }
@@ -438,10 +444,17 @@ final class DetailCopySelection {
         return EpisodePicker.playTitle(for: item)
     }
 
-    private static func remoteCopy(_ copy: OtherServersAvailabilityChecker.ServerCopy) async -> DetailCopy? {
+    /// One server's copies, by rating key. Empty when the server failed.
+    private static func batchedMetadata(for copies: [OtherServersAvailabilityChecker.ServerCopy]) async
+        -> [String: PlexMetadata] {
+        guard let server = copies.first else { return [:] }
+        return (try? await PlexNetworkManager.shared.getMetadataBatch(
+            serverURL: server.serverURL, authToken: server.token, ratingKeys: copies.map(\.ratingKey))) ?? [:]
+    }
+
+    private static func remoteCopy(_ copy: OtherServersAvailabilityChecker.ServerCopy,
+                                   meta: PlexMetadata) async -> DetailCopy? {
         let network = PlexNetworkManager.shared
-        guard let meta = try? await network.getFullMetadata(
-            serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey) else { return nil }
         // Never registered with MediaProviderRegistry: a provider id scoped
         // to the remote server just keeps `.ref.isPlex` honest.
         let providerID = "plex:\(copy.machineId)"

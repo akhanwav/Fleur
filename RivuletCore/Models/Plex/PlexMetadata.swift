@@ -828,6 +828,14 @@ extension PlexMetadata {
         return videoStreams.contains(where: { $0.isDolbyVision })
     }
 
+    /// Dolby Vision with no fallback layer (Profile 5): its colours only mean
+    /// anything to a Dolby Vision decoder, so a server transcode of it comes
+    /// out wrong. It plays from the file or not at all.
+    var isDolbyVisionOnly: Bool {
+        let video = Media?.first?.Part?.first?.Stream?.first { $0.isVideo }
+        return video?.DOVIProfile == 5
+    }
+
     /// Whether this content has any HDR format (HDR10, HDR10+, HLG, or Dolby Vision)
     var hasHDR: Bool {
         if hasDolbyVision { return true }
