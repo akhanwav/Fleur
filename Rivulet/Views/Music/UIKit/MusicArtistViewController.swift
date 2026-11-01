@@ -244,7 +244,8 @@ final class MusicArtistViewController: UIViewController, UICollectionViewDelegat
             MusicPresenter.showAlbum(albums[indexPath.item], from: self)
         case .about:
             // A popup, because a scrolling text view here would trap touch swipes.
-            let content = InfoPopupContent.description(title: artist.name, subtitle: nil, body: bio)
+            let content = InfoPopupContent.description(
+                title: artist.name, subtitle: nil, body: bio, bodyFont: .systemFont(ofSize: 24, weight: .regular))
             present(InfoPopupViewController(content: content, width: 840, scrollable: true), animated: true)
         default:
             break

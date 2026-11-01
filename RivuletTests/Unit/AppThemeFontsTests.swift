@@ -12,13 +12,12 @@ final class AppThemeFontsTests: XCTestCase {
         XCTAssertNotEqual(AppTheme.Fonts.title(48).familyName, "Libre Franklin")
     }
 
-    func test_infoColumns_pageValuesAreLibreFranklin_popupAndHeadingsAreSystem() {
-        for style in [InfoColumnView.Style.footer, .episodePage] {
+    func test_infoColumns_valuesAreLibreFranklin_headingsAreSystem() {
+        for style in [InfoColumnView.Style.footer, .standard] {
             XCTAssertEqual(style.valueFont.familyName, "Libre Franklin")
             XCTAssertNotEqual(style.labelFont.familyName, "Libre Franklin")
             XCTAssertNotEqual(style.headerFont.familyName, "Libre Franklin")
         }
-        XCTAssertNotEqual(InfoColumnView.Style.standard.valueFont.familyName, "Libre Franklin")
     }
 
     func test_licenseFileShips() {

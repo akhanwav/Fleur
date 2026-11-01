@@ -372,16 +372,15 @@ final class InfoColumnsView: UIView {
 /// One labelled column (header + stacked label/value pairs). Reused by the
 /// 3-column below-fold AND the vertically-stacked Info popup.
 final class InfoColumnView: UIView {
-    /// Type and spacing for one use of the column. `standard` is the Info popup,
-    /// `episodePage` the episode page, `footer` the movie/show page's bottom band.
-    /// Popups stay in the system font; a page's values are Libre Franklin.
+    /// Type and spacing for one use of the column. `standard` is the Info popup
+    /// and the episode page; `footer` is the movie/show page's bottom band.
     nonisolated struct Style {
         var headerFont = UIFont.systemFont(ofSize: 40, weight: .bold)
         var headerColor = UIColor.white
         var headerGap: CGFloat = 20
         var labelFont = UIFont.systemFont(ofSize: 21, weight: .semibold)
         var labelColor = UIColor.white.withAlphaComponent(0.5)
-        var valueFont = UIFont.systemFont(ofSize: 26, weight: .semibold)
+        var valueFont = AppTheme.Fonts.description(26)
         var valueColor = UIColor.white.withAlphaComponent(0.9)
         var valueLines = 0
         var valueLineSpacing: CGFloat = 0
@@ -392,7 +391,6 @@ final class InfoColumnView: UIView {
         var focusCard = false
 
         static let standard = Style()
-        static let episodePage = Style(valueFont: AppTheme.Fonts.description(26))
         static let footer = Style(
             headerFont: .systemFont(ofSize: 38, weight: .bold),
             headerColor: UIColor.white.withAlphaComponent(0.7),

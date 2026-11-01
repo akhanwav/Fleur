@@ -273,8 +273,10 @@ final class InfoPopupViewController: UIViewController {
 
 enum InfoPopupContent {
 
-    /// Title + genre line + full body (the About "description" popup).
-    static func description(title: String, subtitle: String?, body: String?) -> UIView {
+    /// Title + genre line + full body (the About "description" popup, a person's
+    /// bio). The body matches the page it opened from: Music's stays in the system font.
+    static func description(title: String, subtitle: String?, body: String?,
+                            bodyFont: UIFont = AppTheme.Fonts.description(24)) -> UIView {
         let stack = verticalStack(spacing: 10)
         stack.addArrangedSubview(label(title, size: 30, weight: .semibold, color: .white, lines: 2))
         if let subtitle, !subtitle.isEmpty {
@@ -283,7 +285,9 @@ enum InfoPopupContent {
             stack.setCustomSpacing(20, after: s)
         }
         if let body, !body.isEmpty {
-            stack.addArrangedSubview(label(body, size: 24, weight: .regular, color: .white.withAlphaComponent(0.9), lines: 0))
+            let text = label(body, size: 24, weight: .regular, color: .white.withAlphaComponent(0.9), lines: 0)
+            text.font = bodyFont
+            stack.addArrangedSubview(text)
         }
         return stack
     }
@@ -309,6 +313,7 @@ enum InfoPopupContent {
 
         if let one = advisory.oneLiner, !one.isEmpty {
             let o = label(one, size: 24, weight: .regular, color: .white.withAlphaComponent(0.9), lines: 0)
+            o.font = AppTheme.Fonts.description(24)
             stack.addArrangedSubview(o)
             stack.setCustomSpacing(24, after: o)
         }
@@ -334,6 +339,7 @@ enum InfoPopupContent {
         let overviewText = detail.item.overview?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let overviewText, !overviewText.isEmpty {
             let syn = label(overviewText, size: 24, weight: .regular, color: .white.withAlphaComponent(0.9), lines: 0)
+            syn.font = AppTheme.Fonts.description(24)
             stack.addArrangedSubview(syn)
             stack.setCustomSpacing(22, after: syn)
         } else {

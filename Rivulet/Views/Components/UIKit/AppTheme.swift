@@ -13,7 +13,7 @@
 //  And the pages' fonts: SF Pro for titles, Libre Franklin for descriptions and
 //  details lines. Everything else stays in the system font: info boxes and the
 //  tags on cards and posters (Libre Franklin's metrics sit them off centre),
-//  pop-ups, pickers, menus, settings and poster captions.
+//  pop-ups' titles, labels and menu choices, pickers, settings, poster captions.
 //
 
 import UIKit
@@ -25,9 +25,9 @@ enum AppTheme {
             .systemFont(ofSize: size, weight: weight)
         }
 
-        /// Descriptions, synopses, bios and the values in a page's Information,
-        /// Languages and Accessibility sections. Regular, never lighter: read
-        /// from across a room.
+        /// Descriptions, synopses, bios and the values in Information, Languages
+        /// and Accessibility sections, on a page or in a pop-up. Regular, never
+        /// lighter: read from across a room.
         static func description(_ size: CGFloat) -> UIFont { supporting(size, weight: 400) }
         /// The "S1, E3:" in front of an episode's description.
         static func descriptionLead(_ size: CGFloat) -> UIFont { supporting(size, weight: 700) }

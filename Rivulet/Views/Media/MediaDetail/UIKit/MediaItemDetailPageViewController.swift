@@ -59,7 +59,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let heroContent = UIView()
     private let belowFold = UIView()
     private let belowFoldTitle = UILabel()
-    private let infoColumns = InfoColumnsView(style: .episodePage)
+    private let infoColumns = InfoColumnsView()
     private var scrolledDown = false
 
     // Hero rows (async-filled ones start hidden so the stack doesn't reserve a gap).

@@ -978,10 +978,11 @@ updates as the user moves focus between rows.
 ### Fonts
 
 `AppTheme.Fonts` is the one definition. Libre Franklin (bundled, OFL, variable, so a
-weight is an axis value) sets only descriptions, synopses, bios, details lines and a
-page's Information, Languages and Accessibility values. Everything else is SF Pro:
-titles and headings, poster captions, pop-ups, menus, Settings, and info boxes and
-card tags, whose text Libre Franklin's metrics sit off centre.
+weight is an axis value) sets only descriptions, synopses, bios, details lines and
+Information, Languages and Accessibility values, including long text in the info
+pop-ups. Everything else is SF Pro: titles and headings, poster captions, pop-up labels
+and menu choices, Settings, Music, and info boxes and card tags, whose text Libre
+Franklin's metrics sit off centre.
 
 ### Image Loading
 
