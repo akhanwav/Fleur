@@ -72,19 +72,19 @@ final class AboutCollectionCell: UICollectionViewCell {
         }
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 36, weight: .bold)
+        titleLabel.font = AppTheme.Fonts.title(36)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
         leftCard.addSubview(titleLabel)
 
         genresLabel.translatesAutoresizingMaskIntoConstraints = false
-        genresLabel.font = .systemFont(ofSize: 23, weight: .medium)
+        genresLabel.font = AppTheme.Fonts.details(23)
         genresLabel.textColor = UIColor.white.withAlphaComponent(0.6)
         genresLabel.numberOfLines = 1
         leftCard.addSubview(genresLabel)
 
         synopsisLabel.translatesAutoresizingMaskIntoConstraints = false
-        synopsisLabel.font = .systemFont(ofSize: 25, weight: .semibold)
+        synopsisLabel.font = AppTheme.Fonts.description(25)
         synopsisLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         synopsisLabel.numberOfLines = 6
         leftCard.addSubview(synopsisLabel)
@@ -372,8 +372,9 @@ final class InfoColumnsView: UIView {
 /// One labelled column (header + stacked label/value pairs). Reused by the
 /// 3-column below-fold AND the vertically-stacked Info popup.
 final class InfoColumnView: UIView {
-    /// Type and spacing for one use of the column. `standard` is the Info popup
-    /// and the episode page; `footer` is the movie/show page's bottom band.
+    /// Type and spacing for one use of the column. `standard` is the Info popup,
+    /// `episodePage` the episode page, `footer` the movie/show page's bottom band.
+    /// Popups stay in the system font; a page's values are Libre Franklin.
     nonisolated struct Style {
         var headerFont = UIFont.systemFont(ofSize: 40, weight: .bold)
         var headerColor = UIColor.white
@@ -391,13 +392,14 @@ final class InfoColumnView: UIView {
         var focusCard = false
 
         static let standard = Style()
+        static let episodePage = Style(valueFont: AppTheme.Fonts.description(26))
         static let footer = Style(
             headerFont: .systemFont(ofSize: 38, weight: .bold),
             headerColor: UIColor.white.withAlphaComponent(0.7),
             headerGap: 30,
             labelFont: .systemFont(ofSize: 23, weight: .medium),
             labelColor: UIColor.white.withAlphaComponent(0.3),
-            valueFont: .systemFont(ofSize: 23, weight: .medium),
+            valueFont: AppTheme.Fonts.description(23),
             valueColor: UIColor.white.withAlphaComponent(0.7),
             valueLines: 5,
             valueLineSpacing: 2,

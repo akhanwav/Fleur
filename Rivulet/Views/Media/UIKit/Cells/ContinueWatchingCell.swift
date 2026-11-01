@@ -147,7 +147,9 @@ final class ContinueWatchingCell: UICollectionViewCell {
             infoBar.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad),
 
             tags.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -pad),
-            tags.centerYAnchor.constraint(equalTo: infoBar.centerYAnchor),
+            // Not on the status row's centre: the row has no height without a
+            // progress bar, which would put a next-up card's tags at another level.
+            tags.centerYAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -pad),
 
             newEpisodeTag.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: pad),
             newEpisodeTag.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: pad)

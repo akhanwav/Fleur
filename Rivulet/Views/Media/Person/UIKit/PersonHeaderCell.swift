@@ -30,7 +30,7 @@ final class PersonHeaderCell: UICollectionViewCell {
     private static let bioLineLimit = 3
 
     private static let nameFont = UIFont.systemFont(ofSize: 48, weight: .semibold)
-    private static let bioFont = UIFont.systemFont(ofSize: 24, weight: .medium)
+    private static let bioFont = AppTheme.Fonts.description(24)
     private static let moreFont = UIFont.systemFont(ofSize: 15, weight: .semibold)
 
     /// Portrait diameter — a header avatar, slightly larger than a cast thumb.

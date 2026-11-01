@@ -56,6 +56,11 @@ enum OpenSourceLicenses {
     artwork in Discover and recommendations are provided by The Movie Database (themoviedb.org).
     """ }
 
+    /// The Apple TV app's supporting text (iOS does not bundle it). Its license
+    /// file ships beside the font, Rivulet/Resources/Fonts/LibreFranklin-OFL.txt.
+    static let libreFranklinName = "Libre Franklin"
+    static let libreFranklinSummary = "Typeface for descriptions, details and tags on Apple TV. Copyright 2020 The Libre Franklin Project Authors (github.com/googlefonts/Libre-Franklin). Bundled from Google Fonts and used under the SIL Open Font License, Version 1.1."
+
     /// The Apple TV app's English Dub Cast row (iOS has none).
     static var dubCastAttribution: String { """
     English dub casts and voice actor photos for anime are provided by AniList (anilist.co), \

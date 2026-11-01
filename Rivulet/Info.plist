@@ -37,6 +37,11 @@
 		<string>com.rivulet.viewMedia</string>
 		<string>com.rivulet.playMedia</string>
 	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>LibreFranklin-Variable.ttf</string>
+		<string>LibreFranklin-Italic-Variable.ttf</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

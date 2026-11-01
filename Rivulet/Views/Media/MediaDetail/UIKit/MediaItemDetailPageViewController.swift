@@ -59,7 +59,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let heroContent = UIView()
     private let belowFold = UIView()
     private let belowFoldTitle = UILabel()
-    private let infoColumns = InfoColumnsView()
+    private let infoColumns = InfoColumnsView(style: .episodePage)
     private var scrolledDown = false
 
     // Hero rows (async-filled ones start hidden so the stack doesn't reserve a gap).
@@ -271,6 +271,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         genreRatingRow.alignment = .center
         genreRatingRow.spacing = 6
         style(genreLabel, size: 25, weight: .medium, alpha: 1)
+        genreLabel.font = AppTheme.Fonts.details(25)
         genreRatingRow.addArrangedSubview(genreLabel)
         if let rating = item.contentRating, !rating.isEmpty {
             ratingBadge.text = rating
@@ -283,6 +284,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         // 4. Synopsis with a bold "S2, E1:" prefix.
         style(synopsisLabel, size: 23, weight: .medium, alpha: 0.9)
+        synopsisLabel.font = AppTheme.Fonts.description(23)
         synopsisLabel.numberOfLines = 4
         synopsisLabel.attributedText = synopsisAttributed()
         synopsisLabel.isHidden = (synopsisLabel.attributedText?.length ?? 0) == 0
@@ -294,6 +296,7 @@ final class MediaItemDetailPageViewController: UIViewController {
         dateRow.alignment = .center
         dateRow.spacing = 12
         style(dateLabel, size: 25, weight: .medium, alpha: 0.75)
+        dateLabel.font = AppTheme.Fonts.details(25)
         dateLabel.text = dateRuntimeText()
         dateRow.addArrangedSubview(dateLabel)
         badgeRow.axis = .horizontal
@@ -332,7 +335,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
         belowFoldTitle.translatesAutoresizingMaskIntoConstraints = false
         belowFoldTitle.text = item.title
-        belowFoldTitle.font = .systemFont(ofSize: 52, weight: .bold)
+        belowFoldTitle.font = AppTheme.Fonts.title(52)
         belowFoldTitle.textColor = .white
         belowFoldTitle.textAlignment = .center
         belowFoldTitle.numberOfLines = 2
@@ -551,10 +554,10 @@ final class MediaItemDetailPageViewController: UIViewController {
         let color = UIColor.white.withAlphaComponent(0.9)
         if let s = item.seasonNumber, let e = item.episodeNumber {
             body.append(NSAttributedString(string: "S\(s), E\(e): ", attributes: [
-                .font: UIFont.systemFont(ofSize: 23, weight: .bold), .foregroundColor: color]))
+                .font: AppTheme.Fonts.descriptionLead(23), .foregroundColor: color]))
         }
         body.append(NSAttributedString(string: overview, attributes: [
-            .font: UIFont.systemFont(ofSize: 23, weight: .medium), .foregroundColor: color]))
+            .font: AppTheme.Fonts.description(23), .foregroundColor: color]))
         return body
     }
 
@@ -824,7 +827,7 @@ final class MediaItemDetailPageViewController: UIViewController {
 
     private func style(_ l: UILabel, size: CGFloat, weight: UIFont.Weight, alpha: CGFloat) {
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: size, weight: weight)
+        l.font = AppTheme.Fonts.title(size, weight: weight)
         l.textColor = UIColor.white.withAlphaComponent(alpha)
         l.numberOfLines = 2
     }

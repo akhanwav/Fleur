@@ -70,8 +70,10 @@ final class MediaDetailChromeView: UIView {
     /// Apple's description cap: wider on an episode.
     private static let descriptionMaxWidth: CGFloat = 677
     private static let episodeDescriptionMaxWidth: CGFloat = 860
-    private static let captionFont = UIFont.systemFont(ofSize: 25, weight: .medium)
-    private static let descriptionFont = UIFont.systemFont(ofSize: 23, weight: .medium)
+    private static let captionFont = AppTheme.Fonts.details(25)
+    /// Beside the details but not of them: the star score, bitrate and cast.
+    private static let plainCaptionFont = UIFont.systemFont(ofSize: 25, weight: .medium)
+    private static let descriptionFont = AppTheme.Fonts.description(23)
     private static let rolesLabelAlpha: CGFloat = 0.6
 
     // MARK: - Public surface
@@ -222,7 +224,7 @@ final class MediaDetailChromeView: UIView {
     private let titleFallbackLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = .systemFont(ofSize: 48, weight: .bold)
+        l.font = AppTheme.Fonts.title(48)
         l.textColor = .white
         l.numberOfLines = 2
         l.lineBreakMode = .byTruncatingTail
@@ -290,7 +292,7 @@ final class MediaDetailChromeView: UIView {
     private let castLabel: UILabel = {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
-        l.font = MediaDetailChromeView.captionFont
+        l.font = MediaDetailChromeView.plainCaptionFont
         l.textColor = .white
         l.numberOfLines = 3
         l.textAlignment = .natural
@@ -612,13 +614,13 @@ final class MediaDetailChromeView: UIView {
             // Episode: bold "S1, E1:" prefix before the synopsis.
             let color = UIColor.white.withAlphaComponent(0.85)
             let attr = NSMutableAttributedString(string: "S\(s), E\(e): ", attributes: [
-                .font: UIFont.systemFont(ofSize: 23, weight: .bold), .foregroundColor: color])
+                .font: AppTheme.Fonts.descriptionLead(23), .foregroundColor: color])
             attr.append(NSAttributedString(string: overview, attributes: [
                 .font: Self.descriptionFont, .foregroundColor: color]))
             descriptionLabel.attributedText = attr
         } else if let tagline = detail.tagline, !tagline.isEmpty {
             descriptionLabel.text = tagline
-            descriptionLabel.font = UIFont.italicSystemFont(ofSize: 23)
+            descriptionLabel.font = AppTheme.Fonts.tagline(23)
         } else if let overview = detail.item.overview, !overview.isEmpty {
             descriptionLabel.text = overview
             descriptionLabel.font = Self.descriptionFont
@@ -1289,7 +1291,7 @@ final class MediaDetailChromeView: UIView {
         }
 
         if let rating = detail?.rating {
-            let ratingLabel = Self.makeCaptionLabel(rating.badgeText, alpha: Self.qualityRowAlpha)
+            let ratingLabel = Self.makeCaptionLabel(rating.badgeText, alpha: Self.qualityRowAlpha, font: Self.plainCaptionFont)
             let starStack = UIStackView(arrangedSubviews: [ratingLabel])
             if rating.showsStar {
                 let star = UIImageView(image: UIImage(systemName: "star.fill"))
@@ -1318,7 +1320,7 @@ final class MediaDetailChromeView: UIView {
         // The video stream's own bitrate, else the file's.
         if let bitrate = technical.flatMap({ $0.videoTracks.first?.bitrate ?? $0.bitrate }), bitrate > 0 {
             qualityRow.addArrangedSubview(
-                Self.makeCaptionLabel(PlayerInfoSheetStyle.bitrate(bitrate), alpha: Self.qualityRowAlpha))
+                Self.makeCaptionLabel(PlayerInfoSheetStyle.bitrate(bitrate), alpha: Self.qualityRowAlpha, font: Self.plainCaptionFont))
         }
         // The server the page's copy is on, following Ways to Watch.
         let server = copySelection.selected?.serverName
@@ -1489,11 +1491,11 @@ final class MediaDetailChromeView: UIView {
         }
     }
 
-    private static func makeCaptionLabel(_ text: String, alpha: CGFloat) -> UILabel {
+    private static func makeCaptionLabel(_ text: String, alpha: CGFloat, font: UIFont = captionFont) -> UILabel {
         let l = UILabel()
         l.translatesAutoresizingMaskIntoConstraints = false
         l.text = text
-        l.font = captionFont
+        l.font = font
         l.textColor = UIColor.white.withAlphaComponent(alpha)
         return l
     }

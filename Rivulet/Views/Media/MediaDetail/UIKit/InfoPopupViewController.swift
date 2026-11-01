@@ -640,7 +640,11 @@ enum InfoPopupContent {
         stack.addArrangedSubview(label(OpenSourceLicenses.dubCastAttribution, size: 24, weight: .regular,
                                        color: .white.withAlphaComponent(0.85), lines: 0))
 
-        for entry in OpenSourceLicenses.entries {
+        let font = OpenSourceLicenses.Entry(
+            name: OpenSourceLicenses.libreFranklinName, summary: OpenSourceLicenses.libreFranklinSummary,
+            licenseText: Bundle.main.url(forResource: "LibreFranklin-OFL", withExtension: "txt")
+                .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "")
+        for entry in OpenSourceLicenses.entries + [font] {
             if let last = stack.arrangedSubviews.last { stack.setCustomSpacing(28, after: last) }
             stack.addArrangedSubview(label(entry.name, size: 28, weight: .semibold, color: .white, lines: 1))
             stack.addArrangedSubview(label(entry.summary, size: 22, weight: .regular, color: .white.withAlphaComponent(0.78), lines: 0))

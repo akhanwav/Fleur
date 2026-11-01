@@ -285,13 +285,13 @@ final class EpisodeCell: UIView {
         descriptionBlock.addSubview(episodeLabel)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 24, weight: .bold)
+        titleLabel.font = AppTheme.Fonts.title(24)
         titleLabel.textColor = .white
         titleLabel.numberOfLines = 1
         descriptionBlock.addSubview(titleLabel)
 
         summaryLabel.translatesAutoresizingMaskIntoConstraints = false
-        summaryLabel.font = .systemFont(ofSize: 21, weight: .medium)
+        summaryLabel.font = AppTheme.Fonts.description(21)
         summaryLabel.textColor = UIColor.white.withAlphaComponent(0.7)
         summaryLabel.numberOfLines = 2
         descriptionBlock.addSubview(summaryLabel)
@@ -302,7 +302,7 @@ final class EpisodeCell: UIView {
         footerRow.spacing = 8
         descriptionBlock.addSubview(footerRow)
 
-        dateLabel.font = .systemFont(ofSize: 21, weight: .medium)
+        dateLabel.font = AppTheme.Fonts.details(21)
         dateLabel.textColor = UIColor.white.withAlphaComponent(0.78)
         footerRow.addArrangedSubview(dateLabel)
 

@@ -30,8 +30,8 @@ final class HeroSlideView: UIView {
     private let stack = UIStackView()
 
     static let maxLogoHeight: CGFloat = 180, maxTaglineWidth: CGFloat = 720, rowSpacing: CGFloat = 18
-    private static let metadataFont = UIFont.systemFont(ofSize: 25, weight: .medium)
-    private static let taglineFont = UIFont.systemFont(ofSize: 22, weight: .regular)
+    private static let metadataFont = AppTheme.Fonts.details(25)
+    private static let taglineFont = AppTheme.Fonts.description(22)
     /// The stack at its tallest: a full-height logo, the metadata row, two tagline lines.
     static var maxHeight: CGFloat {
         maxLogoHeight + rowSpacing + ceil(metadataFont.lineHeight) + rowSpacing + 2 * ceil(taglineFont.lineHeight)
@@ -62,7 +62,7 @@ final class HeroSlideView: UIView {
 
         // Fallback title (two lines max), in the app's own family: SF Pro,
         // as the detail page's description, bold.
-        fallbackTitleLabel.font = .systemFont(ofSize: 72, weight: .bold)
+        fallbackTitleLabel.font = AppTheme.Fonts.title(72)
         fallbackTitleLabel.textColor = .white
         fallbackTitleLabel.numberOfLines = 2
         fallbackTitleLabel.shadowColor = UIColor.black.withAlphaComponent(0.5)

@@ -900,7 +900,7 @@ private final class MediaItemSlideView: UIView {
 
         // Fallback title (two lines max), in the app's own family: SF Pro,
         // as the detail page's description, bold.
-        fallbackTitleLabel.font = .systemFont(ofSize: 72, weight: .bold)
+        fallbackTitleLabel.font = AppTheme.Fonts.title(72)
         fallbackTitleLabel.textColor = .white
         fallbackTitleLabel.numberOfLines = 2
         fallbackTitleLabel.shadowColor = UIColor.black.withAlphaComponent(0.5)
@@ -908,7 +908,7 @@ private final class MediaItemSlideView: UIView {
         fallbackTitleLabel.isHidden = true
 
         // Apple's genres row: Caption1 (25) medium at full white, 6 pt to the badge.
-        metadataLabel.font = .systemFont(ofSize: 25, weight: .medium)
+        metadataLabel.font = AppTheme.Fonts.details(25)
         metadataLabel.textColor = .white
         metadataLabel.numberOfLines = 1
 
@@ -920,7 +920,7 @@ private final class MediaItemSlideView: UIView {
         metadataRow.addArrangedSubview(ratingBadge)
         ratingBadge.isHidden = true
 
-        taglineLabel.font = .systemFont(ofSize: 22, weight: .regular)
+        taglineLabel.font = AppTheme.Fonts.description(22)
         taglineLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         taglineLabel.numberOfLines = 2
 

@@ -975,6 +975,14 @@ copy lives in the **left-side description panel**, which is driven by
 `focusedSettingId` with an icon, color, and a clear description. The panel
 updates as the user moves focus between rows.
 
+### Fonts
+
+`AppTheme.Fonts` is the one definition. Libre Franklin (bundled, OFL, variable, so a
+weight is an axis value) sets only descriptions, synopses, bios, details lines and a
+page's Information, Languages and Accessibility values. Everything else is SF Pro:
+titles and headings, poster captions, pop-ups, menus, Settings, and info boxes and
+card tags, whose text Libre Franklin's metrics sit off centre.
+
 ### Image Loading
 
 UIKit surfaces load remote images through `ImageCacheManager` (Music: `MusicChrome.loadArtwork`).
