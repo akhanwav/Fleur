@@ -30,8 +30,8 @@ class PlexDataStore: ObservableObject {
     private var otherServersContinueWatching: [(server: OtherServersAvailabilityChecker.ServerAccess,
                                                 metas: [PlexMetadata])] = []
     private var otherServersContinueWatchingTask: Task<Void, Never>?
-    /// One episode per show across servers (`CrossServerNextUp`), applied to
-    /// the row in `continueWatchingRow`.
+    /// The server each show was last watched on, which alone supplies its
+    /// Continue Watching cards (`continueWatchingRow`).
     private lazy var crossServerHistory: CrossServerHistory = {
         let history = CrossServerHistory()
         history.onChange = { [weak self] in self?.projectHomeItems() }
@@ -1993,9 +1993,9 @@ class PlexDataStore: ObservableObject {
         for other in otherServersContinueWatching {
             sources.append(("plex:\(other.server.machineId)", other.server.serverURL, other.server.token, other.metas))
         }
-        let lists = applyingCrossServerHistory(to: sources)
-        let picks = Self.mergeContinueWatching(lists)
-        let metas = Self.sharingResumePoints(picks.map { lists[$0.list][$0.index] })
+        let lists = sources.map(\.metas)
+        let picks = Self.mergeContinueWatching(lists, lastWatched: lastWatchedLists(sources))
+        let metas = Self.sharingResumePoints(picks.map { (list: $0.list, meta: lists[$0.list][$0.index]) })
         let items = zip(picks, metas).map { pick, meta in
             let source = sources[pick.list]
             return PlexMediaMapper.item(meta, providerID: source.providerID,
@@ -2005,14 +2005,13 @@ class PlexDataStore: ObservableObject {
                              hubKey: nil, hubIdentifier: cw.hubIdentifier, totalSize: nil, items: items)
     }
 
-    /// Each server's list with a show watched on several servers replaced by
-    /// the one episode `CrossServerHistory` picked for it, on the server it
-    /// picked. Also starts the next history pass when the row changed. The
-    /// account's own profile only, as for the other servers' lists.
-    private func applyingCrossServerHistory(
-        to sources: [(providerID: String, serverURL: String, token: String, metas: [PlexMetadata])]
-    ) -> [[PlexMetadata]] {
-        guard authManager.accountContentToken != nil else { return sources.map(\.metas) }
+    /// Show guid → the row's list for the server it was last watched on
+    /// (`CrossServerHistory`). Also starts the next pass when the row changed.
+    /// The account's own profile only, as for the other servers' lists.
+    private func lastWatchedLists(
+        _ sources: [(providerID: String, serverURL: String, token: String, metas: [PlexMetadata])]
+    ) -> [String: Int] {
+        guard authManager.accountContentToken != nil else { return [:] }
         let others = Dictionary(otherServersContinueWatching.map { ("plex:\($0.server.machineId)", $0.server) },
                                 uniquingKeysWith: { first, _ in first })
         crossServerSources = sources.map { source in
@@ -2022,7 +2021,9 @@ class PlexDataStore: ObservableObject {
             return CrossServerHistory.Source(access: access, providerID: source.providerID, metas: source.metas)
         }
         refreshCrossServerHistory()
-        return Self.applying(crossServerHistory.outcomes, to: sources.map { ($0.providerID, $0.metas) })
+        return crossServerHistory.lastWatched.compactMapValues { providerID in
+            sources.firstIndex { $0.providerID == providerID }
+        }
     }
 
     /// The row's servers as the last projection saw them, for the timed pass.
@@ -2033,67 +2034,47 @@ class PlexDataStore: ObservableObject {
         crossServerHistory.refresh(sources: crossServerSources)
     }
 
-    /// `lists` (provider id and entries per server) with every decided show's
-    /// entries replaced by its cards. A show caught up everywhere loses its
-    /// entries; one whose cards land on no listed server keeps them.
-    nonisolated static func applying(_ outcomes: [String: CrossServerNextUp.Outcome],
-                                     to lists: [(providerID: String, metas: [PlexMetadata])]) -> [[PlexMetadata]] {
-        var replaced: Set<String> = []
-        var cardsToAdd: [(list: Int, meta: PlexMetadata)] = []
-        for (guid, outcome) in outcomes {
-            switch outcome {
-            case .noHistory:
-                continue
-            case .caughtUp:
-                replaced.insert(guid)
-            case .cards(let cards):
-                let placed = cards.compactMap { card in
-                    lists.firstIndex { $0.providerID == card.providerID }.map { (list: $0, meta: card.meta) }
-                }
-                guard !placed.isEmpty else { continue }
-                replaced.insert(guid)
-                cardsToAdd += placed
-            }
-        }
-        var result = lists.map { list in
-            list.metas.filter { meta in
-                guard meta.type == "episode", let guid = meta.grandparentGuid else { return true }
-                return !replaced.contains(guid)
-            }
-        }
-        for card in cardsToAdd { result[card.list].append(card.meta) }
-        return result
-    }
-
-    /// One pick per title AND quality across `lists` (the signed-in server's
-    /// first): the most recently watched copy. A 4K and a 1080p copy are two
-    /// cards, side by side; the same quality on two servers is one. Titles are
-    /// sorted most recent first (by their most recent copy), and a title's
-    /// copies newest first. Ties keep the order the servers listed them in. A
-    /// show is one title: its episodes on two servers are one card per quality.
-    nonisolated static func mergeContinueWatching(_ lists: [[PlexMetadata]], limit: Int = 50)
-        -> [(list: Int, index: Int)] {
-        struct Pick { var list: Int; var index: Int; var viewed: Int; var arrival: Int; var title: String }
-        var picks: [String: Pick] = [:]
-        var titleViewed: [String: Int] = [:]
-        var titleArrival: [String: Int] = [:]
+    /// The row's cards from every server's list (the signed-in server's
+    /// first). Each server keeps its own progress, so a title comes from ONE
+    /// server: the one it was watched on most recently, `lastWatched` (title
+    /// key to list) where known, else the list holding its most recently
+    /// watched entry (ties keep the earlier list). From that server, one card
+    /// per quality: a 4K and a 1080p copy are two cards, side by side. Titles
+    /// are sorted most recent first, a title's copies newest first; ties keep
+    /// the order the servers listed them in. A show is one title.
+    nonisolated static func mergeContinueWatching(_ lists: [[PlexMetadata]], lastWatched: [String: Int] = [:],
+                                                  limit: Int = 50) -> [(list: Int, index: Int)] {
+        struct Entry { var list: Int; var index: Int; var viewed: Int; var arrival: Int; var title: String; var quality: String }
+        var entries: [Entry] = []
         var arrival = 0
         for (list, metas) in lists.enumerated() {
             for (index, meta) in metas.enumerated() {
-                let title = continueWatchingKey(meta, list: list, index: index)
-                let key = "\(title)|\(qualityKey(meta))"
-                let viewed = meta.lastViewedAt ?? 0
-                titleViewed[title] = max(titleViewed[title] ?? 0, viewed)
-                if titleArrival[title] == nil { titleArrival[title] = arrival }
-                if let current = picks[key] {
-                    if viewed > current.viewed {
-                        picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: current.arrival, title: title)
-                    }
-                } else {
-                    picks[key] = Pick(list: list, index: index, viewed: viewed, arrival: arrival, title: title)
-                }
+                entries.append(Entry(list: list, index: index, viewed: meta.lastViewedAt ?? 0, arrival: arrival,
+                                     title: continueWatchingKey(meta, list: list, index: index),
+                                     quality: qualityKey(meta)))
                 arrival += 1
             }
+        }
+        // The server each title comes from.
+        var owner: [String: Entry] = [:]
+        for entry in entries {
+            guard let current = owner[entry.title] else { owner[entry.title] = entry; continue }
+            if entry.viewed > current.viewed { owner[entry.title] = entry }
+        }
+        // Its copies there, one per quality: the most recently watched.
+        var picks: [String: Entry] = [:]
+        for entry in entries {
+            let list = lastWatched[entry.title] ?? owner[entry.title]?.list
+            guard entry.list == list else { continue }
+            let key = "\(entry.title)|\(entry.quality)"
+            if let current = picks[key], current.viewed >= entry.viewed { continue }
+            picks[key] = entry
+        }
+        var titleViewed: [String: Int] = [:]
+        var titleArrival: [String: Int] = [:]
+        for pick in picks.values {
+            titleViewed[pick.title] = max(titleViewed[pick.title] ?? 0, pick.viewed)
+            titleArrival[pick.title] = min(titleArrival[pick.title] ?? Int.max, pick.arrival)
         }
         return picks.values
             .sorted { a, b in
@@ -2115,17 +2096,19 @@ class PlexDataStore: ObservableObject {
         return resolutions.first ?? ""
     }
 
-    /// Copies of the same item (a 4K and a 1080p file of one film or episode)
-    /// show one resume point: the most recently watched copy's position, so
-    /// either card resumes from it and both say the same time left.
-    nonisolated static func sharingResumePoints(_ metas: [PlexMetadata]) -> [PlexMetadata] {
+    /// Copies of the same item on ONE server (a 4K and a 1080p file of one
+    /// film or episode) show one resume point: that server's most recently
+    /// watched copy's position, so either card resumes from it and both say
+    /// the same time left. Another server's copy keeps its own.
+    nonisolated static func sharingResumePoints(_ metas: [(list: Int, meta: PlexMetadata)]) -> [PlexMetadata] {
         var latest: [String: PlexMetadata] = [:]
-        for meta in metas {
+        for (list, meta) in metas {
             guard let guid = meta.guid, guid.hasPrefix("plex://") else { continue }
-            if (meta.lastViewedAt ?? 0) > (latest[guid]?.lastViewedAt ?? -1) { latest[guid] = meta }
+            let key = "\(list)|\(guid)"
+            if (meta.lastViewedAt ?? 0) > (latest[key]?.lastViewedAt ?? -1) { latest[key] = meta }
         }
-        return metas.map { meta in
-            guard let guid = meta.guid, let source = latest[guid] else { return meta }
+        return metas.map { list, meta in
+            guard let guid = meta.guid, let source = latest["\(list)|\(guid)"] else { return meta }
             var shared = meta
             shared.viewOffset = source.viewOffset
             shared.lastViewedAt = source.lastViewedAt

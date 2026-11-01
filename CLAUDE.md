@@ -1062,23 +1062,21 @@ item's `ref.providerID` names the server it came from.
   `name(for:)`, `machineId(for:)`). `access(for:)` returns nil for a
   non-main provider that is not registered yet. It never falls back to the main
   server: same ratingKey, different title.
-- **Continue Watching is merged across servers** (the account's own profile
-  only, `PlexDataStore.refreshOtherServersContinueWatching`). `mergeContinueWatching`
-  keys on title + quality: a 4K and a 1080p copy are two adjacent cards; the
-  same quality on two servers merges into the more recently watched copy.
-  `sharingResumePoints` gives every copy of one `plex://` guid the newest
+- **Each server keeps its own progress; Continue Watching shows a title from
+  one server** (the account's own profile only,
+  `PlexDataStore.refreshOtherServersContinueWatching`). `mergeContinueWatching`
+  takes each title only from the server it was watched on most recently, with
+  that server's own resume point or next-up episode (Plex's own On Deck, so
+  its window and caught-up rules apply), one card per quality: a 4K and a
+  1080p copy are two adjacent cards. No other server's card for that title,
+  and nothing combined across servers; other servers' places are in Ways to
+  Watch. A next-up episode has no watch time, so `CrossServerHistory` asks each
+  server when it last watched the show (recent shows, else a guid lookup) and
+  `decide` picks; a pass runs when the row's entries change, else every 15
+  minutes. If that server has no entry, the show has no card.
+  `sharingResumePoints` keeps a title's copies **on one server** at its newest
   `viewOffset`. Cached rows drop other-server cards until their provider
   registers, which is why their quality tags are never missing.
-- **A show watched on several servers gets one episode** (`CrossServerHistory`
-  gathers, `CrossServerNextUp` decides, `PlexDataStore.applying` replaces the
-  servers' own entries). Resume the most recent activity if it is a partial
-  watch within 16 weeks (Plex's default Continue Watching window), even when
-  another server has the show finished (a rewatch); otherwise the first episode after the furthest watched on any server,
-  none if there is none. One card per quality, on the most recently watched
-  server holding it. It reads each server's seasons, then only the furthest
-  season with progress and the next (a long show's `allLeaves` is ~1 MB),
-  cached until the show's counts or last-watched time change; a pass runs when
-  the row's entries change, else every 15 minutes. Watch states are never written.
 - **Progress goes to the server that played.** `PlexProgressReporter` takes
   `server:`. On stop or watched, `UniversalPlayerViewModel.syncSiblingCopies`
   writes the same position to the other copies **on the same server** only;

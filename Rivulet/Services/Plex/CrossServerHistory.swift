@@ -1,21 +1,26 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Copyright (C) 2025-2026 Bain Gurley
+
 //
 //  CrossServerHistory.swift
 //  Rivulet
 //
-//  Gathers each server's watch history for the shows Continue Watching could
-//  offer, and decides one episode per show with `CrossServerNextUp`.
+//  Which server each show in Continue Watching was watched on most recently.
 //
-//  The shows: every show in any server's Continue Watching, plus each server's
-//  recently watched shows (`/library/all?type=2&sort=lastViewedAt:desc`, one
-//  small request), so a new episode on a server the show was never watched on
-//  still surfaces. A show is read per server as its seasons, then only the
-//  furthest season with progress and the one after it: a long show's
-//  `allLeaves` is about 1 MB and 300 to 500 ms. Both are cached until the
-//  show's watched count, episode count or last-watched time changes.
+//  Every server keeps its own progress, and the row shows a show only from the
+//  server it was last watched on: that server's own resume point or next-up
+//  episode, one card per quality (`PlexDataStore.mergeContinueWatching`).
+//  Another server's place stays on the show page, in Ways to Watch.
+//
+//  A next-up episode carries no watch time of its own, so the hub cannot say
+//  which server was used last. Each server is asked for its show: its recently
+//  watched shows (`/library/all?type=2&sort=lastViewedAt:desc`, one small
+//  request), else a lookup by the show's guid. Nothing is combined: a server's
+//  answer only places its own cards.
 //
 //  Runs when the shows in Continue Watching change, and at most every 15
-//  minutes otherwise. The account's own profile only, like every feature
-//  that reaches other servers (`OtherServersAvailabilityChecker.lookupServers`).
+//  minutes otherwise. The account's own profile only, like every feature that
+//  reaches other servers (`OtherServersAvailabilityChecker.lookupServers`).
 //
 
 import Foundation
@@ -30,34 +35,27 @@ final class CrossServerHistory {
         let metas: [PlexMetadata]
     }
 
-    /// The decision per show guid. Empty until the first pass ends.
-    private(set) var outcomes: [String: CrossServerNextUp.Outcome] = [:]
-    /// Called on the main actor when `outcomes` changed.
+    /// Show guid → the provider id of the server it was last watched on, for
+    /// shows in more than one server's library. Empty until the first pass ends.
+    private(set) var lastWatched: [String: String] = [:]
+    /// Called on the main actor when `lastWatched` changed.
     var onChange: (() -> Void)?
 
     static let interval: TimeInterval = 15 * 60
     private static let recentShowCount = 20
     private static let maxShows = 30
     private static let timeout: TimeInterval = 8
-    private static let concurrentShows = 6
 
     private var task: Task<Void, Never>?
     private var lastRun: Date?
     private var lastSignature: String?
-    private var cache: [String: CachedShow] = [:]
-
-    private struct CachedShow {
-        let fingerprint: String
-        var seasons: [PlexMetadata]
-        var episodes: [Int: [PlexMetadata]] = [:]
-    }
 
     /// Run a pass when the shows in Continue Watching changed, or the last
     /// pass is older than `interval`.
     func refresh(sources: [Source], now: Date = Date()) {
         guard task == nil else { return }
         guard sources.count > 1 else {
-            if !outcomes.isEmpty { outcomes = [:]; onChange?() }
+            if !lastWatched.isEmpty { lastWatched = [:]; onChange?() }
             return
         }
         let signature = Self.signature(sources)
@@ -68,11 +66,11 @@ final class CrossServerHistory {
         task = ForegroundGate.$holdsInBackground.withValue(true) {
             Task { [weak self] in
                 guard let self else { return }
-                let next = await self.run(sources: sources, now: now)
-                // Reset while it ran: a newer pass, or none, owns the state now.
+                let next = await Self.run(sources: sources)
                 guard !Task.isCancelled else { return }
                 self.task = nil
-                self.outcomes = next
+                guard next != self.lastWatched else { return }
+                self.lastWatched = next
                 self.onChange?()
             }
         }
@@ -82,8 +80,7 @@ final class CrossServerHistory {
     func reset() {
         task?.cancel()
         task = nil
-        outcomes = [:]
-        cache = [:]
+        lastWatched = [:]
         lastRun = nil
         lastSignature = nil
     }
@@ -98,133 +95,60 @@ final class CrossServerHistory {
 
     // MARK: - Pass
 
-    private func run(sources: [Source], now: Date) async -> [String: CrossServerNextUp.Outcome] {
-        let cutoff = Int(now.addingTimeInterval(-CrossServerNextUp.window).timeIntervalSince1970)
-        var recents: [[PlexMetadata]] = []
-        for source in sources {
-            recents.append(await Self.recentShows(on: source.access).filter { ($0.lastViewedAt ?? 0) >= cutoff })
-        }
-
-        // Shows in some server's Continue Watching first, then recent ones.
+    private static func run(sources: [Source]) async -> [String: String] {
         var guids: [String] = []
-        var inHub: Set<String> = []
         for source in sources {
             for meta in source.metas where meta.type == "episode" {
-                guard let guid = meta.grandparentGuid, guid.hasPrefix("plex://show/"), !inHub.contains(guid) else { continue }
-                inHub.insert(guid)
+                guard let guid = meta.grandparentGuid, guid.hasPrefix("plex://show/"), !guids.contains(guid) else { continue }
                 guids.append(guid)
             }
         }
-        let recent = recents.flatMap { $0 }
-            .sorted { ($0.lastViewedAt ?? 0) > ($1.lastViewedAt ?? 0) }
-            .compactMap(\.guid)
-        for guid in recent where guid.hasPrefix("plex://show/") && !guids.contains(guid) {
-            guids.append(guid)
-        }
-        guids = Array(guids.prefix(Self.maxShows))
+        guids = Array(guids.prefix(maxShows))
+        guard !guids.isEmpty else { return [:] }
 
-        var result: [String: CrossServerNextUp.Outcome] = [:]
-        // A few shows at a time: each is a handful of small requests per server.
-        var start = 0
-        while start < guids.count, !Task.isCancelled {
-            let chunk = guids[start..<min(start + Self.concurrentShows, guids.count)]
-            start += Self.concurrentShows
-            await withTaskGroup(of: (String, CrossServerNextUp.Outcome?).self) { group in
-                for guid in chunk {
-                    group.addTask { @MainActor in
-                        (guid, await self.outcome(for: guid, sources: sources, recents: recents,
-                                                  listed: inHub.contains(guid), now: now))
+        // Each server's watch time per show: its recent shows, then a lookup
+        // for the shows it did not list.
+        var viewed: [[String: Int]] = Array(repeating: [:], count: sources.count)
+        await withTaskGroup(of: (Int, [String: Int]).self) { group in
+            for (index, source) in sources.enumerated() {
+                group.addTask {
+                    var times: [String: Int] = [:]
+                    for show in await recentShows(on: source.access) {
+                        guard let guid = show.guid, guids.contains(guid) else { continue }
+                        times[guid] = max(times[guid] ?? 0, show.lastViewedAt ?? 0)
                     }
+                    for guid in guids where times[guid] == nil {
+                        for show in await lookupShow(guid, on: source.access) {
+                            times[guid] = max(times[guid] ?? 0, show.lastViewedAt ?? 0)
+                        }
+                    }
+                    return (index, times)
                 }
-                for await (guid, outcome) in group { result[guid] = outcome }
             }
+            for await (index, times) in group { viewed[index] = times }
+        }
+        return decide(guids: guids, viewed: viewed, providerIDs: sources.map(\.providerID))
+    }
+
+    /// For each show held by two or more servers: the one with the latest
+    /// watch time (ties keep the earlier, the signed-in server first). Never
+    /// watched anywhere, or on one server only: no decision, the hubs stand.
+    nonisolated static func decide(guids: [String], viewed: [[String: Int]], providerIDs: [String]) -> [String: String] {
+        var result: [String: String] = [:]
+        for guid in guids {
+            let holders = viewed.indices.filter { viewed[$0][guid] != nil }
+            guard holders.count > 1 else { continue }
+            var best = holders[0]
+            for index in holders.dropFirst() where (viewed[index][guid] ?? 0) > (viewed[best][guid] ?? 0) {
+                best = index
+            }
+            guard (viewed[best][guid] ?? 0) > 0 else { continue }
+            result[guid] = providerIDs[best]
         }
         return result
     }
 
-    /// One show's decision; nil when one server or none holds it, where that
-    /// server's own On Deck already has the whole history.
-    private func outcome(for guid: String, sources: [Source], recents: [[PlexMetadata]],
-                         listed: Bool, now: Date) async -> CrossServerNextUp.Outcome? {
-        // Each server's copies of the show: from its recent list, else looked up.
-        var shows: [[PlexMetadata]] = []
-        for (index, source) in sources.enumerated() {
-            let known = recents[index].filter { $0.guid == guid }
-            shows.append(known.isEmpty ? await Self.lookupShow(guid, on: source.access) : known)
-        }
-        guard shows.filter({ !$0.isEmpty }).count > 1 else { return nil }
-
-        var seasonsByServer: [[PlexMetadata]] = []
-        for (index, source) in sources.enumerated() {
-            var seasons: [PlexMetadata] = []
-            for show in shows[index] { seasons += await seasonList(show, on: source.access) }
-            seasonsByServer.append(seasons)
-        }
-        let entries = sources.map { $0.metas.filter { $0.grandparentGuid == guid } }
-        guard let furthest = zip(seasonsByServer, entries).compactMap({
-            CrossServerNextUp.furthestSeason(seasons: $0.0, entries: $0.1)
-        }).max() else { return .noHistory }
-
-        var servers: [CrossServerNextUp.ServerShow] = []
-        for (index, source) in sources.enumerated() {
-            var episodes = entries[index]
-            for show in shows[index] {
-                let available = (cache[Self.key(show, source.access)]?.seasons ?? []).compactMap(\.index)
-                for season in CrossServerNextUp.seasonsToFetch(furthest: furthest, available: available) {
-                    episodes += await seasonEpisodes(show, season: season, on: source.access)
-                }
-            }
-            let lastViewed = shows[index].compactMap(\.lastViewedAt).max() ?? 0
-            servers.append(.init(providerID: source.providerID, lastViewedAt: lastViewed, episodes: episodes))
-        }
-        let outcome = CrossServerNextUp.outcome(showGuid: guid, servers: servers, now: now)
-        // A show no row lists: the server it was last watched on left it out
-        // on purpose (removed, or outside its window) when it holds the
-        // episode. Offer it only from servers where that episode is new.
-        if !listed, case .cards(let cards) = outcome {
-            let latest = servers.max { $0.lastViewedAt < $1.lastViewedAt }?.providerID
-            return cards.contains { $0.providerID == latest } ? .noHistory : outcome
-        }
-        return outcome
-    }
-
     // MARK: - Requests
-
-    private static func key(_ show: PlexMetadata, _ server: OtherServersAvailabilityChecker.ServerAccess) -> String {
-        "\(server.machineId)|\(show.ratingKey ?? "")"
-    }
-
-    private static func fingerprint(_ show: PlexMetadata) -> String {
-        "\(show.lastViewedAt ?? 0)|\(show.viewedLeafCount ?? 0)|\(show.leafCount ?? 0)|\(show.childCount ?? 0)"
-    }
-
-    private func seasonList(_ show: PlexMetadata, on server: OtherServersAvailabilityChecker.ServerAccess) async -> [PlexMetadata] {
-        let key = Self.key(show, server)
-        let fingerprint = Self.fingerprint(show)
-        if let cached = cache[key], cached.fingerprint == fingerprint { return cached.seasons }
-        guard let ratingKey = show.ratingKey,
-              let seasons = await Self.metadata("/library/metadata/\(ratingKey)/children", on: server) else {
-            return cache[key]?.seasons ?? []
-        }
-        guard !Task.isCancelled else { return seasons }
-        cache[key] = CachedShow(fingerprint: fingerprint, seasons: seasons)
-        return seasons
-    }
-
-    private func seasonEpisodes(_ show: PlexMetadata, season: Int,
-                                on server: OtherServersAvailabilityChecker.ServerAccess) async -> [PlexMetadata] {
-        let key = Self.key(show, server)
-        guard var cached = cache[key] else { return [] }
-        if let episodes = cached.episodes[season] { return episodes }
-        guard let ratingKey = cached.seasons.first(where: { $0.index == season })?.ratingKey,
-              let episodes = await Self.metadata("/library/metadata/\(ratingKey)/children", on: server) else {
-            return []
-        }
-        guard !Task.isCancelled else { return episodes }
-        cached.episodes[season] = episodes
-        cache[key] = cached
-        return episodes
-    }
 
     private static func recentShows(on server: OtherServersAvailabilityChecker.ServerAccess) async -> [PlexMetadata] {
         // Container-Size is ignored without Start (CLAUDE.md).

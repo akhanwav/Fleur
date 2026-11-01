@@ -4,8 +4,8 @@
 import XCTest
 @testable import Rivulet
 
-/// Home's Continue Watching across servers: one card per title, the most
-/// recently watched copy, newest first.
+/// Home's Continue Watching across servers: each title from the one server it
+/// was watched on most recently, one card per quality there, newest first.
 final class ContinueWatchingMergeTests: XCTestCase {
 
     private func movie(_ guid: String, viewed: Int, key: String = "1") -> PlexMetadata {
@@ -78,20 +78,54 @@ final class ContinueWatchingMergeTests: XCTestCase {
         XCTAssertEqual(picks.map(\.index), [0, 2, 1])
     }
 
-    /// The same quality on two servers is one card, the more recently watched.
-    func test_sameQualityOnTwoServers_mergesToTheNewer() {
-        let main = [copy("plex://movie/jw", resolution: "1080", viewed: 100, offset: 1, key: "a")]
+    /// A title comes only from the server watched most recently: all its
+    /// qualities there, none from the other server.
+    func test_onlyTheLastWatchedServer_allItsQualities() {
+        let main = [copy("plex://movie/jw", resolution: "1080", viewed: 100, offset: 1, key: "a"),
+                    copy("plex://movie/jw", resolution: "4k", viewed: 90, offset: 1, key: "a4")]
         let other = [copy("plex://movie/jw", resolution: "1080", viewed: 200, offset: 2, key: "b"),
                      copy("plex://movie/jw", resolution: "2160", viewed: 50, offset: 3, key: "c")]
         let picks = PlexDataStore.mergeContinueWatching([main, other])
         XCTAssertEqual(picks.map { "\($0.list):\($0.index)" }, ["1:0", "1:1"])
     }
 
-    /// Both cards show the most recently watched copy's position.
+    /// A show's next-up episode has no watch time: the server it was last
+    /// watched on (`CrossServerHistory`) decides, even against an older
+    /// in-progress episode elsewhere. That server's own episode, its 4K and
+    /// 1080p cards side by side.
+    func test_showComesFromItsLastWatchedServer() {
+        var sesama4k = episode(show: "plex://show/s", viewed: 0, key: "s2-4k")
+        sesama4k.Media = copy("x", resolution: "4k", viewed: 0, offset: 0, key: "x").Media
+        let sesamaHD = episode(show: "plex://show/s", viewed: 0, key: "s2-hd")
+        let alpha = [episode(show: "plex://show/s", viewed: 500, key: "a5")]
+        let picks = PlexDataStore.mergeContinueWatching([[sesama4k, sesamaHD], alpha],
+                                                        lastWatched: ["plex://show/s": 0])
+        XCTAssertEqual(picks.map { "\($0.list):\($0.index)" }.sorted(), ["0:0", "0:1"])
+    }
+
+    /// The last-watched server has no card for it (caught up there, or out of
+    /// its window): no card at all, not another server's.
+    func test_lastWatchedServerWithoutAnEntry_showsNothing() {
+        let alpha = [episode(show: "plex://show/s", viewed: 500, key: "a5")]
+        XCTAssertTrue(PlexDataStore.mergeContinueWatching([[], alpha], lastWatched: ["plex://show/s": 0]).isEmpty)
+    }
+
+    func test_lastWatchedServer_decision() {
+        let decided = CrossServerHistory.decide(
+            guids: ["plex://show/a", "plex://show/b", "plex://show/c"],
+            viewed: [["plex://show/a": 100, "plex://show/b": 300, "plex://show/c": 5],
+                     ["plex://show/a": 200, "plex://show/b": 300]],
+            providerIDs: ["main", "plex:alpha"])
+        XCTAssertEqual(decided["plex://show/a"], "plex:alpha")
+        XCTAssertEqual(decided["plex://show/b"], "main", "a tie keeps the signed-in server")
+        XCTAssertNil(decided["plex://show/c"], "on one server only: its own hub stands")
+    }
+
+    /// Both cards show the most recently watched copy's position, on one server.
     func test_copiesShareTheNewestResumePoint() {
         let metas = [copy("plex://movie/jw", resolution: "4k", viewed: 100, offset: 10_000, key: "4k"),
                      copy("plex://movie/jw", resolution: "1080", viewed: 300, offset: 90_000, key: "hd")]
-        let shared = PlexDataStore.sharingResumePoints(metas)
+        let shared = PlexDataStore.sharingResumePoints(metas.map { (list: 0, meta: $0) })
         XCTAssertEqual(shared.map(\.viewOffset), [90_000, 90_000])
         XCTAssertEqual(shared.map(\.lastViewedAt), [300, 300])
     }
@@ -102,7 +136,7 @@ final class ContinueWatchingMergeTests: XCTestCase {
         first.guid = "plex://episode/1"; first.viewOffset = 5
         var second = episode(show: "plex://show/s", viewed: 200)
         second.guid = "plex://episode/2"; second.viewOffset = 9
-        XCTAssertEqual(PlexDataStore.sharingResumePoints([first, second]).map(\.viewOffset), [5, 9])
+        XCTAssertEqual(PlexDataStore.sharingResumePoints([(0, first), (0, second)]).map(\.viewOffset), [5, 9])
     }
 
     // MARK: - Setups other than several owned servers
@@ -147,15 +181,15 @@ final class ContinueWatchingMergeTests: XCTestCase {
         XCTAssertEqual(PlexDataStore.mergeContinueWatching([[item]]).count, 1)
     }
 
-    /// Versions on one server beside a separate 1080p copy on another: the
-    /// 1080p copy is its own card, and both resume from the newer position.
-    func test_versionsBesideASeparateCopy() {
+    /// Versions on one server and a separate copy on another: only the more
+    /// recently watched server's card, and positions never cross servers.
+    func test_versionsBesideACopyOnAnotherServer() {
         var combined = versions("plex://movie/jw", ["4k", "1080"], viewed: 100, key: "1")
         combined.viewOffset = 10
         var separate = copy("plex://movie/jw", resolution: "1080", viewed: 200, offset: 99, key: "9")
         separate.viewOffset = 99
-        XCTAssertEqual(PlexDataStore.mergeContinueWatching([[combined], [separate]]).count, 2)
-        XCTAssertEqual(PlexDataStore.sharingResumePoints([combined, separate]).map(\.viewOffset), [99, 99])
+        XCTAssertEqual(PlexDataStore.mergeContinueWatching([[combined], [separate]]).map(\.list), [1])
+        XCTAssertEqual(PlexDataStore.sharingResumePoints([(0, combined), (1, separate)]).map(\.viewOffset), [10, 99])
     }
 
     /// Two different shows with one title and no Plex guid (a legacy agent)
