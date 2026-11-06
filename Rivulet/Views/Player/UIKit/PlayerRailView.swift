@@ -114,7 +114,7 @@ final class PlayerRailView: UIView {
         titleLabel.textColor = .white
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        yearLabel.font = .systemFont(ofSize: 36, weight: .semibold)
+        yearLabel.font = .systemFont(ofSize: 30, weight: .semibold)
         yearLabel.textColor = UIColor.white.withAlphaComponent(0.75)
         yearLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         yearLabel.setContentHuggingPriority(.required, for: .horizontal)
