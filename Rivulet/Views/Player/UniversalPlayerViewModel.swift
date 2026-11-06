@@ -569,12 +569,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         return metadata.year.map { String($0) }
     }
 
-    /// The rail's two lines: an episode's show large, with "S1 · E3 · Name"
-    /// above it (only the name for a special); a movie's title and year.
-    var railTitleLines: (title: String, eyebrow: String?) {
-        guard metadata.type == "episode" else { return (title, subtitle) }
-        return Self.episodeRailLines(show: metadata.grandparentTitle, episode: metadata.title,
-                                     season: metadata.parentIndex, number: metadata.index)
+    /// The rail's lines: an episode's show large, with "S1 · E3 · Name"
+    /// above it (only the name for a special); a movie's title with its year
+    /// after it on the same line, and nothing above.
+    var railTitleLines: (title: String, eyebrow: String?, year: Int?) {
+        guard metadata.type == "episode" else { return (title, nil, metadata.year) }
+        let lines = Self.episodeRailLines(show: metadata.grandparentTitle, episode: metadata.title,
+                                          season: metadata.parentIndex, number: metadata.index)
+        return (lines.title, lines.eyebrow, nil)
     }
 
     nonisolated static func episodeRailLines(show: String?, episode: String?, season: Int?, number: Int?)

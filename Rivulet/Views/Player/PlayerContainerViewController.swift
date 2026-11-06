@@ -2150,7 +2150,7 @@ class PlayerContainerViewController: UIViewController {
     /// rating and audio live in the Info tab, as in AVKit.
     private func applyRailMetadata(vm: UniversalPlayerViewModel) {
         let lines = vm.railTitleLines
-        rail?.setTitle(lines.title, eyebrow: lines.eyebrow)
+        rail?.setTitle(lines.title, eyebrow: lines.eyebrow, year: lines.year)
     }
 
     /// Single writer for all chrome alphas. Every visibility rule lives

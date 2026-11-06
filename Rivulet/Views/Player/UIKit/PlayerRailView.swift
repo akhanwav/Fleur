@@ -92,6 +92,9 @@ final class PlayerRailView: UIView {
 
     private let subtitleLabel = UILabel()
     private let titleLabel = UILabel()
+    /// A movie's "(2026)", on the title's baseline. The title gives way to it.
+    private let yearLabel = UILabel()
+    private var yearGap: NSLayoutConstraint?
     private let toolRow = UIStackView()
     private let pillRow = UIStackView()
     /// Insights' sub-tabs, right-aligned on the pill row while its pane is open.
@@ -109,7 +112,14 @@ final class PlayerRailView: UIView {
         subtitleLabel.textColor = .white
         titleLabel.font = .systemFont(ofSize: 57, weight: .bold)
         titleLabel.textColor = .white
-        for label in [subtitleLabel, titleLabel] {
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        yearLabel.font = .systemFont(ofSize: 36, weight: .semibold)
+        yearLabel.textColor = UIColor.white.withAlphaComponent(0.75)
+        yearLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        yearLabel.setContentHuggingPriority(.required, for: .horizontal)
+        yearLabel.isHidden = true
+        for label in [subtitleLabel, titleLabel, yearLabel] {
             label.layer.shadowColor = UIColor.black.cgColor
             label.layer.shadowOpacity = 0.2
             label.layer.shadowRadius = 30
@@ -136,7 +146,7 @@ final class PlayerRailView: UIView {
         insightsTabRow.alignment = .center
         insightsTabRow.isHidden = true
 
-        [subtitleLabel, titleLabel, toolRow, pillRow, insightsTabRow].forEach {
+        [subtitleLabel, titleLabel, yearLabel, toolRow, pillRow, insightsTabRow].forEach {
             addSubview($0)
             $0.translatesAutoresizingMaskIntoConstraints = false
         }
@@ -149,6 +159,8 @@ final class PlayerRailView: UIView {
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.titleTop),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Metrics.titleLeading),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: toolRow.leadingAnchor, constant: -Metrics.titleToolGap),
+            yearLabel.firstBaselineAnchor.constraint(equalTo: titleLabel.firstBaselineAnchor),
+            yearLabel.trailingAnchor.constraint(lessThanOrEqualTo: toolRow.leadingAnchor, constant: -Metrics.titleToolGap),
 
             toolRow.topAnchor.constraint(equalTo: topAnchor, constant: Metrics.toolTop),
             toolRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.sideInset),
@@ -208,9 +220,19 @@ final class PlayerRailView: UIView {
     // MARK: - Content
 
     func setTitle(_ title: String, eyebrow: String?) {
+        setTitle(title, eyebrow: eyebrow, year: nil)
+    }
+
+    /// `year` (a movie's) follows the title on its line, in parentheses.
+    func setTitle(_ title: String, eyebrow: String?, year: Int?) {
         titleLabel.text = title
         subtitleLabel.text = eyebrow
         subtitleLabel.isHidden = eyebrow == nil
+        yearLabel.text = year.map { "(\($0))" }
+        yearLabel.isHidden = year == nil
+        yearGap?.isActive = false
+        yearGap = yearLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: year == nil ? 0 : 14)
+        yearGap?.isActive = true
     }
 
     func setLoading(_ loading: Bool) {
@@ -328,6 +350,7 @@ final class PlayerRailView: UIView {
         toolRow.alpha = chrome
         pillRow.alpha = 1
         titleLabel.alpha = chrome
+        yearLabel.alpha = chrome
     }
 
     // MARK: - Focus
