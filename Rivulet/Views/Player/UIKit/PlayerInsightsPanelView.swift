@@ -28,6 +28,8 @@ final class InsightsCastListView: UIView {
     private let scrollView = UIScrollView()
     private let stack = UIStackView()
     private let attribution = UILabel()
+    /// The cast card last opened, where focus returns from the actor view.
+    private weak var lastSelectedCard: InsightsCastCardView?
 
     /// Card counts for the shown tab, for tests.
     var triviaRowCount: Int { stack.arrangedSubviews.filter { $0 is InsightsTriviaCardView }.count }
@@ -87,6 +89,7 @@ final class InsightsCastListView: UIView {
 
     func setTab(_ tab: InsightsTab) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        lastSelectedCard = nil
         scrollView.contentOffset.x = -Metrics.sideInset
         buildCards(for: tab)
     }
@@ -97,7 +100,10 @@ final class InsightsCastListView: UIView {
         case .cast:
             for person in cast {
                 let card = InsightsCastCardView(person: person)
-                card.onPress = { [weak self] in self?.onSelectCast(person) }
+                card.onPress = { [weak self, weak card] in
+                    self?.lastSelectedCard = card
+                    self?.onSelectCast(person)
+                }
                 stack.addArrangedSubview(card)
             }
             facts = []
@@ -112,8 +118,11 @@ final class InsightsCastListView: UIView {
         attribution.isHidden = facts.isEmpty || (trivia?.attribution.isEmpty ?? true)
     }
 
+    /// The actor just opened, when there is one; the list stays scrolled to
+    /// them because nothing scrolls it while the actor view is up.
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        stack.arrangedSubviews.first.map { [$0] } ?? []
+        if let card = lastSelectedCard, card.superview === stack { return [card] }
+        return stack.arrangedSubviews.first.map { [$0] } ?? []
     }
 }
 

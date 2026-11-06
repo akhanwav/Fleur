@@ -2149,7 +2149,8 @@ class PlayerContainerViewController: UIViewController {
     /// AVKit's title block: the show (or nothing) over the title. Runtime,
     /// rating and audio live in the Info tab, as in AVKit.
     private func applyRailMetadata(vm: UniversalPlayerViewModel) {
-        rail?.setTitle(vm.title, eyebrow: vm.subtitle)
+        let lines = vm.railTitleLines
+        rail?.setTitle(lines.title, eyebrow: lines.eyebrow)
     }
 
     /// Single writer for all chrome alphas. Every visibility rule lives

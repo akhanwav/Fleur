@@ -569,6 +569,22 @@ final class UniversalPlayerViewModel: ObservableObject {
         return metadata.year.map { String($0) }
     }
 
+    /// The rail's two lines: an episode's show large, with "S1 · E3 · Name"
+    /// above it (only the name for a special); a movie's title and year.
+    var railTitleLines: (title: String, eyebrow: String?) {
+        guard metadata.type == "episode" else { return (title, subtitle) }
+        return Self.episodeRailLines(show: metadata.grandparentTitle, episode: metadata.title,
+                                     season: metadata.parentIndex, number: metadata.index)
+    }
+
+    nonisolated static func episodeRailLines(show: String?, episode: String?, season: Int?, number: Int?)
+        -> (title: String, eyebrow: String?) {
+        let name = episode.flatMap { $0.isEmpty ? nil : $0 }
+        guard let show, !show.isEmpty else { return (name ?? "Unknown", nil) }
+        guard let season, season > 0, let number else { return (show, name) }
+        return (show, (["S\(season)", "E\(number)"] + [name].compactMap { $0 }).joined(separator: " · "))
+    }
+
     // MARK: - Private State
 
     private var cancellables = Set<AnyCancellable>()
