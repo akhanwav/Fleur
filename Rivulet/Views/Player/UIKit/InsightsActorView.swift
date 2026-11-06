@@ -6,9 +6,10 @@
 //  Rivulet
 //
 //  A cast member inside the Insights box, laid out like the Info card:
-//  portrait, name and a four-line bio on the left, their ten most popular
-//  titles on TMDB as a row of posters with names on the right. Select on the
-//  bio spreads it across the box to read; Menu folds it back.
+//  portrait, name and a four-line bio on the left, their ten best-known
+//  titles (by TMDB's all-time rating count) as a row of posters with names on
+//  the right. Select on the bio spreads it across the box to read; Menu folds
+//  it back.
 //
 
 import UIKit
@@ -107,7 +108,7 @@ final class InsightsActorView: UIView {
         if let url = detail.portraitURL, url != person.imageURL { loadPortrait(url) }
     }
 
-    /// The posters: the person's titles, most popular on TMDB first.
+    /// The posters: the person's best-known titles first.
     func showFilmography(_ entries: [FilmographyEntry]) {
         posterStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for entry in Self.topTitles(entries) {
@@ -115,13 +116,14 @@ final class InsightsActorView: UIView {
         }
     }
 
-    /// Internal for tests: the `limit` most popular titles, once each. Titles
-    /// with no popularity (a person TMDB doesn't know) keep their order.
+    /// Internal for tests: the `limit` titles with the most TMDB ratings,
+    /// once each, leaving out appearances as themselves and cameos. Titles with
+    /// no count (a person TMDB doesn't know) keep their order.
     static func topTitles(_ entries: [FilmographyEntry], limit: Int = Metrics.titleLimit) -> [FilmographyEntry] {
         var seen = Set<String>()
-        let unique = entries.filter { seen.insert($0.key).inserted }
+        let unique = entries.filter { !$0.isMinorRole && seen.insert($0.key).inserted }
         let ranked = unique.enumerated().sorted { a, b in
-            a.element.popularity != b.element.popularity ? a.element.popularity > b.element.popularity : a.offset < b.offset
+            a.element.voteCount != b.element.voteCount ? a.element.voteCount > b.element.voteCount : a.offset < b.offset
         }
         return ranked.prefix(limit).map(\.element)
     }
@@ -230,6 +232,11 @@ private final class InsightsPosterCardView: UIView {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
+        // A name too long for the poster scrolls while focused, the system
+        // marquee Ways to Watch uses; turning it off does not restore the
+        // truncation, hence the order.
+        titleLabel.enablesMarqueeWhenAncestorFocused = focused
+        if !focused { titleLabel.lineBreakMode = .byTruncatingTail }
         coordinator.animateFocusChange(gained: focused) {
             self.applyFocus(focused)
         }

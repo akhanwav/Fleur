@@ -112,6 +112,8 @@ enum FilmographyBuilder {
 
         var order: [String] = []
         var byKey: [String: (credit: TMDBPersonCredit, parts: [String])] = [:]
+        var votes: [String: Int] = [:]
+        var hasMajorRole = Set<String>()
         for credit in credits {
             guard let mediaType = credit.mediaType, mediaType == "movie" || mediaType == "tv" else { continue }
             guard excludedGenreIDs.isDisjoint(with: credit.genreIds ?? []) else { continue }
@@ -124,6 +126,8 @@ enum FilmographyBuilder {
             if let part, !part.isEmpty, !(byKey[key]?.parts.contains(part) ?? true) {
                 byKey[key]?.parts.append(part)
             }
+            votes[key] = max(votes[key] ?? 0, credit.voteCount ?? 0)
+            if !isMinorRole(credit, isCast: !useCrew) { hasMajorRole.insert(key) }
         }
 
         return order.compactMap { key in
@@ -141,8 +145,28 @@ enum FilmographyBuilder {
                 credit: parts.isEmpty ? nil : parts.joined(separator: " / "),
                 genres: TMDBGenreNames.names(for: credit.genreIds ?? []),
                 popularity: credit.popularity ?? 0,
+                voteCount: votes[key] ?? 0,
+                isMinorRole: !hasMajorRole.contains(key),
                 releaseDate: date)
         }
+    }
+
+    /// Billed this far down a film's cast, a role is a cameo.
+    static let cameoBillingPosition = 15
+    /// A show credit for this many episodes or fewer is a guest spot.
+    static let guestEpisodeLimit = 2
+
+    /// The person as themselves (talk shows, documentaries, award shows), an
+    /// uncredited part, or a cameo by TMDB's billing.
+    static func isMinorRole(_ credit: TMDBPersonCredit, isCast: Bool) -> Bool {
+        let character = (credit.character ?? "").lowercased()
+        let selfNames = ["self", "himself", "herself", "themselves", "themself"]
+        if selfNames.contains(where: { character.hasPrefix($0) }) || character.contains("(self)") { return true }
+        guard isCast else { return false }
+        if character.contains("uncredited") { return true }
+        if credit.mediaType == "movie", let order = credit.order, order >= cameoBillingPosition { return true }
+        if credit.mediaType == "tv", let episodes = credit.episodeCount, episodes <= guestEpisodeLimit { return true }
+        return false
     }
 
     /// `credits` with each title already on the server swapped for its

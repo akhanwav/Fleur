@@ -15,6 +15,11 @@ struct FilmographyEntry: Hashable, Sendable {
     var credit: String? = nil
     var genres: [String] = []
     var popularity: Double = 0
+    /// TMDB's all-time number of ratings, the measure of a well-known title.
+    var voteCount: Int = 0
+    /// Every credit on the title is the person as themselves, uncredited, or a
+    /// cameo (billed far down a film, a show's one or two episodes).
+    var isMinorRole = false
     /// "YYYY-MM-DD", or nil when TMDB has no date (unreleased titles).
     var releaseDate: String? = nil
 

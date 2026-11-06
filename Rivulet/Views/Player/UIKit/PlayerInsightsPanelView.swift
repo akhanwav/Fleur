@@ -130,6 +130,8 @@ final class InsightsCastCardView: UIControl {
     var onPress: (() -> Void)?
     private let plate = UIView()
     private let headshot = UIImageView()
+    private let name = UILabel()
+    private let role = UILabel()
     private var imageTask: Task<Void, Never>?
 
     init(person: MediaPerson) {
@@ -147,12 +149,10 @@ final class InsightsCastCardView: UIControl {
         headshot.tintColor = UIColor.white.withAlphaComponent(0.35)
         headshot.image = UIImage(systemName: "person.fill")
 
-        let name = UILabel()
         name.text = person.name
         name.font = .systemFont(ofSize: 23, weight: .semibold)
         name.textColor = .white
         name.textAlignment = .center
-        let role = UILabel()
         role.text = person.role
         role.font = .systemFont(ofSize: 19, weight: .regular)
         role.textColor = UIColor.white.withAlphaComponent(0.6)
@@ -208,6 +208,11 @@ final class InsightsCastCardView: UIControl {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
+        // A long name or character scrolls while focused (the Ways to Watch marquee).
+        for label in [name, role] {
+            label.enablesMarqueeWhenAncestorFocused = focused
+            if !focused { label.lineBreakMode = .byTruncatingTail }
+        }
         coordinator.animateFocusChange(gained: focused) {
             self.plate.alpha = focused ? 1 : 0
             self.transform = focused ? CGAffineTransform(scaleX: 1.05, y: 1.05) : .identity

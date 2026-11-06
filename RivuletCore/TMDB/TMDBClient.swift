@@ -116,8 +116,17 @@ nonisolated struct TMDBPersonCredit: Codable, Sendable {
     let firstAirDate: String?   // shows
     let genreIds: [Int]?
     let popularity: Double?
+    /// All-time number of TMDB ratings: how well known the title is, where
+    /// `popularity` is what is trending now.
+    var voteCount: Int? = nil
+    /// Billing position on a cast credit, 0 for the lead.
+    var order: Int? = nil
+    /// Episodes a show's cast credit covers.
+    var episodeCount: Int? = nil
     enum CodingKeys: String, CodingKey {
-        case id, title, name, character, job, popularity
+        case id, title, name, character, job, popularity, order
+        case voteCount = "vote_count"
+        case episodeCount = "episode_count"
         case mediaType = "media_type"
         case posterPath = "poster_path"
         case releaseDate = "release_date"

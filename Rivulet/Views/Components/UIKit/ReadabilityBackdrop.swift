@@ -20,7 +20,7 @@ final class ReadabilityBackdrop: UIView {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         isUserInteractionEnabled = false
-        backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        backgroundColor = UIColor.black.withAlphaComponent(0.55)
         layer.cornerRadius = 16
         layer.cornerCurve = .continuous
         isHidden = true
