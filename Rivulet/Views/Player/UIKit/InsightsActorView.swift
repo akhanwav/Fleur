@@ -6,9 +6,9 @@
 //  Rivulet
 //
 //  A cast member inside the Insights box, laid out like the Info card:
-//  portrait, name and a four-line bio on the left, their filmography as a row
-//  of posters on the right. Select on the bio spreads it across the box to
-//  read; Menu folds it back.
+//  portrait, name and a four-line bio on the left, their ten most popular
+//  titles on TMDB as a row of posters with names on the right. Select on the
+//  bio spreads it across the box to read; Menu folds it back.
 //
 
 import UIKit
@@ -24,6 +24,7 @@ final class InsightsActorView: UIView {
         static let readingWidth: CGFloat = 1500
         static let postersLeading: CGFloat = 860
         static let posterGap: CGFloat = 20
+        static let titleLimit = 10
     }
 
     private let person: MediaPerson
@@ -104,9 +105,25 @@ final class InsightsActorView: UIView {
         let text = detail.biography?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         bio.setText(text.isEmpty ? "No biography available." : text)
         if let url = detail.portraitURL, url != person.imageURL { loadPortrait(url) }
-        for entry in detail.movies + detail.shows {
+    }
+
+    /// The posters: the person's titles, most popular on TMDB first.
+    func showFilmography(_ entries: [FilmographyEntry]) {
+        posterStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        for entry in Self.topTitles(entries) {
             posterStack.addArrangedSubview(InsightsPosterCardView(item: entry.item))
         }
+    }
+
+    /// Internal for tests: the `limit` most popular titles, once each. Titles
+    /// with no popularity (a person TMDB doesn't know) keep their order.
+    static func topTitles(_ entries: [FilmographyEntry], limit: Int = Metrics.titleLimit) -> [FilmographyEntry] {
+        var seen = Set<String>()
+        let unique = entries.filter { seen.insert($0.key).inserted }
+        let ranked = unique.enumerated().sorted { a, b in
+            a.element.popularity != b.element.popularity ? a.element.popularity > b.element.popularity : a.offset < b.offset
+        }
+        return ranked.prefix(limit).map(\.element)
     }
 
     /// The load failed or found nothing: portrait and name stay, no posters.
@@ -145,15 +162,30 @@ final class InsightsActorView: UIView {
     override var preferredFocusEnvironments: [UIFocusEnvironment] { [bio] }
 }
 
-/// One filmography title: a poster, display only. Focusable so focus scrolls the row.
+/// One filmography title: a poster with its name and year under it. Focusable,
+/// so focus moves across the row; Select does nothing yet.
 private final class InsightsPosterCardView: UIView {
 
-    private static let size = CGSize(width: 136, height: 204)
+    private static let size = CGSize(width: 110, height: 165)
+    private static let captionGap: CGFloat = 8
     private let imageView = UIImageView()
+    private let titleLabel = UILabel()
+    private let yearLabel = UILabel()
     private var imageTask: Task<Void, Never>?
 
     init(item: MediaItem) {
         super.init(frame: .zero)
+        titleLabel.text = item.title
+        titleLabel.font = .systemFont(ofSize: 17, weight: .medium)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        yearLabel.text = item.year.map(String.init)
+        yearLabel.font = .systemFont(ofSize: 15, weight: .regular)
+        [titleLabel, yearLabel].forEach {
+            $0.textAlignment = .center
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            addSubview($0)
+        }
+        applyFocus(false)
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.layer.cornerRadius = 16
@@ -166,11 +198,17 @@ private final class InsightsPosterCardView: UIView {
         imageView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: Self.size.width),
-            heightAnchor.constraint(equalToConstant: Self.size.height),
             imageView.topAnchor.constraint(equalTo: topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            imageView.heightAnchor.constraint(equalToConstant: Self.size.height),
             imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            titleLabel.topAnchor.constraint(equalTo: imageView.bottomAnchor, constant: Self.captionGap),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
+            yearLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
+            yearLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
+            yearLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
+            yearLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
         if let url = item.artwork.poster {
             imageTask = Task { [weak self] in
@@ -193,7 +231,16 @@ private final class InsightsPosterCardView: UIView {
         super.didUpdateFocus(in: context, with: coordinator)
         let focused = context.nextFocusedView === self
         coordinator.animateFocusChange(gained: focused) {
-            self.transform = focused ? CGAffineTransform(scaleX: 1.06, y: 1.06) : .identity
+            self.applyFocus(focused)
         }
+    }
+
+    /// The poster grows and lifts, with a white rim; the caption brightens.
+    private func applyFocus(_ focused: Bool) {
+        transform = focused ? CGAffineTransform(scaleX: 1.08, y: 1.08) : .identity
+        imageView.layer.borderWidth = focused ? 3 : 0
+        imageView.layer.borderColor = UIColor.white.cgColor
+        titleLabel.textColor = UIColor.white.withAlphaComponent(focused ? 1 : 0.7)
+        yearLabel.textColor = UIColor.white.withAlphaComponent(focused ? 0.8 : 0.45)
     }
 }

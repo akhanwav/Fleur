@@ -253,6 +253,9 @@ final class MediaDetailChromeView: UIView {
         return l
     }()
 
+    /// Behind the description when it is a synopsis, never behind a tagline.
+    private let descriptionBackdrop = ReadabilityBackdrop()
+
     /// "2023 · 49 min   ⭐ 7.8   [4K] [DV] [5.1]", dimmer than the genre row.
     private let qualityRow: UIStackView = {
         let s = UIStackView()
@@ -326,6 +329,7 @@ final class MediaDetailChromeView: UIView {
         metadataBlock.addArrangedSubview(genreRow)
         metadataBlock.addArrangedSubview(descriptionLabel)
         metadataBlock.addArrangedSubview(qualityRow)
+        descriptionBackdrop.attach(behind: descriptionLabel, in: metadataBlock)
         chromeStack.addArrangedSubview(metadataBlock)
 
         // Apple's rhythm: 18 between the text rows, 32 above the buttons.
@@ -459,6 +463,7 @@ final class MediaDetailChromeView: UIView {
         titleLogoImageView.isHidden = false
         titleFallbackLabel.isHidden = false
         descriptionLabel.text = nil
+        descriptionBackdrop.isHidden = true
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         actionButtonsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -509,6 +514,7 @@ final class MediaDetailChromeView: UIView {
         titleFallbackLabel.text = nil
         descriptionLabel.text = nil
         descriptionLabel.attributedText = nil
+        descriptionBackdrop.isHidden = true
         resolvedGenres = []
         genreRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
         qualityRow.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -618,12 +624,15 @@ final class MediaDetailChromeView: UIView {
             attr.append(NSAttributedString(string: overview, attributes: [
                 .font: Self.descriptionFont, .foregroundColor: color]))
             descriptionLabel.attributedText = attr
+            descriptionBackdrop.isHidden = false
         } else if let tagline = detail.tagline, !tagline.isEmpty {
             descriptionLabel.text = tagline
             descriptionLabel.font = AppTheme.Fonts.tagline(23)
+            descriptionBackdrop.isHidden = true
         } else if let overview = detail.item.overview, !overview.isEmpty {
             descriptionLabel.text = overview
             descriptionLabel.font = Self.descriptionFont
+            descriptionBackdrop.isHidden = false
         }
         let topCast = detail.cast.prefix(3).map { $0.name }
         if !topCast.isEmpty {

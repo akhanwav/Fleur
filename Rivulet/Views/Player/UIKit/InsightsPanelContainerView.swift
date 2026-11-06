@@ -124,6 +124,11 @@ final class InsightsPanelContainerView: UIView, RailPanelMenuHandling {
             } else {
                 actor.showDetailsUnavailable()
             }
+            // TMDB's credits carry the popularity the posters are ranked by.
+            let titles = await self.provider.filmography(
+                person: person, onServer: (result?.movies ?? []) + (result?.shows ?? []))
+            guard self.coordinator.isCurrent(token) else { return }
+            actor.showFilmography(titles)
         }
     }
 

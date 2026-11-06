@@ -68,6 +68,7 @@ final class MediaItemDetailPageViewController: UIViewController {
     private let genreLabel = UILabel()
     private let ratingBadge = MediaItemDetailPageViewController.badge()
     private let synopsisLabel = UILabel()
+    private let synopsisBackdrop = ReadabilityBackdrop()
     private let dateRow = UIStackView()
     private let dateLabel = UILabel()
     private let badgeRow = UIStackView()
@@ -290,6 +291,8 @@ final class MediaItemDetailPageViewController: UIViewController {
         synopsisLabel.isHidden = (synopsisLabel.attributedText?.length ?? 0) == 0
         synopsisLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 860).isActive = true
         textColumn.addArrangedSubview(synopsisLabel)
+        synopsisBackdrop.attach(behind: synopsisLabel, in: textColumn)
+        synopsisBackdrop.isHidden = synopsisLabel.isHidden
 
         // 5. Date · runtime + capability badges.
         dateRow.axis = .horizontal
@@ -548,8 +551,8 @@ final class MediaItemDetailPageViewController: UIViewController {
     }
 
     /// Synopsis with a BOLD "S2, E1:" prefix, regular body.
-    private func synopsisAttributed() -> NSAttributedString? {
-        guard let overview = item.overview, !overview.isEmpty else { return nil }
+    private func synopsisAttributed(overview: String? = nil) -> NSAttributedString? {
+        guard let overview = overview ?? item.overview, !overview.isEmpty else { return nil }
         let body = NSMutableAttributedString()
         let color = UIColor.white.withAlphaComponent(0.9)
         if let s = item.seasonNumber, let e = item.episodeNumber {
@@ -608,6 +611,13 @@ final class MediaItemDetailPageViewController: UIViewController {
         infoColumns.configure(detail: detail)
         renderBadges(detail)
         copySelection.load(item: item, mainDetail: detail)
+        // A page opened from a link starts from an item with no overview; the
+        // server read has it.
+        if synopsisLabel.isHidden, let text = synopsisAttributed(overview: detail.item.overview) {
+            synopsisLabel.attributedText = text
+            synopsisLabel.isHidden = false
+            synopsisBackdrop.isHidden = false
+        }
     }
 
     /// Capability badges: file quality (4K/DV/Atmos/…) + SDH/AD, for the
