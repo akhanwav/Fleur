@@ -510,7 +510,9 @@ most servers and fails on the ones behind a raw-IP or private certificate (#314,
   a new file (an upgrade, a move) plays from the same position; the same file
   or no item is `PlayerError.fileUnavailable` ("no longer available on
   <server>", no Try Again, Ways to Watch when another copy exists). Either way
-  it posts `.plexDataNeedsRefresh` so lists drop the old address.
+  it posts `.plexDataNeedsRefresh` so lists drop the old address. Sentry gets a
+  warning breadcrumb (`playback.file_missing`), never an error event: a file
+  gone from a server is not an app bug.
 - **A server that is gone says so.** The preflight stops after two connection
   failures, or 503 on all eight polls, and an Aether 503 skips the fallback:
   `PlayerError.serverUnavailableMessage`, not "taking too long".

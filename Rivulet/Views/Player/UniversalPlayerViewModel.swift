@@ -1959,6 +1959,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             // failure. The old inline capture reported the media title but not
             // the codec, and knew nothing about a prior Aether failure.
             diagnostics.step("avplayer_start_failed", detail: technicalError)
+            // Already a breadcrumb (`recordMissingFile`): not an app bug.
+            if case .fileUnavailable = error as? PlayerError { return }
             diagnostics.capture(error, event: "avplayer_start_failed", extraTags: [
                 "player_type": "avplayer"
             ])
@@ -2257,6 +2259,14 @@ final class UniversalPlayerViewModel: ObservableObject {
                 // `Task.isCancelled` stays false here too. Both halves have to
                 // hold or the fallback is skipped and the hang is unfixed.
                 if isCancellationError(error) || Task.isCancelled { return }
+                // A 404 for the file: the server holds another file now, or none.
+                // Its transcoder reads the same missing file, so no fallback, and
+                // a file gone from a server is not an app bug: no error event.
+                if isMissingFile(error) {
+                    diagnostics.recordMissingFile("aether_refused")
+                    try await recoverFromMissingFile(startTime: startTime, original: error)
+                    return
+                }
                 let kind = classifyDirectPlayFailure(error)
                 // Record the ORIGINAL Aether failure before doing anything else.
                 // This is the root cause of RIVULET-19: previously `error` was
@@ -2279,12 +2289,6 @@ final class UniversalPlayerViewModel: ObservableObject {
                     error: error,
                     kind: kind
                 )
-                // A 404 for the file: the server holds another file now, or none.
-                // Its transcoder reads the same missing file, so no fallback.
-                if isMissingFile(error) {
-                    try await recoverFromMissingFile(startTime: startTime, original: error)
-                    return
-                }
                 guard planHasHLSFallback(plan) else { throw error }
                 // A 503 for the file is the server, not the file: its transcoder
                 // is no likelier to answer, and waiting on it hid the cause
@@ -3478,7 +3482,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             errorMessage = (error as? PlayerError)?.userFacingDescription
                 ?? PlayerError.loadFailed(error.localizedDescription).userFacingDescription
-            updatePlaybackState(.failed(.loadFailed(error.localizedDescription)))
+            updatePlaybackState(.failed((error as? PlayerError) ?? .loadFailed(error.localizedDescription)))
+            if case .fileUnavailable = error as? PlayerError { return }
             diagnostics.capture(error, event: "quality_reload_failed", extraTags: [
                 "quality_reload_reason": reason,
                 "player_type": toOriginal ? "aether" : "avplayer"
@@ -3885,7 +3890,7 @@ final class UniversalPlayerViewModel: ObservableObject {
         defer { NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil) }
         if let guid = metadata.guid { await OtherServersAvailabilityChecker.shared.forget(plexGuid: guid) }
         guard !hasRefetchedAfterMissingFile, let ratingKey = metadata.ratingKey else {
-            diagnostics.step("source_404_still_missing")
+            diagnostics.recordMissingFile("still_missing")
             throw await fileUnavailableError()
         }
         hasRefetchedAfterMissingFile = true
@@ -3896,7 +3901,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 serverURL: serverURL, authToken: authToken, ratingKey: ratingKey)
         } catch {
             if Self.isNotFound(error) {
-                diagnostics.step("source_404_item_gone")
+                diagnostics.recordMissingFile("item_gone")
                 throw await fileUnavailableError()
             }
             // The server did not say: report what the engine saw.
@@ -3904,10 +3909,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         applyVersion(currentVersionChoice, to: fresh.Media)
         guard let part = metadata.Media?.first?.Part?.first?.key, part != failedPart else {
-            diagnostics.step("source_404_same_file")
+            diagnostics.recordMissingFile("same_file")
             throw await fileUnavailableError()
         }
-        diagnostics.step("source_404_new_file")
+        diagnostics.recordMissingFile("new_file")
         if let markers = fresh.Marker, !markers.isEmpty { metadata.Marker = markers }
         resetPreparedStreamContext()
         await prepareStreamURL()

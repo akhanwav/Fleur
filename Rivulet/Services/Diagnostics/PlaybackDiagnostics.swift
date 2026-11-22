@@ -134,6 +134,20 @@ final class PlaybackDiagnostics {
         SentryBridge.addBreadcrumb(crumb)
     }
 
+    /// A 404 for the file and what re-reading the item found. A file removed or
+    /// replaced on the server is not an app bug, so this is a warning
+    /// breadcrumb (mirrored as a log), never an error event.
+    func recordMissingFile(_ outcome: String) {
+        timeline.append("source_404: \(outcome)")
+        let crumb = Breadcrumb(level: .warning, category: "playback.file_missing")
+        crumb.message = "File not found on the server (\(outcome))"
+        crumb.data = [
+            "outcome": outcome,
+            "rating_key": media["rating_key"] as? String ?? "unknown"
+        ]
+        SentryBridge.addBreadcrumb(crumb)
+    }
+
     // MARK: - Root cause
 
     /// Record the failure of the PRIMARY route before falling back.
