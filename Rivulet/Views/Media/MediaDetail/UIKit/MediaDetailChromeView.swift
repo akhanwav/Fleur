@@ -888,6 +888,14 @@ final class MediaDetailChromeView: UIView {
         TitleTrackChoices.key(guid: (copySelection.selectedDetail ?? detail)?.plexGuid ?? detail?.plexGuid)
     }
 
+    /// The choice that plays here: on an episode, its own or its show's,
+    /// whichever was made last, as the player reads it.
+    private var trackChoice: TitleTrackChoice? {
+        let showGuid = item?.kind == .episode
+            ? ((copySelection.selectedDetail ?? detail)?.showPlexGuid ?? detail?.showPlexGuid) : nil
+        return TitleTrackChoices.choice(guid: trackChoiceKey, showGuid: showGuid)
+    }
+
     private func refreshTrackButtons() {
         guard let audioButton, let subtitlesButton else { return }
         guard let target = trackTarget() else {
@@ -896,7 +904,7 @@ final class MediaDetailChromeView: UIView {
             return
         }
         resolveSubtitleSearchAccess(target)
-        let choice = TitleTrackChoices.choice(for: trackChoiceKey)
+        let choice = trackChoice
         audioButton.isHidden = target.source.audioTracks.isEmpty
         audioButton.focusCaption = Self.currentAudio(in: target.source, choice: choice).map(TrackLabels.audioButton) ?? "Audio"
         subtitlesButton.isHidden = false
@@ -908,7 +916,9 @@ final class MediaDetailChromeView: UIView {
     /// else the file's default, else the first.
     private static func currentAudio(in source: MediaSource, choice: TitleTrackChoice?) -> AudioTrack? {
         let tracks = source.audioTracks
-        if let intent = choice?.audio, let match = TitleTrackMatch.audio(intent, in: tracks) { return match }
+        if let intent = choice?.audio, let match = TitleTrackMatch.audio(intent, title: choice?.audioTitle, in: tracks) {
+            return match
+        }
         return tracks.first(where: \.isSelected) ?? tracks.first(where: \.isDefault) ?? tracks.first
     }
 
@@ -918,7 +928,7 @@ final class MediaDetailChromeView: UIView {
         let tracks = source.subtitleTracks
         if let intent = choice?.subtitle {
             if intent == .off { return nil }
-            if let match = TitleTrackMatch.subtitle(intent, in: tracks) { return match }
+            if let match = TitleTrackMatch.subtitle(intent, title: choice?.subtitleTitle, in: tracks) { return match }
         }
         if let selected = tracks.first(where: { $0.isSelected && !$0.isForced && !$0.isDefault }) { return selected }
         switch DefaultSubtitles.current {
@@ -932,7 +942,7 @@ final class MediaDetailChromeView: UIView {
 
     private func presentAudioPicker(from button: UIView?) {
         guard let target = trackTarget(), let host = hostViewController else { return }
-        let current = Self.currentAudio(in: target.source, choice: TitleTrackChoices.choice(for: trackChoiceKey))
+        let current = Self.currentAudio(in: target.source, choice: trackChoice)
         let tracks = target.source.audioTracks
         let titles = TrackLabels.distinct(tracks.map(TrackLabels.audioRow), titles: tracks.map(\.title))
         let rows = zip(tracks, titles).map { track, title in
@@ -946,7 +956,7 @@ final class MediaDetailChromeView: UIView {
 
     private func presentSubtitlePicker(from button: UIView?) {
         guard let target = trackTarget(), let host = hostViewController else { return }
-        let current = Self.currentSubtitle(in: target.source, choice: TitleTrackChoices.choice(for: trackChoiceKey))
+        let current = Self.currentSubtitle(in: target.source, choice: trackChoice)
         let off = TileMenuAction(title: "Off", systemImage: current == nil ? "checkmark.circle.fill" : "circle",
                                  id: "off") { [weak self] in self?.chooseSubtitle(nil, target: target) }
         let tracks = target.source.subtitleTracks
@@ -1025,8 +1035,8 @@ final class MediaDetailChromeView: UIView {
     }
 
     /// Saves the pick on the server, then lists it in the picker and selects
-    /// it for the next play: Plex's per-file selection, with the title's own
-    /// subtitle choice cleared so the player takes that selection.
+    /// it for the next play: Plex's per-file selection, and the title's own
+    /// subtitle choice, by its title among tracks of the same shape.
     private func downloadSubtitle(_ result: PlexStream, target: TrackTarget, server: PlexProvider) {
         let ratingKey = target.playable.ref.itemID
         let sourceID = target.source.id
@@ -1043,7 +1053,9 @@ final class MediaDetailChromeView: UIView {
             }
             try? await server.setSelectedSubtitleTrack(String(arrived.stream.id), source: sourceID,
                                                        of: target.playable.ref)
-            if let key = self.trackChoiceKey { TitleTrackChoices.clearSubtitle(for: key) }
+            if let key = self.trackChoiceKey, let track = PlexMediaMapper.subtitleTrack(arrived.stream) {
+                TitleTrackChoices.setSubtitle(SubtitleIntent(from: track), title: track.extendedTitle, for: key)
+            }
             if let detail = try? await server.fullDetail(for: target.playable.ref),
                let source = detail.mediaSources.first(where: { $0.id == sourceID }) {
                 self.refreshedSources[sourceID] = source
@@ -1055,7 +1067,9 @@ final class MediaDetailChromeView: UIView {
     /// Kept for the title, and sent to Plex for this file so other clients
     /// follow it. It applies when Play is pressed (`UniversalPlayerViewModel`).
     private func chooseAudio(_ track: AudioTrack, target: TrackTarget) {
-        if let key = trackChoiceKey { TitleTrackChoices.setAudio(AudioIntent(from: track), for: key) }
+        if let key = trackChoiceKey {
+            TitleTrackChoices.setAudio(AudioIntent(from: track), title: track.extendedTitle, for: key)
+        }
         refreshTrackButtons()
         let provider = Self.provider(for: target)
         Task { try? await provider?.setSelectedAudioTrack(track.id, source: target.source.id, of: target.playable.ref) }
@@ -1063,7 +1077,7 @@ final class MediaDetailChromeView: UIView {
 
     private func chooseSubtitle(_ track: SubtitleTrack?, target: TrackTarget) {
         if let key = trackChoiceKey {
-            TitleTrackChoices.setSubtitle(track.map(SubtitleIntent.init(from:)) ?? .off, for: key)
+            TitleTrackChoices.setSubtitle(track.map(SubtitleIntent.init(from:)) ?? .off, title: track?.extendedTitle, for: key)
         }
         refreshTrackButtons()
         let provider = Self.provider(for: target)

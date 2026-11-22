@@ -80,4 +80,70 @@ final class TitleTrackChoicesTests: XCTestCase {
         TitleTrackChoices.setSubtitle(english, for: "plex://episode/2")
         XCTAssertEqual(TitleTrackChoices.choice(guid: "plex://episode/2", showGuid: "plex://show/1")?.subtitle, english)
     }
+
+    /// A subtitle picked for one episode must not drop the show's audio: the
+    /// player then fell back to Plex's selection (the original language).
+    func test_choice_episodeSubtitle_keepsShowAudio() {
+        withCleanStore {
+            let english = AudioIntent(language: "eng", codec: "eac3", channels: 6)
+            let sdh = SubtitleIntent.track(language: "eng", forced: false, hearingImpaired: true, codec: "srt")
+            TitleTrackChoices.setAudio(english, for: "plex://show/1", at: Date(timeIntervalSince1970: 100))
+            TitleTrackChoices.setSubtitle(sdh, for: "plex://episode/2", at: Date(timeIntervalSince1970: 200))
+            let choice = TitleTrackChoices.choice(guid: "plex://episode/2", showGuid: "plex://show/1")
+            XCTAssertEqual(choice?.audio, english)
+            XCTAssertEqual(choice?.subtitle, sdh)
+        }
+    }
+
+    /// The last choice stands: a show-page pick made after an episode's own
+    /// covers that episode too.
+    func test_choice_newerShowChoice_beatsOlderEpisodeChoice() {
+        withCleanStore {
+            let sdh = SubtitleIntent.track(language: "eng", forced: false, hearingImpaired: true, codec: "srt")
+            TitleTrackChoices.setSubtitle(sdh, for: "plex://episode/2", at: Date(timeIntervalSince1970: 100))
+            TitleTrackChoices.setSubtitle(.off, for: "plex://show/1", at: Date(timeIntervalSince1970: 200))
+            XCTAssertEqual(TitleTrackChoices.choice(guid: "plex://episode/2", showGuid: "plex://show/1")?.subtitle, .off)
+            TitleTrackChoices.setSubtitle(sdh, for: "plex://episode/2", at: Date(timeIntervalSince1970: 300))
+            XCTAssertEqual(TitleTrackChoices.choice(guid: "plex://episode/2", showGuid: "plex://show/1")?.subtitle, sdh)
+        }
+    }
+
+    /// Two English SRT tracks (full and "Dubtitle") share a shape; the saved
+    /// title picks the one chosen, on the page and in the player.
+    func test_sameShapeTracks_titleDecides() {
+        let full = SubtitleTrack(id: "1", index: 0, codec: "srt", language: "eng", title: nil,
+                                 extendedTitle: "English (SRT)", isDefault: false, isForced: false,
+                                 isHearingImpaired: false, isEmbedded: true, externalURL: nil, isSelected: false)
+        let dub = SubtitleTrack(id: "2", index: 0, codec: "srt", language: "eng", title: "Dubtitle",
+                                extendedTitle: "Dubtitle (English SRT)", isDefault: false, isForced: false,
+                                isHearingImpaired: false, isEmbedded: true, externalURL: nil, isSelected: false)
+        let intent = SubtitleIntent(from: dub)
+        XCTAssertEqual(TitleTrackMatch.subtitle(intent, title: dub.extendedTitle, in: [full, dub])?.id, "2")
+        XCTAssertEqual(TitleTrackMatch.subtitle(intent, title: nil, in: [full, dub])?.id, "1")
+
+        let engine = [MediaTrack(id: 15, name: "English", languageCode: "eng", codec: "srt",
+                                 extendedDisplayTitle: "English (SRT)"),
+                      MediaTrack(id: 16, name: "Dubtitle", languageCode: "eng", codec: "srt",
+                                 extendedDisplayTitle: "Dubtitle (English SRT)")]
+        XCTAssertEqual(TitleTrackMatch.subtitle(intent, title: "Dubtitle (English SRT)", in: engine)?.id, 16)
+        XCTAssertEqual(TitleTrackMatch.subtitle(intent, title: "Gone", in: engine)?.id, 15)
+    }
+
+    func test_sameShapeAudio_titleDecides() {
+        let tracks = [MediaTrack(id: 1, name: "Japanese", languageCode: "jpn", codec: "eac3",
+                                 extendedDisplayTitle: "Japanese (EAC3 5.1)", channels: 6),
+                      MediaTrack(id: 2, name: "Japanese Descriptive", languageCode: "jpn", codec: "eac3",
+                                 extendedDisplayTitle: "Japanese Descriptive (EAC3 5.1)", channels: 6)]
+        let intent = AudioIntent(language: "jpn", codec: "eac3", channels: 6)
+        XCTAssertEqual(TitleTrackMatch.audio(intent, title: "Japanese Descriptive (EAC3 5.1)", in: tracks)?.id, 2)
+        XCTAssertEqual(TitleTrackMatch.audio(intent, title: nil, in: tracks)?.id, 1)
+    }
+
+    private func withCleanStore(_ body: () -> Void) {
+        let defaults = UserDefaults.standard
+        let saved = defaults.data(forKey: "titleTrackChoices")
+        defer { defaults.set(saved, forKey: "titleTrackChoices") }
+        defaults.removeObject(forKey: "titleTrackChoices")
+        body()
+    }
 }

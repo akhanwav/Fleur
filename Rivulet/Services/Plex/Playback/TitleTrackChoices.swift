@@ -23,6 +23,15 @@ import Foundation
 struct TitleTrackChoice: Codable, Equatable {
     var audio: AudioIntent?
     var subtitle: SubtitleIntent?
+    /// Plex's long title of the picked track: tells apart two tracks of one
+    /// shape ("English · SRT" and its Dubtitle, a language and its
+    /// descriptive mix). nil for a choice saved before titles were kept.
+    var audioTitle: String?
+    var subtitleTitle: String?
+    /// When each was picked. A show's choice and an episode's own are compared
+    /// per track type, and the newer wins: the last choice made stands.
+    var audioChosenAt: Date?
+    var subtitleChosenAt: Date?
 }
 
 enum TitleTrackChoices {
@@ -39,23 +48,50 @@ enum TitleTrackChoices {
         return all()[key]
     }
 
-    /// The choice that applies to a playing item: its own, else its show's.
+    /// The choice that applies to an item, per track type: its own or its
+    /// show's, whichever was made last (its own when neither is dated). A
+    /// subtitle picked for one episode leaves the show's audio in place.
     static func choice(guid: String?, showGuid: String?) -> TitleTrackChoice? {
-        choice(for: key(guid: guid)) ?? choice(for: key(guid: showGuid))
+        let own = choice(for: key(guid: guid))
+        let show = guid == showGuid ? nil : choice(for: key(guid: showGuid))
+        guard let own else { return show }
+        guard let show else { return own }
+        var merged = TitleTrackChoice()
+        if prefersShow(own: own.audio, ownAt: own.audioChosenAt, show: show.audio, showAt: show.audioChosenAt) {
+            (merged.audio, merged.audioTitle, merged.audioChosenAt) = (show.audio, show.audioTitle, show.audioChosenAt)
+        } else {
+            (merged.audio, merged.audioTitle, merged.audioChosenAt) = (own.audio, own.audioTitle, own.audioChosenAt)
+        }
+        if prefersShow(own: own.subtitle, ownAt: own.subtitleChosenAt, show: show.subtitle, showAt: show.subtitleChosenAt) {
+            (merged.subtitle, merged.subtitleTitle, merged.subtitleChosenAt) =
+                (show.subtitle, show.subtitleTitle, show.subtitleChosenAt)
+        } else {
+            (merged.subtitle, merged.subtitleTitle, merged.subtitleChosenAt) =
+                (own.subtitle, own.subtitleTitle, own.subtitleChosenAt)
+        }
+        return merged
     }
 
-    static func setAudio(_ intent: AudioIntent, for key: String) {
-        update(key) { $0.audio = intent }
+    private static func prefersShow<T>(own: T?, ownAt: Date?, show: T?, showAt: Date?) -> Bool {
+        guard show != nil else { return false }
+        guard own != nil else { return true }
+        return (showAt ?? .distantPast) > (ownAt ?? .distantPast)
     }
 
-    static func setSubtitle(_ intent: SubtitleIntent, for key: String) {
-        update(key) { $0.subtitle = intent }
+    static func setAudio(_ intent: AudioIntent, title: String? = nil, for key: String, at date: Date = Date()) {
+        update(key) {
+            $0.audio = intent
+            $0.audioTitle = title
+            $0.audioChosenAt = date
+        }
     }
 
-    /// Back to the file's own selection (a subtitle just downloaded is picked
-    /// by its stream on the server, which a shape could confuse with another).
-    static func clearSubtitle(for key: String) {
-        update(key) { $0.subtitle = nil }
+    static func setSubtitle(_ intent: SubtitleIntent, title: String? = nil, for key: String, at date: Date = Date()) {
+        update(key) {
+            $0.subtitle = intent
+            $0.subtitleTitle = intent == .off ? nil : title
+            $0.subtitleChosenAt = date
+        }
     }
 
     private static func update(_ key: String, _ change: (inout TitleTrackChoice) -> Void) {
@@ -137,19 +173,55 @@ enum EnglishSubtitleDefault {
 /// A saved choice against a copy's tracks, most exact first, as the player's
 /// `TrackIntentResolver` matches it.
 enum TitleTrackMatch {
-    static func audio(_ intent: AudioIntent, in tracks: [AudioTrack]) -> AudioTrack? {
+    static func audio(_ intent: AudioIntent, title: String? = nil, in tracks: [AudioTrack]) -> AudioTrack? {
         let language = tracks.filter { TrackLanguage.matches($0.language, intent.language) }
-        return language.first { TrackCodec.normalize($0.codec) == TrackCodec.normalize(intent.codec) && $0.channels == intent.channels }
+        let exact = language.filter { TrackCodec.normalize($0.codec) == TrackCodec.normalize(intent.codec) && $0.channels == intent.channels }
+        return named(title, in: exact, titleOf: \.extendedTitle) ?? exact.first
             ?? language.first { TrackCodec.normalize($0.codec) == TrackCodec.normalize(intent.codec) }
             ?? language.first
     }
 
-    static func subtitle(_ intent: SubtitleIntent, in tracks: [SubtitleTrack]) -> SubtitleTrack? {
+    static func subtitle(_ intent: SubtitleIntent, title: String? = nil, in tracks: [SubtitleTrack]) -> SubtitleTrack? {
         guard case let .track(language, forced, hearingImpaired, codec) = intent else { return nil }
         let candidates = tracks.filter { TrackLanguage.matches($0.language, language) && $0.isForced == forced }
         let flags = candidates.filter { $0.isHearingImpaired == hearingImpaired }
-        return flags.first { MediaTrack.normalizedSubtitleCodec($0.codec) == MediaTrack.normalizedSubtitleCodec(codec) }
-            ?? flags.first ?? candidates.first
+        let exact = flags.filter { MediaTrack.normalizedSubtitleCodec($0.codec) == MediaTrack.normalizedSubtitleCodec(codec) }
+        return named(title, in: exact, titleOf: \.extendedTitle) ?? exact.first ?? flags.first ?? candidates.first
+    }
+
+    /// The player's tracks: the shape as `TrackIntentResolver` resolves it,
+    /// with the saved title choosing among tracks of exactly that shape.
+    static func audio(_ intent: AudioIntent, title: String?, in tracks: [MediaTrack]) -> MediaTrack? {
+        let exact = tracks.filter {
+            TrackLanguage.matches($0.languageCode ?? $0.language, intent.language)
+                && TrackCodec.matches($0.codec, intent.codec) && $0.channels == intent.channels
+        }
+        return named(title, in: exact, titleOf: \.extendedDisplayTitle)
+            ?? TrackIntentResolver.resolveAudio(intent: intent, in: tracks)
+    }
+
+    static func subtitle(_ intent: SubtitleIntent, title: String?, in tracks: [MediaTrack]) -> MediaTrack? {
+        guard case let .track(language, forced, hearingImpaired, codec) = intent else { return nil }
+        let exact = tracks.filter { track in
+            TrackLanguage.matches(track.languageCode ?? track.language, language) && track.isForced == forced
+                && track.isHearingImpaired == hearingImpaired && (codec.map { TrackCodec.matches(track.codec, $0) } ?? true)
+        }
+        return named(title, in: exact, titleOf: \.extendedDisplayTitle)
+            ?? TrackIntentResolver.resolveSubtitle(intent: intent, in: tracks)
+    }
+
+    /// The track among same-shape ones that carries the saved title; an
+    /// untitled choice prefers an untitled track. nil when none fits, so the
+    /// caller falls back to the shape alone.
+    static func named<Track>(_ title: String?, in tracks: [Track], titleOf: (Track) -> String?) -> Track? {
+        guard tracks.count > 1 else { return nil }
+        let wanted = normalizedTitle(title)
+        return tracks.first { normalizedTitle(titleOf($0)) == wanted }
+    }
+
+    private static func normalizedTitle(_ title: String?) -> String? {
+        guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else { return nil }
+        return title.lowercased()
     }
 }
 

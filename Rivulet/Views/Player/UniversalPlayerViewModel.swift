@@ -2422,6 +2422,7 @@ final class UniversalPlayerViewModel: ObservableObject {
             languages.append(contentsOf: languageCandidates(for: track))
         }
 
+        if let saved = titleTrackChoice?.audio { languages.append(saved.language) }
         languages.append(TrackIntentStore.effectiveAudioIntent.language)
 
         if let selected = plexAudioTracksFromMetadata().first(where: { $0.isDefault }) {
@@ -2443,6 +2444,15 @@ final class UniversalPlayerViewModel: ObservableObject {
             return []
         case .auto:
             break
+        }
+
+        // The title's saved choice, unless a reload named its own track above.
+        if languages.isEmpty {
+            switch titleTrackChoice?.subtitle {
+            case .off: return []
+            case let .track(language, _, _, _) where !language.isEmpty: return [language]
+            default: break
+            }
         }
 
         switch TrackIntentStore.subtitleIntent {
@@ -3577,8 +3587,12 @@ final class UniversalPlayerViewModel: ObservableObject {
         var ids = PlexTrackIDs()
         let selectedAudio = streams.first { $0.isAudio && $0.selected == true }?.id
         let defaultAudio = streams.first { $0.isAudio && $0.default == true }?.id
+        let choice = titleTrackChoice
         if let id = initialAudioTrackId, audio.contains(where: { $0.id == id }) {
             ids.audio = id
+        } else if let intent = choice?.audio,
+                  let match = TitleTrackMatch.audio(intent, title: choice?.audioTitle, in: audio) {
+            ids.audio = match.id
         } else if let selectedAudio, let defaultAudio, selectedAudio != defaultAudio,
                   audio.contains(where: { $0.id == selectedAudio }) {
             ids.audio = selectedAudio
@@ -3594,6 +3608,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             return ids
         default:
             break
+        }
+        if let saved = choice?.subtitle {
+            if saved == .off {
+                ids.subtitle = 0
+                return ids
+            }
+            if let match = TitleTrackMatch.subtitle(saved, title: choice?.subtitleTitle, in: subs) {
+                ids.subtitle = match.id
+                return ids
+            }
         }
         let intent = TrackIntentStore.subtitleIntent
         if let selected = streams.first(where: { $0.isSubtitle && $0.selected == true })?.id,
@@ -4638,6 +4662,9 @@ final class UniversalPlayerViewModel: ObservableObject {
 
         if let track = audioTracks.first(where: { $0.id == id }) {
             TrackIntentStore.audioIntent = AudioIntent(from: track)
+            if let key = playerTrackChoiceKey {
+                TitleTrackChoices.setAudio(AudioIntent(from: track), title: track.extendedDisplayTitle, for: key)
+            }
         }
     }
 
@@ -4663,10 +4690,11 @@ final class UniversalPlayerViewModel: ObservableObject {
         // future playback sessions restore it.
         selectSubtitleTrackWithoutSaving(id: id)
 
-        if let id = id, let track = subtitleTracks.first(where: { $0.id == id }) {
-            TrackIntentStore.subtitleIntent = SubtitleIntent(from: track)
-        } else {
-            TrackIntentStore.subtitleIntent = .off
+        let track = id.flatMap { id in subtitleTracks.first { $0.id == id } }
+        let intent = track.map(SubtitleIntent.init(from:)) ?? .off
+        TrackIntentStore.subtitleIntent = intent
+        if let key = playerTrackChoiceKey {
+            TitleTrackChoices.setSubtitle(intent, title: track?.extendedDisplayTitle, for: key)
         }
     }
 
@@ -4708,6 +4736,10 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
             metadata.Media = media
             TrackIntentStore.subtitleIntent = SubtitleIntent(from: MediaTrack(from: added))
+            if let key = playerTrackChoiceKey {
+                TitleTrackChoices.setSubtitle(SubtitleIntent(from: MediaTrack(from: added)),
+                                              title: added.extendedDisplayTitle, for: key)
+            }
             tracks.subtitle = added.id
             hideCompatibilityNotice()
             enqueueStreamWork { vm in
@@ -4859,10 +4891,11 @@ final class UniversalPlayerViewModel: ObservableObject {
             }
         }
 
-        // 1b. The title's own choice from the detail page's Audio picker (its
-        //     own, else its show's), matched by shape on whichever copy plays.
-        if let intent = titleTrackChoice?.audio,
-           let match = TrackIntentResolver.resolveAudio(intent: intent, in: audioTracks) {
+        // 1b. The title's saved choice (detail page or player picker; its own
+        //     or its show's, whichever was made last), matched by shape and
+        //     then title on whichever copy plays.
+        if let choice = titleTrackChoice, let intent = choice.audio,
+           let match = TitleTrackMatch.audio(intent, title: choice.audioTitle, in: audioTracks) {
             selectAudioTrackWithoutSaving(id: match.id)
             return
         }
@@ -4897,9 +4930,16 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
     }
 
-    /// The detail page's saved choice for this item, or its show's.
+    /// The saved choice for this item: its own or its show's, per track type,
+    /// whichever was made last (detail page pickers and the player's own).
     private var titleTrackChoice: TitleTrackChoice? {
         TitleTrackChoices.choice(guid: metadata.guid, showGuid: metadata.grandparentGuid)
+    }
+
+    /// Where a pick made in the player is kept: a movie's own, an episode's
+    /// show, so the next episode plays with it as well.
+    private var playerTrackChoiceKey: String? {
+        TitleTrackChoices.key(guid: metadata.grandparentGuid ?? metadata.guid)
     }
 
     /// Apply saved subtitle preference
@@ -4925,15 +4965,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             break
         }
 
-        // 1b. The title's own choice from the detail page's Subtitles picker
-        //     (its own, else its show's): Off, or its track by shape. A saved
-        //     track this copy lacks falls through to the defaults below.
-        if let intent = titleTrackChoice?.subtitle {
+        // 1b. The title's saved choice (detail page or player picker; its own
+        //     or its show's, whichever was made last): Off, or its track by
+        //     shape and title. A saved track this copy lacks falls through to
+        //     the defaults below.
+        if let choice = titleTrackChoice, let intent = choice.subtitle {
             if intent == .off {
                 selectSubtitleTrackWithoutSaving(id: nil)
                 return
             }
-            if let match = TrackIntentResolver.resolveSubtitle(intent: intent, in: subtitleTracks) {
+            if let match = TitleTrackMatch.subtitle(intent, title: choice.subtitleTitle, in: subtitleTracks) {
                 selectSubtitleTrackWithoutSaving(id: match.id)
                 return
             }
@@ -6794,6 +6835,15 @@ final class UniversalPlayerViewModel: ObservableObject {
         // frame between episodes. The request is consumed by the load inside
         // startPlayback().
         aetherPlayer?.prepareForItemReplacement()
+
+        // The new episode's tracks get the saved choice again, as a fresh play
+        // does; without this they keep whatever the engine picked by language.
+        initialAudioTrackId = nil
+        initialSubtitleSelection = .auto
+        hasAppliedAudioPreference = false
+        hasAppliedSubtitlePreference = false
+        audioTracks = []
+        subtitleTracks = []
 
         // Start playback — new time observer starts with time ≈ 0 after this returns
         await startPlayback()

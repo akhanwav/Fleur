@@ -520,18 +520,24 @@ Movie, show and episode pages carry Audio and Subtitles buttons right of Info
 copy selected in Ways to Watch (a show page: the episode Play would start).
 
 - **A choice is kept twice**: in `TitleTrackChoices` (by Plex guid, as the
-  track's shape: language, format, flags) and in Plex's per-part stream
-  selection. Plex's `selected` flag cannot say Off and cannot be told apart
-  from its own auto-selection, so the local copy is the authority. A show
-  page's choice covers every episode; an episode's own wins.
+  track's shape: language, format, flags, plus Plex's long title to tell
+  same-shape tracks apart, such as a Dubtitle beside the full English) and in
+  Plex's per-part stream selection. Plex's `selected` flag cannot say Off and
+  cannot be told apart from its own auto-selection, so the local copy is the
+  authority. A show page's choice covers every episode, an episode page's
+  covers that episode, and per track type the one made last wins: a subtitle
+  picked for one episode never drops the show's audio.
+- **A pick in the player is a choice too**: it is saved for the movie, or for
+  an episode's show, so the next episode and the next visit keep it.
 - **The player applies it at Play** (`UniversalPlayerViewModel`, tier 1b of
-  `applyAudioPreference` / `applySubtitlePreference`), matched by shape on
-  whichever copy plays. A saved track the copy lacks falls through.
+  `applyAudioPreference` / `applySubtitlePreference`), matched by shape then
+  title on whichever copy plays, and again on every episode Up Next or
+  autoplay swaps in. A saved track the copy lacks falls through.
 - **Search Subtitles… is the player's search** (`SubtitleSearch`): Plex's own
   server-side search, saved next to the media, so only on servers the account
   administers (`canAdministerServer`), never shared ones or restricted
-  profiles. A download is selected by Plex's per-file selection and clears the
-  title's saved subtitle shape, so the new stream wins at Play.
+  profiles. A download is selected by Plex's per-file selection and saved as
+  the title's subtitle choice, so the new stream wins at Play.
 - **With no choice, Settings → Playback → Default Subtitles decides.**
   English (the default, `EnglishSubtitleDefault`): SRT, then other English
   text, then PGS, full before forced-only, plain before SDH; none, off. Last

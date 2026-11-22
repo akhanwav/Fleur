@@ -465,6 +465,7 @@ enum PlexMediaMapper {
             externalIDs: externalIDs(meta.Guid)
         )
         detail.plexGuid = meta.guid.flatMap { $0.hasPrefix("plex://") ? $0 : nil }
+        detail.showPlexGuid = meta.grandparentGuid.flatMap { $0.hasPrefix("plex://") ? $0 : nil }
         return detail
     }
 

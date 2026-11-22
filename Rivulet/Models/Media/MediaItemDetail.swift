@@ -53,6 +53,9 @@ struct MediaItemDetail: Sendable {
     /// server that matched the title. nil off Plex and for unmatched items.
     var plexGuid: String? = nil
 
+    /// An episode's show guid, where the show's audio and subtitle choice is kept.
+    var showPlexGuid: String? = nil
+
     /// Show-level season count (TMDB `number_of_seasons`; Plex shows surface
     /// this through their own season rail instead, so it's nil there). Feeds
     /// the Information column's "Seasons" row for titles with no season rail.
