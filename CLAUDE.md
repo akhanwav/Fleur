@@ -524,9 +524,10 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
   same-shape tracks apart, such as a Dubtitle beside the full English) and in
   Plex's per-part stream selection. Plex's `selected` flag cannot say Off and
   cannot be told apart from its own auto-selection, so the local copy is the
-  authority. A show page's choice covers every episode, an episode page's
-  covers that episode, and per track type the one made last wins: a subtitle
-  picked for one episode never drops the show's audio.
+  authority. A choice made on a show page or an episode page is saved for the
+  show and covers every episode: a Continue Watching card opens an episode
+  page, and a pick there is meant for the show. Choices saved for one episode
+  by older builds still count, and per track type the one made last wins.
 - **A pick in the player is a choice too**: it is saved for the movie, or for
   an episode's show, so the next episode and the next visit keep it.
 - **The player applies it at Play** (`UniversalPlayerViewModel`, tier 1b of

@@ -882,18 +882,33 @@ final class MediaDetailChromeView: UIView {
         return TrackTarget(source: source, playable: copy?.item ?? item, copy: copy)
     }
 
-    /// Where a choice is kept: the movie's or episode's guid, or the show's
-    /// for every episode of it.
+    /// Where a choice is kept: a movie's own guid, or for a show page and an
+    /// episode page alike the show's, so it covers every episode. A Continue
+    /// Watching card opens an episode page, and a pick there is meant for the
+    /// show. Falls back to the episode's own guid when its show's is unknown.
     private var trackChoiceKey: String? {
-        TitleTrackChoices.key(guid: (copySelection.selectedDetail ?? detail)?.plexGuid ?? detail?.plexGuid)
+        let details = [copySelection.selectedDetail, detail].compactMap { $0 }
+        let ownGuid = details.lazy.compactMap(\.plexGuid).first
+        switch item?.kind {
+        case .show:
+            // The page's detail can be the episode Play would start.
+            let showGuid = details.lazy.compactMap(\.plexGuid).first { $0.hasPrefix("plex://show/") }
+                ?? details.lazy.compactMap(\.showPlexGuid).first
+            return TitleTrackChoices.key(guid: showGuid)
+        case .episode:
+            return TitleTrackChoices.key(guid: details.lazy.compactMap(\.showPlexGuid).first ?? ownGuid)
+        default:
+            return TitleTrackChoices.key(guid: ownGuid)
+        }
     }
 
-    /// The choice that plays here: on an episode, its own or its show's,
-    /// whichever was made last, as the player reads it.
+    /// The choice that plays here, as the player reads it: on an episode, an
+    /// older choice of its own or its show's, whichever was made last.
     private var trackChoice: TitleTrackChoice? {
-        let showGuid = item?.kind == .episode
-            ? ((copySelection.selectedDetail ?? detail)?.showPlexGuid ?? detail?.showPlexGuid) : nil
-        return TitleTrackChoices.choice(guid: trackChoiceKey, showGuid: showGuid)
+        let details = [copySelection.selectedDetail, detail].compactMap { $0 }
+        guard item?.kind == .episode else { return TitleTrackChoices.choice(for: trackChoiceKey) }
+        return TitleTrackChoices.choice(guid: details.lazy.compactMap(\.plexGuid).first,
+                                        showGuid: details.lazy.compactMap(\.showPlexGuid).first)
     }
 
     private func refreshTrackButtons() {
