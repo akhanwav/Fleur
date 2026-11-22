@@ -67,8 +67,13 @@ workflows:
           cat > RivuletCore/Config/Secrets.swift <<EOF
           import Foundation
 
-          enum Secrets {
+          nonisolated enum Secrets {
               static let sentryDSN = "${SENTRY_DSN:-}"
+              static let tmdbAccessToken = "${TMDB_ACCESS_TOKEN:-}"
+              static let openSubtitlesAPIKey = "${OPENSUBTITLES_API_KEY:-}"
+              static let openSubtitlesUsername = "${OPENSUBTITLES_USERNAME:-}"
+              static let openSubtitlesPassword = "${OPENSUBTITLES_PASSWORD:-}"
+              static let subSourceAPIKey = "${SUBSOURCE_API_KEY:-}"
           }
           EOF
           echo "Wrote RivuletCore/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"
@@ -236,8 +241,13 @@ workflows:
           cat > RivuletCore/Config/Secrets.swift <<EOF
           import Foundation
 
-          enum Secrets {
+          nonisolated enum Secrets {
               static let sentryDSN = "${SENTRY_DSN:-}"
+              static let tmdbAccessToken = "${TMDB_ACCESS_TOKEN:-}"
+              static let openSubtitlesAPIKey = "${OPENSUBTITLES_API_KEY:-}"
+              static let openSubtitlesUsername = "${OPENSUBTITLES_USERNAME:-}"
+              static let openSubtitlesPassword = "${OPENSUBTITLES_PASSWORD:-}"
+              static let subSourceAPIKey = "${SUBSOURCE_API_KEY:-}"
           }
           EOF
           echo "Wrote RivuletCore/Config/Secrets.swift (dsn set: $([ -n "${SENTRY_DSN:-}" ] && echo yes || echo no))"

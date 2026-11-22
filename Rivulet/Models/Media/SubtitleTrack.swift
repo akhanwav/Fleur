@@ -24,4 +24,8 @@ struct SubtitleTrack: Hashable, Sendable, Identifiable {
     let externalURL: URL?
     /// Backend-side "this is the user's current pick" flag. See `AudioTrack.isSelected`.
     let isSelected: Bool
+    /// Where it came from (nil: the provider doesn't say).
+    var origin: SubtitleOrigin? = nil
+    /// The release or file it was made for, when it is more than the language.
+    var releaseName: String? = nil
 }

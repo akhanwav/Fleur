@@ -1380,6 +1380,65 @@ class PlexNetworkManager: NSObject, @unchecked Sendable {
         return container.MediaContainer.Stream ?? []
     }
 
+    /// A server's subtitle streams as listed this moment, never from a cache:
+    /// the wait for a downloaded subtitle polls this.
+    func freshSubtitleStreams(serverURL: String, authToken: String, ratingKey: String) async throws -> [PlexMedia] {
+        guard let url = URL(string: "\(serverURL)/library/metadata/\(ratingKey)") else { throw PlexAPIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 10
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        for (key, value) in plexHeaders(authToken: authToken) { request.addValue(value, forHTTPHeaderField: key) }
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw PlexAPIError.invalidResponse }
+        let container = try JSONDecoder().decode(PlexMediaContainerWrapper.self, from: data)
+        return container.MediaContainer.Metadata?.first?.Media ?? []
+    }
+
+    /// Whether Plex's subtitle provider will hand over a search result: PMS
+    /// fetches `metadata.provider.plex.tv<sourceKey>` after a download PUT and
+    /// still answers the PUT with 200 when that fetch fails (measured: 500 for
+    /// every stream during an outage, logged only by the server). nil when
+    /// unknown (no account token, or no answer).
+    func plexSubtitleSourceAvailable(sourceKey: String) async -> Bool? {
+        guard let token = PlexAuthManager.shared.authToken,
+              let url = URL(string: "https://metadata.provider.plex.tv\(sourceKey)") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        for (key, value) in plexHeaders(authToken: token) { request.addValue(value, forHTTPHeaderField: key) }
+        guard let (_, response) = try? await session.data(for: request),
+              let status = (response as? HTTPURLResponse)?.statusCode else { return nil }
+        if (200...299).contains(status) { return true }
+        return status >= 500 || status == 404 ? false : nil
+    }
+
+    /// `length` bytes of a part from `offset`, by range request; reads no
+    /// further even if the server ignores the range. For the OpenSubtitles hash.
+    func partBytes(serverURL: String, authToken: String, partKey: String, offset: Int, length: Int) async throws -> Data {
+        guard var components = URLComponents(string: "\(serverURL)\(partKey)") else { throw PlexAPIError.invalidURL }
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "X-Plex-Token", value: authToken)]
+        guard let url = components.url else { throw PlexAPIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        request.addValue("bytes=\(offset)-\(offset + length - 1)", forHTTPHeaderField: "Range")
+        for (key, value) in plexHeaders(authToken: authToken) { request.addValue(value, forHTTPHeaderField: key) }
+        let (bytes, response) = try await session.bytes(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        // A 200 is the whole file from byte 0: only usable for a read from 0.
+        guard status == 206 || (status == 200 && offset == 0) else {
+            bytes.task.cancel()
+            throw PlexAPIError.invalidResponse
+        }
+        var data = Data()
+        data.reserveCapacity(length)
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count == length { break }
+        }
+        bytes.task.cancel()
+        return data
+    }
+
     /// Whether `authToken` administers the server: `/accounts` answers 200 for the
     /// owner and 401 otherwise.
     func canAdministerServer(serverURL: String, authToken: String) async -> Bool {

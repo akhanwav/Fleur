@@ -60,6 +60,12 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
     /// stream index (see `TrackMerge`).
     let isExternal: Bool
 
+    /// Subtitles: where the track came from and the release or file it was
+    /// made for, for the picker's second line. nil for an engine track Plex
+    /// doesn't list.
+    var origin: SubtitleOrigin? = nil
+    var releaseName: String? = nil
+
     init(
         id: Int,
         name: String,
@@ -108,6 +114,10 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         self.subtitleKey = stream.key
         self.streamIndex = stream.index
         self.isExternal = false
+        if stream.isSubtitle {
+            self.origin = SubtitleOrigin(stream)
+            self.releaseName = SubtitleLabels.releaseName(of: stream)
+        }
     }
 
     /// Bridge from agnostic `AudioTrack` for use in pickers like
@@ -148,6 +158,8 @@ nonisolated struct MediaTrack: Identifiable, Equatable, Sendable {
         // Sidecars aren't in the container, so they have no stream index.
         self.streamIndex = track.externalURL == nil ? track.index : nil
         self.isExternal = track.externalURL != nil
+        self.origin = track.origin
+        self.releaseName = track.releaseName
     }
 
     /// Display name with additional info. Prefers Plex's long-form

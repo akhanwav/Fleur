@@ -117,7 +117,7 @@ enum TrackMerge {
     private static func enrich(_ engineTrack: MediaTrack, with plexTrack: MediaTrack?) -> MediaTrack {
         guard let plexTrack else { return engineTrack }
 
-        return MediaTrack(
+        var merged = MediaTrack(
             id: engineTrack.id,                       // engine index — the selection key
             name: preferredName(engine: engineTrack, plex: plexTrack),
             language: plexTrack.language ?? engineTrack.language,
@@ -133,6 +133,9 @@ enum TrackMerge {
             streamIndex: engineTrack.streamIndex,
             isExternal: engineTrack.isExternal
         )
+        merged.origin = plexTrack.origin
+        merged.releaseName = plexTrack.releaseName
+        return merged
     }
 
     /// Plex's display title, unless it has nothing usable, in which case keep

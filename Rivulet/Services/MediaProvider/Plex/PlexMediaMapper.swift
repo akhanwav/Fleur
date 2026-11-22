@@ -189,7 +189,10 @@ enum PlexMediaMapper {
         let codec = stream.codec ?? stream.format ?? "unknown"
         let isEmbedded = stream.key == nil
         let externalURL: URL? = {
-            guard !isEmbedded, let key = stream.key, let serverURL, let authToken else { return nil }
+            guard !isEmbedded, let key = stream.key else { return nil }
+            // A subtitle stored on the Apple TV (`LocalSubtitleStore`).
+            if key.hasPrefix("file:") { return URL(string: key) }
+            guard let serverURL, let authToken else { return nil }
             return URL(string: "\(serverURL)\(key)?X-Plex-Token=\(authToken)")
         }()
         return SubtitleTrack(
@@ -204,7 +207,9 @@ enum PlexMediaMapper {
             isHearingImpaired: stream.hearingImpaired ?? false,
             isEmbedded: isEmbedded,
             externalURL: externalURL,
-            isSelected: stream.selected ?? false
+            isSelected: stream.selected ?? false,
+            origin: SubtitleOrigin(stream),
+            releaseName: SubtitleLabels.releaseName(of: stream)
         )
     }
 

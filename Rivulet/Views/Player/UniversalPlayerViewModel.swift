@@ -538,7 +538,17 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Metadata
 
-    private(set) var metadata: PlexMetadata
+    private(set) var metadata: PlexMetadata {
+        // Subtitles stored on the Apple TV for this title are its tracks too,
+        // after the server's own, whichever path replaced the item.
+        didSet { injectLocalSubtitles() }
+    }
+
+    private func injectLocalSubtitles() {
+        guard case .plex = source, let media = metadata.Media else { return }
+        metadata.Media = LocalSubtitleStore.injecting(
+            into: media, server: LocalSubtitleStore.serverKey(serverURL: serverURL), ratingKey: metadata.ratingKey)
+    }
     /// Plex `Media.id` of the version playing, kept so a metadata refresh keeps it.
     private(set) var playingMediaID: String?
     /// That version's position in server order; Plex's transcoder picks by `mediaIndex`.
@@ -876,6 +886,10 @@ final class UniversalPlayerViewModel: ObservableObject {
         let selection = VersionRanking.select(preferredMediaID.map(VersionChoice.source) ?? .best,
                                               in: metadata.Media ?? [])
         if !selection.media.isEmpty { metadata.Media = selection.media }
+        if let media = metadata.Media {
+            metadata.Media = LocalSubtitleStore.injecting(
+                into: media, server: LocalSubtitleStore.serverKey(serverURL: serverURL), ratingKey: metadata.ratingKey)
+        }
         self.playingMediaID = selection.media.first.map { "\($0.id)" } ?? preferredMediaID
         self.playingMediaServerIndex = selection.serverIndex
         self.pickedVersion = preferredMediaID != nil
@@ -1113,6 +1127,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         guard let stream = ContentFilterSources.transcriptStream(in: streams), let key = stream.key else { return nil }
         let url: URL?
         switch source {
+        case .plex where key.hasPrefix("file:"):
+            url = URL(string: key)
         case .plex:
             guard var components = URLComponents(string: "\(serverURL)\(key)") else { return nil }
             components.queryItems = (components.queryItems ?? [])
@@ -2400,11 +2416,19 @@ final class UniversalPlayerViewModel: ObservableObject {
         }
         guard let streams = metadata.Media?.first?.Part?.first?.Stream else { return [] }
         return streams.filter { $0.isSubtitle && $0.key != nil }.compactMap { stream in
-            guard let key = stream.key,
-                  var components = URLComponents(string: "\(serverURL)\(key)") else { return nil }
-            components.queryItems = (components.queryItems ?? [])
-                + [URLQueryItem(name: "X-Plex-Token", value: authToken)]
-            guard let url = components.url else { return nil }
+            guard let key = stream.key else { return nil }
+            let url: URL
+            if key.hasPrefix("file:") {
+                // Stored on the Apple TV (`LocalSubtitleStore`).
+                guard let file = URL(string: key) else { return nil }
+                url = file
+            } else {
+                guard var components = URLComponents(string: "\(serverURL)\(key)") else { return nil }
+                components.queryItems = (components.queryItems ?? [])
+                    + [URLQueryItem(name: "X-Plex-Token", value: authToken)]
+                guard let built = components.url else { return nil }
+                url = built
+            }
             return AetherPlayer.SidecarSubtitle(
                 url: url,
                 name: stream.displayTitle ?? stream.extendedDisplayTitle,
@@ -3694,7 +3718,8 @@ final class UniversalPlayerViewModel: ObservableObject {
             await network.setSelectedAudioStream(serverURL: serverURL, authToken: authToken,
                                                  partId: partId, audioStreamID: audio)
         }
-        if let subtitle = tracks.subtitle {
+        // A subtitle stored on the Apple TV is nothing the server knows.
+        if let subtitle = tracks.subtitle, !LocalSubtitleStore.isLocal(streamID: subtitle) {
             await network.setSelectedSubtitleStream(serverURL: serverURL, authToken: authToken,
                                                     partId: partId, subtitleStreamID: subtitle)
         }
@@ -4816,55 +4841,74 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Subtitle Search
 
-    /// Plex writes the file next to the media, which only the server's admin
-    /// may do (`SubtitleSearch`).
+    /// Plex's own search on a server this account administers, and
+    /// OpenSubtitles and SubSource anywhere their keys are set (`SubtitleSearch`).
     private(set) var canSearchSubtitles = false
 
     private func resolveSubtitleSearchAccess() async {
         guard case .plex = source, metadata.ratingKey != nil else { return }
-        canSearchSubtitles = await SubtitleSearch.canSearch(serverURL: serverURL, token: authToken)
+        canSearchSubtitles = SubtitleSearch.hasOtherSources
+        let isAdmin = await SubtitleSearch.canSearch(serverURL: serverURL, token: authToken)
+        canSearchSubtitles = isAdmin || SubtitleSearch.hasOtherSources
     }
 
-    func searchSubtitles() async throws -> [PlexStream] {
-        guard let ratingKey = metadata.ratingKey else { return [] }
-        return try await SubtitleSearch.search(serverURL: serverURL, token: authToken, ratingKey: ratingKey)
+    /// The last search's context: what a pick from its results installs against.
+    private var subtitleSearchContext: SubtitleSearchContext?
+
+    func searchSubtitles() async throws -> SubtitleSearchResults {
+        guard let ratingKey = metadata.ratingKey else { return SubtitleSearchResults() }
+        let context = try await SubtitleSearch.context(serverURL: serverURL, token: authToken, ratingKey: ratingKey,
+                                                       mediaID: playingMediaID)
+        subtitleSearchContext = context
+        return await SubtitleSearch.search(context)
     }
 
-    /// Downloads `result`, waits for the server to list it, then reloads at the
-    /// playhead with it on. A reload re-registers every sidecar in Plex's order,
-    /// which `TrackMerge` pairs on; adding one to the live engine would not.
-    func installSubtitle(_ result: PlexStream) async {
-        guard let ratingKey = metadata.ratingKey else { return }
+    /// Fetches `result`, then reloads at the playhead with it on. A Plex pick
+    /// is waited for on the server; another source's is stored on the Apple TV
+    /// and listed after the server's own sidecars. A reload re-registers every
+    /// sidecar in that order, which `TrackMerge` pairs on; adding one to the
+    /// live engine would not.
+    func installSubtitle(_ result: SubtitleCandidate) async {
+        guard let context = subtitleSearchContext else { return }
         let generation = itemGeneration
         let known = Set(plexSubtitleTracksFromMetadata().map(\.id))
         var tracks = currentPlexTrackIDs()
-        showCompatibilityNotice("Downloading Subtitles…")
-        do {
-            let arrived = try await SubtitleSearch.download(
-                result, serverURL: serverURL, token: authToken, ratingKey: ratingKey, known: known,
-                media: { [playingMediaID] in VersionRanking.select(playingMediaID.map(VersionChoice.source) ?? .best,
-                                                                   in: $0).media },
-                stillWanted: { [weak self] in generation == self?.itemGeneration })
-            guard generation == itemGeneration else { return }
-            guard let (added, media) = arrived else {
-                showCompatibilityNotice("Subtitles Didn't Arrive")
-                return
-            }
+        showCompatibilityNotice("Downloading Subtitles…", sticky: true)
+        let outcome = await SubtitleSearch.install(
+            result, context: context, known: known,
+            media: { [playingMediaID] in VersionRanking.select(playingMediaID.map(VersionChoice.source) ?? .best,
+                                                               in: $0).media },
+            stillWanted: { [weak self] in generation == self?.itemGeneration })
+        guard generation == itemGeneration, let outcome else { return }
+        let added: PlexStream
+        switch outcome {
+        case .failed(let message):
+            print("[SubtitleSearch] install failed: \(message)")
+            showCompatibilityNotice(message)
+            return
+        case .plex(let stream, let media):
             metadata.Media = media
-            TrackIntentStore.subtitleIntent = SubtitleIntent(from: MediaTrack(from: added))
-            if let key = playerTrackChoiceKey {
-                TitleTrackChoices.setSubtitle(SubtitleIntent(from: MediaTrack(from: added)),
-                                              title: added.extendedDisplayTitle, for: key)
-            }
-            tracks.subtitle = added.id
-            hideCompatibilityNotice()
-            enqueueStreamWork { vm in
-                await vm.reloadStream(toOriginal: vm.aetherPlayer != nil, reason: "subtitle_download",
-                                      tracks: tracks, restoring: vm.planSnapshot)
-            }
-        } catch {
-            if isCancellationError(error) || generation != itemGeneration { return }
-            showCompatibilityNotice("Couldn't Download Subtitles")
+            added = stream
+        case .local(let stored):
+            injectLocalSubtitles()
+            added = LocalSubtitleStore.stream(for: stored)
+        }
+        let intent = SubtitleIntent(from: MediaTrack(from: added))
+        TrackIntentStore.subtitleIntent = intent
+        if let key = playerTrackChoiceKey {
+            TitleTrackChoices.setSubtitle(intent, title: added.extendedDisplayTitle, for: key)
+        }
+        tracks.subtitle = added.id
+        // Only the engine can draw a file stored on the Apple TV; the `hls`
+        // route's subtitles come from the server.
+        if LocalSubtitleStore.isLocal(streamID: added.id), aetherPlayer == nil {
+            showCompatibilityNotice("Saved. These Subtitles Show When the File Plays Directly")
+            return
+        }
+        hideCompatibilityNotice()
+        enqueueStreamWork { vm in
+            await vm.reloadStream(toOriginal: vm.aetherPlayer != nil, reason: "subtitle_download",
+                                  tracks: tracks, restoring: vm.planSnapshot)
         }
     }
 
@@ -5286,10 +5330,13 @@ final class UniversalPlayerViewModel: ObservableObject {
 
     // MARK: - Compatibility Notice
 
-    private func showCompatibilityNotice(_ message: String) {
+    /// `sticky` stays up until replaced or hidden (a download's wait).
+    private func showCompatibilityNotice(_ message: String, sticky: Bool = false) {
         compatibilityNotice = message
         compatibilityNoticeTimer?.invalidate()
-        compatibilityNoticeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { [weak self] _ in
+        compatibilityNoticeTimer = nil
+        guard !sticky else { return }
+        compatibilityNoticeTimer = Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { [weak self] _ in
             self?.compatibilityNotice = nil
         }
     }

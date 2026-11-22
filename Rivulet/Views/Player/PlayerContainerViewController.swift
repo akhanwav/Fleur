@@ -1505,10 +1505,17 @@ class PlayerContainerViewController: UIViewController {
         // Rail actions. (No play/pause control, no skip-back — the remote owns seeking.)
         rail.onSubtitles = { [weak self] in
             guard let self, let vm = self.viewModel else { return }
+            // Each row names where the subtitles came from and the release
+            // they were made for, on a second line the marquee scrolls.
+            let subtitleRows = [CardTrackListView.Row(title: "Off", subtitle: nil, trackId: nil,
+                                                      isSelected: vm.currentSubtitleTrackId == nil)]
+                + vm.subtitleTracks.map { track in
+                    CardTrackListView.Row(title: SubtitleLabels.title(track), subtitle: SubtitleLabels.detail(track),
+                                          trackId: track.id, isSelected: track.id == vm.currentSubtitleTrackId)
+                }
             self.presentRailPanel(
                 content: CardTrackListView(
-                    header: "Subtitles", tracks: vm.subtitleTracks,
-                    selectedTrackId: vm.currentSubtitleTrackId, showsOffRow: true,
+                    header: "Subtitles", rows: subtitleRows,
                     actions: vm.canSearchSubtitles ? [
                         CardActionConfig(title: "Search for Subtitles") { [weak self] row in
                             self?.searchSubtitles(from: row)
@@ -1693,20 +1700,24 @@ class PlayerContainerViewController: UIViewController {
             self.subtitleSearchTask = nil
             row?.setTitle("Search for Subtitles")
             guard let vm, let origin, self.activeRailPanel === origin else { return }
-            let found = results ?? []
+            let found = results?.candidates ?? []
+            // A source that failed says why, under the results or in place of them.
+            let notices = (results?.notices ?? []).map {
+                CardTrackListView.Row(title: $0, subtitle: nil, trackId: -1, isSelected: false)
+            }
             let rows = found.isEmpty
                 ? [CardTrackListView.Row(title: results == nil ? "Search Failed" : "No Subtitles Found",
-                                         subtitle: nil, trackId: nil, isSelected: false)]
+                                         subtitle: nil, trackId: -1, isSelected: false)] + notices
                 : found.enumerated().map { index, result in
                     CardTrackListView.Row(
-                        title: SubtitleSearch.title(of: result),
-                        subtitle: SubtitleSearch.detail(of: result),
+                        title: SubtitleLabels.resultTitle(result),
+                        subtitle: SubtitleLabels.resultDetail(result),
                         trackId: index, isSelected: false)
-                }
+                } + notices
             _ = self.presentRailPanel(
                 content: CardTrackListView(header: "Search Results", rows: rows, onSelect: { [weak vm, weak self] index in
                     self?.activeRailPanel?.dismissPanel()
-                    guard let index, let vm else { return }
+                    guard let index, found.indices.contains(index), let vm else { return }
                     Task { await vm.installSubtitle(found[index]) }
                 }),
                 width: CardTrackListView.menuWidth, from: self.rail?.subtitlesButton ?? self.view)

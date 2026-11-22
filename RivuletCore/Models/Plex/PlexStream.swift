@@ -68,6 +68,11 @@ nonisolated struct PlexStream: Codable, Identifiable, Sendable {
     let key: String?           // For external subtitles
     let extendedDisplayTitle: String?
     let hearingImpaired: Bool?
+    /// A subtitle Plex's search downloaded: its id at Plex's provider
+    /// ("/library/streams/12623768"), the same on every server that fetched it.
+    var sourceKey: String? = nil
+    /// Where Plex's search found it ("OpenSubtitles").
+    var providerTitle: String? = nil
 
     // MARK: - Identifiable
 
@@ -97,6 +102,7 @@ nonisolated struct PlexStream: Codable, Identifiable, Sendable {
         case frameRate, height, width, level, profile, refFrames, scanType
         case audioChannelLayout, channels, bitrate, samplingRate
         case format, key, extendedDisplayTitle, hearingImpaired
+        case sourceKey, providerTitle
     }
 
     // MARK: - Convenience Properties

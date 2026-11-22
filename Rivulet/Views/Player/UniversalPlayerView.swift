@@ -944,6 +944,8 @@ struct UniversalPlayerView: View {
         Text(message)
             .font(.callout)
             .foregroundStyle(.white)
+            .frame(maxWidth: 620, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(

@@ -542,11 +542,34 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
   `applyAudioPreference` / `applySubtitlePreference`), matched by shape then
   title on whichever copy plays, and again on every episode Up Next or
   autoplay swaps in. A saved track the copy lacks falls through.
-- **Search Subtitles… is the player's search** (`SubtitleSearch`): Plex's own
-  server-side search, saved next to the media, so only on servers the account
-  administers (`canAdministerServer`), never shared ones or restricted
-  profiles. A download is selected by Plex's per-file selection and saved as
-  the title's subtitle choice, so the new stream wins at Play.
+- **Search Subtitles… is one search over three sources** (`SubtitleSearch`),
+  ranked by `SubtitleRanking`: OpenSubtitles hash match, then release name
+  against the file's, then downloads, then rating.
+  - **Plex's own search** saves next to the media, so only on servers the
+    account administers (`canAdministerServer`), never shared ones or
+    restricted profiles. A download is selected by Plex's per-file selection
+    and saved as the title's subtitle choice, so the new stream wins at Play.
+  - **PMS answers the download PUT with 200 even when it fails.** It fetches
+    the file from `metadata.provider.plex.tv<sourceKey>` afterwards and only its
+    own log says that fetch got a 500 (measured on diamond and akhan mini, Nov
+    2026: every stream, old and new). So `downloadFromPlex` asks the provider
+    first (`plexSubtitleSourceAvailable`), takes a pick the server already lists
+    by `sourceKey` (a re-pick keeps its old id), and polls past the URL cache
+    for 30 s. The "didn't arrive" message is only for a server that took the
+    file and never listed it.
+  - **OpenSubtitles and SubSource** run on any server when their keys are in
+    `Secrets` (`OpenSubtitlesClient`, `SubSourceClient`; English unless the
+    subtitle preference says otherwise). OpenSubtitles gets the file's hash,
+    read from the server with two 64 KiB range requests (`partBytes`). A pick
+    is stored on the Apple TV per title per server (`LocalSubtitleStore`,
+    Application Support) and injected into the player's metadata as a sidecar
+    stream whose key is a `file:` URL, after the server's own, so `TrackMerge`
+    pairs it by order like any sidecar. Its stream id (from 1,900,000,000) is
+    never sent to Plex. Only the aether route can draw one.
+- **Subtitle rows name their origin** (`SubtitleLabels`): "English SDH · SRT",
+  then Embedded, External file, Plex search, OpenSubtitles or SubSource,
+  "Downloaded" for a search's file, and the release. `SubtitleOrigin(stream)`
+  reads it from `key`, `sourceKey` and `providerTitle`.
 - **With no choice, Settings → Playback → Default Subtitles decides.**
   English (the default, `EnglishSubtitleDefault`): SRT, then other English
   text, then PGS, full before forced-only, plain before SDH; none, off. Last

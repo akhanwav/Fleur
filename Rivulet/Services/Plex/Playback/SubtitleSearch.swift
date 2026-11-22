@@ -5,29 +5,86 @@
 //  SubtitleSearch.swift
 //  Rivulet
 //
-//  Plex's own subtitle search, as the player's Subtitles menu and the detail
-//  page's Subtitles picker use it. The server searches its configured
-//  subtitle sources (`GET /library/metadata/<id>/subtitles?language=`) and a
-//  pick is saved next to the media (`PUT …?key=`), so it becomes one of the
-//  file's own subtitle streams on that server, for every client.
+//  "Search Subtitles…", as the player's Subtitles menu and the detail page's
+//  Subtitles picker use it: one list from up to three sources, best match first
+//  (`SubtitleRanking`).
 //
-//  Saving a file next to the media is the server admin's right, so search is
-//  offered only where the account administers the server (`/accounts`
-//  answers 200), never on a shared server, and never to a restricted profile.
+//  - Plex's own search, on a server this account administers: the server
+//    searches its subtitle agents (`GET /library/metadata/<id>/subtitles`) and
+//    a pick is saved next to the media (`PUT …?key=`), one of the file's
+//    streams on that server for every client. Never on a shared server, never
+//    for a restricted profile.
+//  - OpenSubtitles and SubSource, on any server, when their keys are in
+//    `Secrets`: a pick is stored on the Apple TV for that title on that server
+//    (`LocalSubtitleStore`). OpenSubtitles is asked with the file's hash
+//    (read from the server with two range requests), so a subtitle made for
+//    this exact release is marked "Exact match".
 //
 
 import Foundation
+
+/// What a search needs to know about the file and the title.
+nonisolated struct SubtitleSearchContext: Sendable {
+    let serverURL: String
+    let token: String
+    let ratingKey: String
+    /// `LocalSubtitleStore.serverKey`.
+    let serverKey: String
+    let canUsePlex: Bool
+    /// ISO 639-1.
+    let language: String
+    let fileName: String?
+    let fileSize: Int?
+    let partKey: String?
+    let title: String?
+    let year: Int?
+    let imdbID: String?
+    let tmdbID: Int?
+    let isEpisode: Bool
+    let season: Int?
+    let episode: Int?
+    let showTitle: String?
+    let showImdbID: String?
+    let showTmdbID: Int?
+
+    var imdbNumber: Int? { Self.number(imdbID) }
+    var showImdbNumber: Int? { Self.number(showImdbID) }
+    private static func number(_ imdb: String?) -> Int? { imdb.flatMap { Int($0.dropFirst(2)) } }
+}
+
+nonisolated struct SubtitleSearchResults: Sendable {
+    var candidates: [SubtitleCandidate] = []
+    /// One line per source that failed ("OpenSubtitles is busy…").
+    var notices: [String] = []
+}
+
+/// How a pick ended.
+enum SubtitleInstall {
+    /// The server lists it: the stream, and the item's versions as listed now.
+    case plex(stream: PlexStream, media: [PlexMedia])
+    /// Stored on the Apple TV.
+    case local(LocalSubtitle)
+    case failed(String)
+}
 
 @MainActor
 enum SubtitleSearch {
     /// Admin answers per server URL + token, for the session.
     private static var adminAnswers: [String: Bool] = [:]
 
-    /// The answer already known for a server, nil before the first ask.
+    /// Whether Plex's own search may be used: the answer already known for a
+    /// server, nil before the first ask.
     static func knownAccess(serverURL: String, token: String) -> Bool? {
         guard PlexUserProfileManager.shared.selectedUser?.restricted != true else { return false }
         return adminAnswers[serverURL + token]
     }
+
+    /// Any search there: Plex's on an administered server, or another source.
+    static func isOffered(serverURL: String, token: String) -> Bool {
+        hasOtherSources || knownAccess(serverURL: serverURL, token: token) == true
+    }
+
+    static var hasOtherSources: Bool { OpenSubtitlesClient.isConfigured || SubSourceClient.isConfigured }
 
     /// One ask per server at a time.
     private static var asking: [String: Task<Bool, Never>] = [:]
@@ -44,53 +101,246 @@ enum SubtitleSearch {
         return isAdmin
     }
 
-    /// The subtitle preference's language, else the device's, as ISO 639-1.
+    /// The subtitle preference's language, else English, as ISO 639-1.
     static var language: String {
-        let device = Locale.current.language.languageCode?.identifier(.alpha2) ?? "en"
-        guard case .track(let preferred, _, _, _) = TrackIntentStore.subtitleIntent ?? .off else { return device }
+        guard case .track(let preferred, _, _, _) = TrackIntentStore.subtitleIntent ?? .off else { return "en" }
         let code = TrackLanguage.normalize(preferred)
-        return code.isEmpty ? device : Locale.LanguageCode(code).identifier(.alpha2) ?? device
+        return code.isEmpty ? "en" : Locale.LanguageCode(code).identifier(.alpha2) ?? "en"
     }
 
-    static func search(serverURL: String, token: String, ratingKey: String) async throws -> [PlexStream] {
-        try await PlexNetworkManager.shared.searchSubtitles(
-            serverURL: serverURL, authToken: token, ratingKey: ratingKey, language: language)
-    }
+    // MARK: - Context
 
-    /// A result's name, and its language, format and flags.
-    static func title(of result: PlexStream) -> String {
-        result.title ?? result.displayTitle ?? "Subtitle"
-    }
-
-    static func detail(of result: PlexStream) -> String {
-        [result.language, result.codec?.uppercased(),
-         result.hearingImpaired == true ? "SDH" : nil,
-         result.forced == true ? "Forced" : nil]
-            .compactMap { $0 }.joined(separator: " • ")
-    }
-
-    /// Saves `result` next to the media, then waits for the server to list it
-    /// (about two seconds later, under a new id). `media` picks the version
-    /// the caller describes from the refreshed item; `known` is the subtitle
-    /// ids it already had. nil when it never arrived or `stillWanted` turned false.
-    static func download(_ result: PlexStream, serverURL: String, token: String, ratingKey: String,
-                         known: Set<Int>, media: ([PlexMedia]) -> [PlexMedia],
-                         stillWanted: () -> Bool = { true }) async throws -> (stream: PlexStream, media: [PlexMedia])? {
-        guard let resultKey = result.key else { return nil }
+    /// Reads the item (with its external ids, and a show's for an episode) for
+    /// a search. `mediaID` is the version the caller describes.
+    static func context(serverURL: String, token: String, ratingKey: String, mediaID: String?) async throws
+        -> SubtitleSearchContext {
         let network = PlexNetworkManager.shared
-        try await network.downloadSubtitle(serverURL: serverURL, authToken: token, ratingKey: ratingKey,
-                                           resultKey: resultKey)
-        for _ in 0..<10 {
-            try await Task.sleep(for: .seconds(1.5))
-            let fresh = try await network.getMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey)
-            guard stillWanted() else { return nil }
-            let picked = media(fresh.Media ?? [])
-            if let added = picked.first?.Part?.first?.Stream?.first(where: {
-                $0.isSubtitle && $0.key != nil && !known.contains($0.id)
-            }) {
-                return (added, picked)
+        let item = try await network.getMetadata(serverURL: serverURL, authToken: token, ratingKey: ratingKey,
+                                                 includeGuids: true)
+        let media = item.Media ?? []
+        let version = media.first { mediaID != nil && String($0.id) == mediaID } ?? media.first
+        let part = version?.Part?.first
+        let isEpisode = item.type == "episode"
+        var show: PlexMetadata?
+        if isEpisode, let showKey = item.grandparentRatingKey {
+            show = try? await network.getMetadata(serverURL: serverURL, authToken: token, ratingKey: showKey,
+                                                  includeGuids: true)
+        }
+        let canUsePlex = await canSearch(serverURL: serverURL, token: token)
+        return SubtitleSearchContext(
+            serverURL: serverURL, token: token, ratingKey: ratingKey,
+            serverKey: LocalSubtitleStore.serverKey(serverURL: serverURL), canUsePlex: canUsePlex,
+            language: language,
+            fileName: part?.file.map { ($0 as NSString).lastPathComponent },
+            fileSize: part?.size, partKey: part?.key,
+            title: item.title, year: item.year,
+            imdbID: imdb(item), tmdbID: item.tmdbId,
+            isEpisode: isEpisode, season: item.parentIndex, episode: item.index,
+            showTitle: item.grandparentTitle ?? show?.title,
+            showImdbID: show.flatMap(imdb), showTmdbID: show?.tmdbId ?? item.showTmdbId)
+    }
+
+    private static func imdb(_ item: PlexMetadata) -> String? {
+        (item.Guid ?? []).lazy.compactMap(\.id).first { $0.hasPrefix("imdb://") }.map { String($0.dropFirst(7)) }
+    }
+
+    // MARK: - Search
+
+    static func search(_ context: SubtitleSearchContext) async -> SubtitleSearchResults {
+        async let plex = searchPlex(context)
+        async let openSubtitles = searchOpenSubtitles(context)
+        async let subSource = searchSubSource(context)
+        let parts = await [plex, openSubtitles, subSource]
+        var results = SubtitleSearchResults()
+        for part in parts {
+            results.candidates += part.candidates
+            results.notices += part.notices
+        }
+        results.candidates = SubtitleRanking.sorted(results.candidates, fileName: context.fileName)
+        print("[SubtitleSearch] \(results.candidates.count) results "
+              + "(\(results.candidates.filter(\.isHashMatch).count) exact), notices: \(results.notices)")
+        return results
+    }
+
+    private static func searchPlex(_ context: SubtitleSearchContext) async -> SubtitleSearchResults {
+        guard context.canUsePlex else { return SubtitleSearchResults() }
+        do {
+            let streams = try await PlexNetworkManager.shared.searchSubtitles(
+                serverURL: context.serverURL, authToken: context.token, ratingKey: context.ratingKey,
+                language: context.language)
+            return SubtitleSearchResults(candidates: streams.map { stream in
+                SubtitleCandidate(
+                    id: "plex:\(stream.id)", origin: .plexSearch,
+                    release: stream.title ?? stream.displayTitle ?? "",
+                    language: stream.languageTag ?? stream.languageCode, isHearingImpaired: stream.hearingImpaired ?? false,
+                    isForced: stream.forced ?? false, downloads: nil, rating: nil, isHashMatch: false,
+                    payload: .plex(stream))
+            })
+        } catch {
+            return SubtitleSearchResults(notices: ["Plex search failed."])
+        }
+    }
+
+    private static func searchOpenSubtitles(_ context: SubtitleSearchContext) async -> SubtitleSearchResults {
+        guard OpenSubtitlesClient.isConfigured else { return SubtitleSearchResults() }
+        let hash = await fileHash(context)
+        do {
+            return SubtitleSearchResults(candidates: try await OpenSubtitlesClient.shared.search(context, hash: hash))
+        } catch {
+            return SubtitleSearchResults(notices: [message(error, .openSubtitles)])
+        }
+    }
+
+    private static func searchSubSource(_ context: SubtitleSearchContext) async -> SubtitleSearchResults {
+        guard SubSourceClient.isConfigured else { return SubtitleSearchResults() }
+        do {
+            return SubtitleSearchResults(candidates: try await SubSourceClient.shared.search(context))
+        } catch {
+            return SubtitleSearchResults(notices: [message(error, .subSource)])
+        }
+    }
+
+    private static func message(_ error: Error, _ origin: SubtitleOrigin) -> String {
+        (error as? SubtitleSourceError)?.message(origin) ?? "\(origin.label) couldn't be reached."
+    }
+
+    /// The file's OpenSubtitles hash, from its first and last 64 KiB on the server.
+    private static var hashes: [String: String] = [:]
+
+    private static func fileHash(_ context: SubtitleSearchContext) async -> String? {
+        guard let partKey = context.partKey, let size = context.fileSize, size >= OpenSubtitlesHash.chunk * 2 else {
+            return nil
+        }
+        let cacheKey = "\(context.serverKey)|\(partKey)|\(size)"
+        if let known = hashes[cacheKey] { return known }
+        let network = PlexNetworkManager.shared
+        let chunk = OpenSubtitlesHash.chunk
+        async let head = network.partBytes(serverURL: context.serverURL, authToken: context.token,
+                                           partKey: partKey, offset: 0, length: chunk)
+        async let tail = network.partBytes(serverURL: context.serverURL, authToken: context.token,
+                                           partKey: partKey, offset: size - chunk, length: chunk)
+        guard let head = try? await head, let tail = try? await tail,
+              let hash = OpenSubtitlesHash.hash(size: size, head: head, tail: tail) else {
+            print("[SubtitleSearch] file hash unavailable")
+            return nil
+        }
+        hashes[cacheKey] = hash
+        return hash
+    }
+
+    // MARK: - Install
+
+    /// Fetches a pick. A Plex result is saved on the server and waited for;
+    /// any other is stored on the Apple TV. `media` picks the version the caller
+    /// describes from the refreshed item, `known` the subtitle ids it already
+    /// had. nil when `stillWanted` turned false.
+    static func install(_ candidate: SubtitleCandidate, context: SubtitleSearchContext, known: Set<Int>,
+                        media: @escaping ([PlexMedia]) -> [PlexMedia],
+                        stillWanted: @escaping () -> Bool = { true }) async -> SubtitleInstall? {
+        switch candidate.payload {
+        case .plex(let result):
+            return await downloadFromPlex(result, context: context, known: known, media: media, stillWanted: stillWanted)
+        case .openSubtitles(let fileID):
+            do {
+                let text = try await OpenSubtitlesClient.shared.download(fileID: fileID)
+                return try store(text, format: "srt", candidate: candidate, context: context)
+            } catch {
+                return .failed(message(error, .openSubtitles))
+            }
+        case .subSource(let subtitleID):
+            do {
+                let file = try await SubSourceClient.shared.download(subtitleID: subtitleID, context: context)
+                return try store(file.text, format: file.format, candidate: candidate, context: context)
+            } catch {
+                return .failed(message(error, .subSource))
             }
         }
-        return nil
+    }
+
+    private static func store(_ text: String, format: String, candidate: SubtitleCandidate,
+                              context: SubtitleSearchContext) throws -> SubtitleInstall {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .failed(SubtitleSourceError.noFile.message(candidate.origin))
+        }
+        let language = candidate.language.flatMap { Locale.LanguageCode($0).identifier(.alpha2) } ?? context.language
+        return .local(try LocalSubtitleStore.save(
+            text: text, format: format, server: context.serverKey, ratingKey: context.ratingKey,
+            origin: candidate.origin, release: candidate.release, language: language,
+            isHearingImpaired: candidate.isHearingImpaired, isForced: candidate.isForced))
+    }
+
+    /// The longest a server is given to list a Plex download.
+    static let plexArrivalWindow: TimeInterval = 30
+
+    static let plexServiceFailed = "Plex's subtitle service isn't working right now. Try another source."
+
+    /// Saves a Plex result next to the media, then waits for the server to list
+    /// it. PMS answers the PUT at once and fetches the file from Plex's provider
+    /// afterwards, answering 200 even when that fetch fails: so a pick the
+    /// server already has is taken as is, the provider is asked first, and the
+    /// wait polls past the cache with a growing interval.
+    private static func downloadFromPlex(_ result: PlexStream, context: SubtitleSearchContext, known: Set<Int>,
+                                         media: @escaping ([PlexMedia]) -> [PlexMedia],
+                                         stillWanted: @escaping () -> Bool) async -> SubtitleInstall? {
+        guard let resultKey = result.key else { return .failed("This result can't be downloaded.") }
+        let network = PlexNetworkManager.shared
+        let started = Date()
+        func log(_ text: String) {
+            print(String(format: "[SubtitleSearch] +%.1fs ", Date().timeIntervalSince(started)) + text)
+        }
+        func listed(_ versions: [PlexMedia]) -> PlexStream? {
+            let subtitles = versions.first?.Part?.first?.Stream?.filter { $0.isSubtitle && $0.key != nil } ?? []
+            if let sourceKey = result.sourceKey, let same = subtitles.first(where: { $0.sourceKey == sourceKey }) {
+                return same
+            }
+            return subtitles.first { !known.contains($0.id) && !LocalSubtitleStore.isLocal(streamID: $0.id) }
+        }
+
+        // Picked again: the server keeps one copy, under the id it already had.
+        if result.sourceKey != nil,
+           let versions = try? await network.freshSubtitleStreams(serverURL: context.serverURL, authToken: context.token,
+                                                                  ratingKey: context.ratingKey),
+           let stream = media(versions).first?.Part?.first?.Stream?.first(where: {
+               $0.isSubtitle && $0.sourceKey == result.sourceKey }) {
+            log("already listed as \(stream.id)")
+            return .plex(stream: stream, media: media(versions))
+        }
+        if let sourceKey = result.sourceKey, await network.plexSubtitleSourceAvailable(sourceKey: sourceKey) == false {
+            log("provider refuses \(sourceKey)")
+            return .failed(plexServiceFailed)
+        }
+        do {
+            try await network.downloadSubtitle(serverURL: context.serverURL, authToken: context.token,
+                                               ratingKey: context.ratingKey, resultKey: resultKey)
+            log("PUT accepted for \(resultKey)")
+        } catch {
+            log("PUT failed: \(error)")
+            return .failed("The server refused the download.")
+        }
+        var interval: TimeInterval = 1
+        var polls = 0
+        while Date().timeIntervalSince(started) < plexArrivalWindow {
+            try? await Task.sleep(for: .seconds(interval))
+            guard !Task.isCancelled, stillWanted() else { return nil }
+            interval = min(interval + 0.5, 3)
+            polls += 1
+            // A slow or failed poll is one miss, not the end of the wait.
+            guard let versions = try? await network.freshSubtitleStreams(
+                serverURL: context.serverURL, authToken: context.token, ratingKey: context.ratingKey) else {
+                log("poll \(polls) failed")
+                continue
+            }
+            guard stillWanted() else { return nil }
+            let picked = media(versions)
+            if let added = listed(picked) {
+                log("listed as \(added.id) after \(polls) polls")
+                return .plex(stream: added, media: picked)
+            }
+        }
+        log("not listed after \(polls) polls")
+        if let sourceKey = result.sourceKey, await network.plexSubtitleSourceAvailable(sourceKey: sourceKey) == false {
+            return .failed(plexServiceFailed)
+        }
+        return .failed("The server didn't add the subtitles. Try another result.")
     }
 }

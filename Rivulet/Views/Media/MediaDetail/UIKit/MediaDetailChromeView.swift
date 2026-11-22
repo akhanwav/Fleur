@@ -911,6 +911,15 @@ final class MediaDetailChromeView: UIView {
                                         showGuid: details.lazy.compactMap(\.showPlexGuid).first)
     }
 
+    /// The copy's subtitles: the server's, then those stored on the Apple TV
+    /// for this title on that server (`LocalSubtitleStore`).
+    private static func subtitleTracks(of target: TrackTarget) -> [SubtitleTrack] {
+        guard let server = server(for: target) else { return target.source.subtitleTracks }
+        let stored = LocalSubtitleStore.subtitles(server: LocalSubtitleStore.serverKey(serverURL: server.serverURL),
+                                                  ratingKey: target.playable.ref.itemID)
+        return target.source.subtitleTracks + stored.compactMap(LocalSubtitleStore.subtitleTrack)
+    }
+
     private func refreshTrackButtons() {
         guard let audioButton, let subtitlesButton else { return }
         guard let target = trackTarget() else {
@@ -923,7 +932,7 @@ final class MediaDetailChromeView: UIView {
         audioButton.isHidden = target.source.audioTracks.isEmpty
         audioButton.focusCaption = Self.currentAudio(in: target.source, choice: choice).map(TrackLabels.audioButton) ?? "Audio"
         subtitlesButton.isHidden = false
-        subtitlesButton.focusCaption = Self.currentSubtitle(in: target.source, choice: choice)
+        subtitlesButton.focusCaption = Self.currentSubtitle(in: Self.subtitleTracks(of: target), choice: choice)
             .map(TrackLabels.subtitleButton) ?? "Off"
     }
 
@@ -939,8 +948,7 @@ final class MediaDetailChromeView: UIView {
 
     /// The subtitles that will play (nil: off): the saved choice, else Plex's
     /// own selection, else Settings → Playback → Default Subtitles.
-    private static func currentSubtitle(in source: MediaSource, choice: TitleTrackChoice?) -> SubtitleTrack? {
-        let tracks = source.subtitleTracks
+    private static func currentSubtitle(in tracks: [SubtitleTrack], choice: TitleTrackChoice?) -> SubtitleTrack? {
         if let intent = choice?.subtitle {
             if intent == .off { return nil }
             if let match = TitleTrackMatch.subtitle(intent, title: choice?.subtitleTitle, in: tracks) { return match }
@@ -971,21 +979,24 @@ final class MediaDetailChromeView: UIView {
 
     private func presentSubtitlePicker(from button: UIView?) {
         guard let target = trackTarget(), let host = hostViewController else { return }
-        let current = Self.currentSubtitle(in: target.source, choice: trackChoice)
+        let tracks = Self.subtitleTracks(of: target)
+        let current = Self.currentSubtitle(in: tracks, choice: trackChoice)
         let off = TileMenuAction(title: "Off", systemImage: current == nil ? "checkmark.circle.fill" : "circle",
                                  id: "off") { [weak self] in self?.chooseSubtitle(nil, target: target) }
-        let tracks = target.source.subtitleTracks
-        let titles = TrackLabels.distinct(tracks.map(TrackLabels.subtitleRow), titles: tracks.map(\.title))
-        let rows = zip(tracks, titles).map { track, title in
-            TileMenuAction(title: title, systemImage: track.id == current?.id ? "checkmark.circle.fill" : "circle",
+        // "English SDH · SRT · OpenSubtitles · Downloaded · <release>": the
+        // focused row scrolls what doesn't fit.
+        let rows = tracks.map { track in
+            TileMenuAction(title: [SubtitleLabels.title(track), SubtitleLabels.detail(track)].joined(separator: " · "),
+                           systemImage: track.id == current?.id ? "checkmark.circle.fill" : "circle",
                            id: track.id) { [weak self] in
                 self?.chooseSubtitle(track, target: target)
             }
         }
-        // The player's own search, on a server this account administers.
+        // The player's own search: Plex's on a server this account
+        // administers, OpenSubtitles and SubSource on any.
         var sections = [[off] + rows]
         if let server = Self.server(for: target),
-           SubtitleSearch.knownAccess(serverURL: server.serverURL, token: server.authToken) == true {
+           SubtitleSearch.isOffered(serverURL: server.serverURL, token: server.authToken) {
             sections.append([TileMenuAction(title: "Search Subtitles…", systemImage: "magnifyingglass", id: "search") {
                 [weak self, weak button] in self?.searchSubtitles(target: target, from: button)
             }])
@@ -1022,58 +1033,78 @@ final class MediaDetailChromeView: UIView {
         Task { _ = await SubtitleSearch.canSearch(serverURL: server.serverURL, token: server.authToken) }
     }
 
-    /// The button says "Searching…" while the server looks; the results
+    /// The button says "Searching…" while the sources look; the results
     /// then open as their own picker, sized to them.
     private func searchSubtitles(target: TrackTarget, from button: UIView?) {
         guard let server = Self.server(for: target) else { return }
         let ratingKey = target.playable.ref.itemID
         subtitlesButton?.focusCaption = "Searching…"
         Task { @MainActor [weak self, weak button] in
-            let results = try? await SubtitleSearch.search(serverURL: server.serverURL, token: server.authToken,
-                                                           ratingKey: ratingKey)
+            let context = try? await SubtitleSearch.context(serverURL: server.serverURL, token: server.authToken,
+                                                            ratingKey: ratingKey, mediaID: target.source.id)
+            var results: SubtitleSearchResults?
+            if let context { results = await SubtitleSearch.search(context) }
             guard let self, let host = self.hostViewController else { return }
             self.refreshTrackButtons()
-            let found = results ?? []
-            let rows = found.isEmpty
+            let found = results?.candidates ?? []
+            let notices = (results?.notices ?? []).enumerated().map { index, notice in
+                TileMenuAction(title: notice, systemImage: "exclamationmark.circle", isEnabled: false,
+                               id: "notice:\(index)") {}
+            }
+            var rows = found.isEmpty
                 ? [TileMenuAction(title: results == nil ? "Search Failed" : "No Subtitles Found",
                                   systemImage: "xmark.circle", isEnabled: false, id: "none") {}]
-                : found.enumerated().map { index, result in
-                    let detail = SubtitleSearch.detail(of: result)
-                    return TileMenuAction(title: [SubtitleSearch.title(of: result), detail].filter { !$0.isEmpty }
-                                            .joined(separator: " · "),
-                                          systemImage: "arrow.down.circle", id: "result:\(index)") { [weak self] in
-                        self?.downloadSubtitle(result, target: target, server: server)
+                : found.map { result in
+                    TileMenuAction(title: [SubtitleLabels.resultTitle(result), SubtitleLabels.resultDetail(result)]
+                                    .joined(separator: " · "),
+                                   systemImage: result.isHashMatch ? "checkmark.seal" : "arrow.down.circle",
+                                   id: "result:\(result.id)") { [weak self] in
+                        guard let context else { return }
+                        self?.downloadSubtitle(result, context: context, target: target, server: server)
                     }
                 }
+            rows += notices
             self.present([rows], title: "Search Results", focusing: nil, from: button ?? self.subtitlesButton, host: host)
         }
     }
 
-    /// Saves the pick on the server, then lists it in the picker and selects
-    /// it for the next play: Plex's per-file selection, and the title's own
-    /// subtitle choice, by its title among tracks of the same shape.
-    private func downloadSubtitle(_ result: PlexStream, target: TrackTarget, server: PlexProvider) {
-        let ratingKey = target.playable.ref.itemID
+    /// Fetches the pick, then lists it in the picker and selects it for the
+    /// next play: the title's own subtitle choice, by its title among tracks
+    /// of the same shape, and for a server's file Plex's per-file selection.
+    private func downloadSubtitle(_ result: SubtitleCandidate, context: SubtitleSearchContext,
+                                  target: TrackTarget, server: PlexProvider) {
         let sourceID = target.source.id
         subtitlesButton?.focusCaption = "Downloading…"
         Task { @MainActor [weak self] in
             let known = Set(target.source.subtitleTracks.compactMap { Int($0.id) })
-            let arrived = try? await SubtitleSearch.download(
-                result, serverURL: server.serverURL, token: server.authToken, ratingKey: ratingKey, known: known,
+            let outcome = await SubtitleSearch.install(
+                result, context: context, known: known,
                 media: { media in media.filter { String($0.id) == sourceID } })
             guard let self else { return }
-            guard let arrived else {
+            let track: SubtitleTrack?
+            switch outcome {
+            case .failed(let message)?:
                 self.subtitlesButton?.focusCaption = "Download Failed"
+                if let host = self.hostViewController {
+                    self.present([TileMenuAction(title: message, systemImage: "exclamationmark.circle",
+                                                 isEnabled: false, id: "failed") {}],
+                                 title: "Subtitles", focusing: nil, from: self.subtitlesButton, host: host)
+                }
+                return
+            case .plex(let stream, _)?:
+                try? await server.setSelectedSubtitleTrack(String(stream.id), source: sourceID, of: target.playable.ref)
+                track = PlexMediaMapper.subtitleTrack(stream)
+                if let detail = try? await server.fullDetail(for: target.playable.ref),
+                   let source = detail.mediaSources.first(where: { $0.id == sourceID }) {
+                    self.refreshedSources[sourceID] = source
+                }
+            case .local(let stored)?:
+                track = LocalSubtitleStore.subtitleTrack(stored)
+            case nil:
                 return
             }
-            try? await server.setSelectedSubtitleTrack(String(arrived.stream.id), source: sourceID,
-                                                       of: target.playable.ref)
-            if let key = self.trackChoiceKey, let track = PlexMediaMapper.subtitleTrack(arrived.stream) {
+            if let key = self.trackChoiceKey, let track {
                 TitleTrackChoices.setSubtitle(SubtitleIntent(from: track), title: track.extendedTitle, for: key)
-            }
-            if let detail = try? await server.fullDetail(for: target.playable.ref),
-               let source = detail.mediaSources.first(where: { $0.id == sourceID }) {
-                self.refreshedSources[sourceID] = source
             }
             self.refreshTrackButtons()
         }
@@ -1095,6 +1126,8 @@ final class MediaDetailChromeView: UIView {
             TitleTrackChoices.setSubtitle(track.map(SubtitleIntent.init(from:)) ?? .off, title: track?.extendedTitle, for: key)
         }
         refreshTrackButtons()
+        // A subtitle stored on the Apple TV is nothing the server knows.
+        if let id = track.flatMap({ Int($0.id) }), LocalSubtitleStore.isLocal(streamID: id) { return }
         let provider = Self.provider(for: target)
         Task { try? await provider?.setSelectedSubtitleTrack(track?.id, source: target.source.id, of: target.playable.ref) }
     }
