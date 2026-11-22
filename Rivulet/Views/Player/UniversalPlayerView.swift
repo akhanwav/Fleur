@@ -968,6 +968,8 @@ struct UniversalPlayerView: View {
             iconColor: errorIconColor(for: error),
             title: errorTitle(for: error),
             onRetry: { Task { await viewModel.retryPlayback() } },
+            onOtherCopy: viewModel.otherCopiesOfMissingFile.isEmpty
+                ? nil : { viewModel.openOtherCopyOfMissingFile() },
             onDismiss: { viewModel.shouldDismiss = true }
         )
     }
@@ -982,6 +984,8 @@ struct UniversalPlayerView: View {
             return "link.badge.plus"
         case .unknown:
             return "exclamationmark.triangle.fill"
+        case .fileUnavailable:
+            return "questionmark.folder"
         case .engineFailure(let kind, _):
             // Reuse the one engine-kind taxonomy instead of opening a third
             // switch over the same strings. "Is this a network thing or a
@@ -1017,6 +1021,8 @@ struct UniversalPlayerView: View {
             return "Invalid Stream"
         case .unknown:
             return "Playback Error"
+        case .fileUnavailable:
+            return "File Unavailable"
         case .engineFailure(let kind, _):
             switch DirectPlayFailureKind(engineKind: kind) {
             case .network: return "Connection Problem"
@@ -1060,9 +1066,16 @@ private struct PlayerErrorOverlay: View {
     let iconColor: Color
     let title: String
     let onRetry: () -> Void
+    /// A missing file with a copy elsewhere: opens Ways to Watch on it.
+    let onOtherCopy: (() -> Void)?
     let onDismiss: () -> Void
 
-    private enum Field: Hashable { case retry, dismiss }
+    private enum Field: Hashable { case retry, otherCopy, dismiss }
+
+    private var initialField: Field {
+        if error.isRetryable { return .retry }
+        return onOtherCopy == nil ? .dismiss : .otherCopy
+    }
 
     @FocusState private var focused: Field?
 
@@ -1086,6 +1099,9 @@ private struct PlayerErrorOverlay: View {
                 if error.isRetryable {
                     actionButton(label: "Try Again", field: .retry, action: onRetry)
                 }
+                if let onOtherCopy {
+                    actionButton(label: "Ways to Watch", field: .otherCopy, action: onOtherCopy)
+                }
 
                 actionButton(label: "Dismiss", field: .dismiss, action: onDismiss)
             }
@@ -1097,7 +1113,7 @@ private struct PlayerErrorOverlay: View {
         // Splitting any of these (e.g. .focusSection at the call site)
         // breaks directional navigation between Try Again and Dismiss.
         .focusSection()
-        .defaultFocus($focused, error.isRetryable ? .retry : .dismiss)
+        .defaultFocus($focused, initialField)
         .onAppear {
             // Delay the focus claim slightly: when playbackState
             // transitions to .failed and this overlay mounts, the focus
@@ -1105,7 +1121,7 @@ private struct PlayerErrorOverlay: View {
             // Without the delay the @FocusState assignment races and
             // lands before the engine is ready.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                focused = error.isRetryable ? .retry : .dismiss
+                focused = initialField
             }
         }
     }

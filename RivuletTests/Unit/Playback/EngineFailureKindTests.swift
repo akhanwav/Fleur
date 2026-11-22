@@ -141,4 +141,15 @@ final class EngineFailureKindTests: XCTestCase {
             .userFacingDescription
         XCTAssertNotEqual(limited, generic)
     }
+
+    /// A 404 the item's re-read could not fix: name the server, and offer no
+    /// Try Again, which would ask for the same missing file.
+    func test_fileUnavailable_namesServer_andIsNotRetryable() {
+        let error = PlayerError.fileUnavailable(serverName: "Sesama")
+        XCTAssertEqual(error.userFacingDescription, "This file is no longer available on Sesama.")
+        XCTAssertFalse(error.isRetryable)
+        XCTAssertNil(error.engineKind)
+        XCTAssertEqual(PlayerError.fileUnavailable(serverName: nil).userFacingDescription,
+                       "This file is no longer available on this server.")
+    }
 }

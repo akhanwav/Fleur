@@ -1814,6 +1814,11 @@ final class UniversalPlayerViewModel: ObservableObject {
     // MARK: - Playback Controls
 
     func retryPlayback() async {
+        // One retry at a time: presses while one runs would each start a
+        // session (and a transcode) of their own.
+        guard !isRetryingPlayback else { return }
+        isRetryingPlayback = true
+        defer { isRetryingPlayback = false }
         // Pick up where it stopped, not at the item's original start: a
         // failure mid-session (a rebuild after returning to the app) has a
         // real position to return to.
@@ -1833,6 +1838,8 @@ final class UniversalPlayerViewModel: ObservableObject {
     }
 
     func startPlayback() async {
+        hasRefetchedAfterMissingFile = false
+        otherCopiesOfMissingFile = []
         Task { await resolveSubtitleSearchAccess() }
         // Fetch detailed metadata if markers or chapters are missing
         let hasMarkers = !(metadata.Marker ?? []).isEmpty
@@ -1943,7 +1950,9 @@ final class UniversalPlayerViewModel: ObservableObject {
             } else {
                 errorMessage = "Something went wrong during playback. Please try again."
             }
-            playbackState = .failed(.loadFailed(technicalError))
+            // The error itself, so the overlay's text, title and Try Again
+            // follow what failed (a missing file offers no retry).
+            playbackState = .failed((error as? PlayerError) ?? .loadFailed(technicalError))
 
             // Route through PlaybackDiagnostics so this carries the media
             // fingerprint, the startup timeline, and any earlier primary-route
@@ -2021,7 +2030,7 @@ final class UniversalPlayerViewModel: ObservableObject {
                 return .runtimeFatal
             case .invalidURL:
                 return .demuxInit
-            case .unknown:
+            case .unknown, .fileUnavailable:
                 return .unknown
             case .engineFailure(let kind, _):
                 // The engine already classified this. Everything below is the
@@ -2270,6 +2279,12 @@ final class UniversalPlayerViewModel: ObservableObject {
                     error: error,
                     kind: kind
                 )
+                // A 404 for the file: the server holds another file now, or none.
+                // Its transcoder reads the same missing file, so no fallback.
+                if isMissingFile(error) {
+                    try await recoverFromMissingFile(startTime: startTime, original: error)
+                    return
+                }
                 guard planHasHLSFallback(plan) else { throw error }
                 // A 503 for the file is the server, not the file: its transcoder
                 // is no likelier to answer, and waiting on it hid the cause
@@ -3841,6 +3856,102 @@ final class UniversalPlayerViewModel: ObservableObject {
         diagnostics.step("transcode_display_criteria",
                          detail: "rate=\(frameRate) range=\(range) dv=\(isDolbyVision)")
         await manager.waitForDisplaySwitchIfNeeded()
+    }
+
+    // MARK: - A file the server no longer has
+
+    private var isRetryingPlayback = false
+    /// Set once per play: the item was re-read after a 404, so a second 404
+    /// means the file is gone rather than renamed.
+    private var hasRefetchedAfterMissingFile = false
+    /// Other servers' (or other libraries') copies of a title whose file is
+    /// gone here, best first, for the error's Ways to Watch button.
+    @Published private(set) var otherCopiesOfMissingFile: [OtherServersAvailabilityChecker.ServerCopy] = []
+
+    /// The engine was refused the file with a 404 (sourceRefused carries the
+    /// HTTP status). Plex items only: a provider's stream has no item to re-read.
+    private func isMissingFile(_ error: Error) -> Bool {
+        guard case .plex = source,
+              (error as? PlayerError)?.engineKind == EngineFailureKind.sourceRefused else { return false }
+        return aetherPlayer?.lastEngineErrorUnderlying?.code == 404
+    }
+
+    /// The file this item pointed at is gone: replaced by an upgrade, moved,
+    /// or deleted, while the app still held the old address (a Continue
+    /// Watching card, a loaded page). Re-read the item once; a different file
+    /// plays from the same position, and the same file or no item at all is
+    /// `fileUnavailable`. Lists holding the old address refresh either way.
+    private func recoverFromMissingFile(startTime: TimeInterval?, original: Error) async throws {
+        defer { NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil) }
+        if let guid = metadata.guid { await OtherServersAvailabilityChecker.shared.forget(plexGuid: guid) }
+        guard !hasRefetchedAfterMissingFile, let ratingKey = metadata.ratingKey else {
+            diagnostics.step("source_404_still_missing")
+            throw await fileUnavailableError()
+        }
+        hasRefetchedAfterMissingFile = true
+        let failedPart = metadata.Media?.first?.Part?.first?.key
+        let fresh: PlexMetadata
+        do {
+            fresh = try await PlexNetworkManager.shared.getFullMetadata(
+                serverURL: serverURL, authToken: authToken, ratingKey: ratingKey)
+        } catch {
+            if Self.isNotFound(error) {
+                diagnostics.step("source_404_item_gone")
+                throw await fileUnavailableError()
+            }
+            // The server did not say: report what the engine saw.
+            throw original
+        }
+        applyVersion(currentVersionChoice, to: fresh.Media)
+        guard let part = metadata.Media?.first?.Part?.first?.key, part != failedPart else {
+            diagnostics.step("source_404_same_file")
+            throw await fileUnavailableError()
+        }
+        diagnostics.step("source_404_new_file")
+        if let markers = fresh.Marker, !markers.isEmpty { metadata.Marker = markers }
+        resetPreparedStreamContext()
+        await prepareStreamURL()
+        guard let plan = playbackPlan else { throw await fileUnavailableError() }
+        try await startWithFallback(plan: plan, startTime: startTime)
+    }
+
+    private static func isNotFound(_ error: Error) -> Bool {
+        switch error as? PlexAPIError {
+        case .notFound: return true
+        case .httpError(let status, _): return status == 404
+        default: return false
+        }
+    }
+
+    /// Names this server and finds the title's other copies for the error.
+    private func fileUnavailableError() async -> PlayerError {
+        let checker = OtherServersAvailabilityChecker.shared
+        let servers = await checker.enabledServers()
+        let here = servers.first { $0.serverURL == serverURL }
+        if let guid = metadata.guid {
+            let ratingKey = metadata.ratingKey
+            otherCopiesOfMissingFile = await checker.copies(plexGuid: guid).filter { copy in
+                !(copy.serverURL == serverURL && copy.ratingKey == ratingKey)
+            }
+        }
+        return .fileUnavailable(serverName: here?.name)
+    }
+
+    /// Ways to Watch from the error: the player closes and the title's page
+    /// opens on the first other copy, where every copy is listed.
+    func openOtherCopyOfMissingFile() {
+        guard let copy = otherCopiesOfMissingFile.first else { return }
+        Task { @MainActor in
+            guard let meta = try? await PlexNetworkManager.shared.getFullMetadata(
+                serverURL: copy.serverURL, authToken: copy.token, ratingKey: copy.ratingKey) else { return }
+            let main = MediaProviderRegistry.shared.plexProvider
+            let providerID = copy.serverURL == PlexAuthManager.shared.selectedServerURL
+                ? (main?.id ?? "plex:\(copy.machineId)") : "plex:\(copy.machineId)"
+            let item = PlexMediaMapper.item(meta, providerID: providerID,
+                                            serverURL: copy.serverURL, authToken: copy.token)
+            DetailCopySelection.pinnedToOwnCopy.insert(item.ref)
+            openAfterExit(item)
+        }
     }
 
     /// Wait for the HLS transcode session to be ready before loading playback.
@@ -7214,3 +7325,4 @@ extension Notification.Name {
     /// Posted when video playback stops (resumes hub polling)
     static let plexPlaybackStopped = Notification.Name("plexPlaybackStopped")
 }
+

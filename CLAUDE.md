@@ -505,6 +505,12 @@ most servers and fails on the ones behind a raw-IP or private certificate (#314,
   and no quality setting or step-down applies.
 - **A quality step that won't start plays the file** (`originalPlan`), at launch and
   on Auto's step-down, unless the server itself is down.
+- **A 404 for the file is never transcoded**: the transcoder reads the same
+  missing file. The player re-reads the item once (`recoverFromMissingFile`):
+  a new file (an upgrade, a move) plays from the same position; the same file
+  or no item is `PlayerError.fileUnavailable` ("no longer available on
+  <server>", no Try Again, Ways to Watch when another copy exists). Either way
+  it posts `.plexDataNeedsRefresh` so lists drop the old address.
 - **A server that is gone says so.** The preflight stops after two connection
   failures, or 503 on all eight polls, and an Aether 503 skips the fallback:
   `PlayerError.serverUnavailableMessage`, not "taking too long".

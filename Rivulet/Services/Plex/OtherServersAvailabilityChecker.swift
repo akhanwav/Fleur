@@ -85,6 +85,12 @@ actor OtherServersAvailabilityChecker {
     private var copiesCache: [String: [ServerCopy]] = [:]
     private var tmdbGuidCache: [String: String] = [:]
 
+    /// Drops what is known of one title's copies: a server answered 404 for
+    /// one of them, so the next lookup asks every server again.
+    func forget(plexGuid: String) {
+        copiesCache[plexGuid] = nil
+    }
+
     /// Every copy of `tmdbId` as a `type` on a reachable server, main included.
     func copies(forTmdbId tmdbId: Int, type: TMDBMediaType) async -> [ServerCopy] {
         guard let plexGuid = await plexGuid(forTmdbId: tmdbId, type: type) else { return [] }

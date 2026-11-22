@@ -77,6 +77,11 @@ enum PlayerError: Error, Equatable, Sendable {
     /// device's language and cannot be pattern-matched: that is precisely why
     /// `kind` exists.
     case engineFailure(kind: String, message: String)
+    /// The server answered 404 for the file, and a fresh read of the item
+    /// found no other file to play: it was deleted, moved or replaced and the
+    /// server has not caught up. A transcode reads the same missing file, so
+    /// nothing on this server can play it. `serverName` is nil when unknown.
+    case fileUnavailable(serverName: String?)
 
     /// Technical description for logging and Sentry - includes internal details
     var technicalDescription: String {
@@ -93,6 +98,8 @@ enum PlayerError: Error, Equatable, Sendable {
             return "Playback error: \(message)"
         case .engineFailure(let kind, let message):
             return "Playback error [\(kind)]: \(message)"
+        case .fileUnavailable:
+            return "File not found on the server (HTTP 404)"
         }
     }
 
@@ -139,6 +146,8 @@ enum PlayerError: Error, Equatable, Sendable {
             default:
                 return "This video couldn't be played. Please try again."
             }
+        case .fileUnavailable(let serverName):
+            return "This file is no longer available on \(serverName ?? "this server")."
         }
     }
 
@@ -167,7 +176,8 @@ enum PlayerError: Error, Equatable, Sendable {
         switch self {
         case .loadFailed, .networkError, .unknown:
             return true
-        case .invalidURL, .codecUnsupported:
+        case .invalidURL, .codecUnsupported, .fileUnavailable:
+            // Trying again asks for the same missing file.
             return false
         case .engineFailure(let kind, _):
             // A hardware decode limit is the one class retrying cannot move.
