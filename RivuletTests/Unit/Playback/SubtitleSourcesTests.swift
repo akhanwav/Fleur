@@ -311,4 +311,38 @@ final class SubtitleSourcesTests: XCTestCase {
         XCTAssertGreaterThan(frames[.release]!.width, 350)
         XCTAssertNil(SubtitleColumn.frames(width: 1760, columns: SubtitleColumn.columns(isEpisode: false))[.episode])
     }
+
+    // MARK: Picking a row
+
+    private final class PickOwner {
+        var got: String?
+        func download(_ c: SubtitleCandidate, context: SubtitleSearchContext) async -> String? {
+            got = "\(c.id)|\(c.release)|\(context.ratingKey)"
+            return nil
+        }
+    }
+
+    /// The row reaches the caller intact. With a plain async closure type, an
+    /// optimized build corrupted it in the conversion from the caller's
+    /// main-actor closure (Living Room crashed on every pick, Debug never did);
+    /// `@MainActor` on the type removes that conversion. Run it with
+    /// `-configuration Release ENABLE_TESTABILITY=YES` to cover the case.
+    func test_pick_passesTheRowIntact() async throws {
+        let owner = PickOwner()
+        let context: SubtitleSearchContext? = SubtitleSearchContext(
+            serverURL: "u", token: "t", ratingKey: "rk42", serverKey: "s", canUsePlex: true, language: "en",
+            fileName: "f.mkv", fileSize: nil, partKey: nil, title: "T", year: nil, imdbID: nil, tmdbID: nil,
+            isEpisode: false, season: nil, episode: nil, showTitle: nil, showImdbID: nil, showTmdbID: nil)
+        let row = candidate("Some.Release-GRP", downloads: 5)
+        let page = SubtitleResultsViewController(results: SubtitleSearchResults(candidates: [row]), heading: "h") {
+            [weak owner] result in
+            guard let owner, let context else { return "Search Failed" }
+            return await owner.download(result, context: context)
+        }
+        page.loadViewIfNeeded()
+        page.collectionView(UICollectionView(frame: .zero, collectionViewLayout: UICollectionViewFlowLayout()),
+                            didSelectItemAt: IndexPath(item: 0, section: 0))
+        for _ in 0..<50 where owner.got == nil { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(owner.got, "Some.Release-GRP|Some.Release-GRP|rk42")
+    }
 }

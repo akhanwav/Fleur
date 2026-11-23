@@ -577,6 +577,11 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
   until Other Episodes; a pack of its season stays. A failed download stays on
   the page with the reason, focus on its row. The page swallows every press,
   so nothing reaches the player or the detail page behind it.
+- **The page's `pick` closure type is `@MainActor`, and must stay so.** As a
+  plain `(SubtitleCandidate) async -> String?`, Release builds corrupted the
+  row while converting the callers' main-actor closures (every pick crashed on
+  Living Room, never in Debug). The regression test only bites in an optimized
+  build: `xcodebuild test -configuration Release ENABLE_TESTABILITY=YES …`.
 - **Match % (`SubtitleMatch`) is Bazarr's idea**: an exact file hash is 100,
   another episode 0, else weighted parts of the release against the file's
   name, filled in from the server's media facts (resolution, codec, frame

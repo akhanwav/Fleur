@@ -301,6 +301,7 @@ enum SubtitleSearch {
     static func install(_ candidate: SubtitleCandidate, context: SubtitleSearchContext, known: Set<Int>,
                         media: @escaping ([PlexMedia]) -> [PlexMedia],
                         stillWanted: @escaping () -> Bool = { true }) async -> SubtitleInstall? {
+        print("[SubtitleSearch] install \(candidate.id) from \(candidate.origin.label), item \(context.ratingKey)")
         switch candidate.payload {
         case .plex(let result):
             return await downloadFromPlex(result, context: context, known: known, media: media, stillWanted: stillWanted)
@@ -356,7 +357,11 @@ enum SubtitleSearch {
     private static func downloadFromPlex(_ result: PlexStream, context: SubtitleSearchContext, known: Set<Int>,
                                          media: @escaping ([PlexMedia]) -> [PlexMedia],
                                          stillWanted: @escaping () -> Bool) async -> SubtitleInstall? {
-        guard let resultKey = result.key else { return .failed("This result can't be downloaded.") }
+        guard let resultKey = result.key else {
+            print("[SubtitleSearch] Plex result \(result.id) has no key: sourceKey=\(result.sourceKey ?? "nil") "
+                  + "provider=\(result.providerTitle ?? "nil") codec=\(result.codec ?? "nil")")
+            return .failed("This result can't be downloaded.")
+        }
         let network = PlexNetworkManager.shared
         let started = Date()
         func log(_ text: String) {

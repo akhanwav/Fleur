@@ -4895,12 +4895,16 @@ final class UniversalPlayerViewModel: ObservableObject {
             media: { [playingMediaID] in VersionRanking.select(playingMediaID.map(VersionChoice.source) ?? .best,
                                                                in: $0).media },
             stillWanted: { [weak self] in generation == self?.itemGeneration })
-        guard generation == itemGeneration, let outcome else { return nil }
+        guard generation == itemGeneration, let outcome else {
+            hideCompatibilityNotice()
+            return nil
+        }
         let added: PlexStream
         switch outcome {
         case .failed(let message):
             // The results page shows it, on the row that failed.
             print("[SubtitleSearch] install failed: \(message)")
+            hideCompatibilityNotice()
             return message
         case .plex(let stream, let media):
             metadata.Media = media

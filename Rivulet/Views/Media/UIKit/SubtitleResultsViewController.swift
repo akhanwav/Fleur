@@ -118,7 +118,10 @@ final class SubtitleResultsViewController: UIViewController, UICollectionViewDat
     private let results: SubtitleSearchResults
     private let heading: String
     /// Downloads and selects a result: nil when done, else why it failed.
-    private let pick: (SubtitleCandidate) async -> String?
+    /// `@MainActor` is load-bearing: as a plain async function type, the
+    /// conversion from the callers' main-actor closures corrupted the row in
+    /// Release builds (a crash on every pick; `test_pick_passesTheRowIntact`).
+    private let pick: @MainActor (SubtitleCandidate) async -> String?
     var onDismiss: (() -> Void)?
 
     private var state = SubtitleTableState()
@@ -142,7 +145,7 @@ final class SubtitleResultsViewController: UIViewController, UICollectionViewDat
     private let emptyLabel = UILabel()
 
     init(results: SubtitleSearchResults, heading: String,
-         pick: @escaping (SubtitleCandidate) async -> String?) {
+         pick: @escaping @MainActor (SubtitleCandidate) async -> String?) {
         self.results = results
         self.heading = heading
         self.pick = pick
