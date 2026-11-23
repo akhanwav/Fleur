@@ -4899,8 +4899,8 @@ final class UniversalPlayerViewModel: ObservableObject {
         let added: PlexStream
         switch outcome {
         case .failed(let message):
+            // The results page shows it, on the row that failed.
             print("[SubtitleSearch] install failed: \(message)")
-            showCompatibilityNotice(message)
             return message
         case .plex(let stream, let media):
             metadata.Media = media

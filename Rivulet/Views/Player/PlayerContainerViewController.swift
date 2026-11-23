@@ -1700,51 +1700,34 @@ class PlayerContainerViewController: UIViewController {
             self.subtitleSearchTask = nil
             row?.setTitle("Search for Subtitles")
             guard let vm, let origin, self.activeRailPanel === origin else { return }
-            self.showSubtitleResults(results ?? SubtitleSearchResults(notices: ["Search Failed"]), filter: .all)
+            self.showSubtitleResults(results ?? SubtitleSearchResults(notices: ["Search Failed"]))
         }
     }
 
-    /// The results panel: a source filter on top when more than one source
-    /// was asked ("All (54)", "Plex (4)", …), the results, then a line per
-    /// source that failed. Picking a filter redraws the panel on it; a failed
-    /// download reopens it with the reason on top.
-    private func showSubtitleResults(_ results: SubtitleSearchResults, filter: SubtitleResultFilter,
-                                     failure: String? = nil) {
-        let tabs = SubtitleResultFilter.tabs(for: results.candidates, searched: results.searched)
-        let showsTabs = tabs.count > 2
-        let found = results.candidates.filter(filter.matches)
-        // Row ids: results by index; filters from -100 down; status lines -1.
-        var rows: [CardTrackListView.Row] = []
-        if let failure {
-            rows.append(.init(title: failure, subtitle: nil, trackId: -1, isSelected: false))
+    /// The results as a full page over the paused or playing video
+    /// (`SubtitleResultsViewController`). A pick downloads and selects; a
+    /// failure stays on the page with the reason, and Back closes it.
+    private func showSubtitleResults(_ results: SubtitleSearchResults) {
+        guard let vm = viewModel else { return }
+        activeRailPanel?.dismissPanel()
+        let metadata = vm.metadata
+        var heading = metadata.grandparentTitle ?? metadata.title ?? ""
+        if let s = metadata.parentIndex, let e = metadata.index, metadata.type == "episode" {
+            heading += "  S\(s) · E\(e)"
         }
-        if showsTabs {
-            rows += tabs.enumerated().map { index, tab in
-                .init(title: tab.title, subtitle: nil, trackId: -100 - index, isSelected: tab.filter == filter)
-            }
+        let page = SubtitleResultsViewController(results: results, heading: heading) { [weak vm] result in
+            await vm?.installSubtitle(result)
         }
-        rows += found.isEmpty
-            ? [.init(title: "No Subtitles Found", subtitle: nil, trackId: -1, isSelected: false)]
-            : found.enumerated().map { index, result in
-                .init(title: SubtitleLabels.resultTitle(result), subtitle: SubtitleLabels.resultDetail(result),
-                      trackId: index, isSelected: false)
-            }
-        rows += results.notices.map { .init(title: $0, subtitle: nil, trackId: -1, isSelected: false) }
-        _ = presentRailPanel(
-            content: CardTrackListView(header: "Search Results", rows: rows, onSelect: { [weak self] id in
-                guard let self else { return }
-                if let id, id <= -100, tabs.indices.contains(-100 - id) {
-                    self.showSubtitleResults(results, filter: tabs[-100 - id].filter)
-                    return
-                }
-                self.activeRailPanel?.dismissPanel()
-                guard let id, found.indices.contains(id), let vm = self.viewModel else { return }
-                Task { [weak self] in
-                    guard let failure = await vm.installSubtitle(found[id]) else { return }
-                    self?.showSubtitleResults(results, filter: filter, failure: failure)
-                }
-            }),
-            width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
+        page.onDismiss = { [weak self] in
+            guard let self else { return }
+            self.viewModel?.isRailPanelOpen = self.activeRailPanel != nil || self.descriptionOverlay != nil
+            self.setNeedsFocusUpdate()
+            self.updateFocusIfNeeded()
+        }
+        // Holds the remote's seek path while the page is up, as a panel does.
+        vm.isRailPanelOpen = true
+        vm.showControls = false
+        present(page, animated: true)
     }
 
     // MARK: - Full description

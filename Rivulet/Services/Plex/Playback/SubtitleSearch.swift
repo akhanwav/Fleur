@@ -46,6 +46,22 @@ nonisolated struct SubtitleSearchContext: Sendable {
     let showTitle: String?
     let showImdbID: String?
     let showTmdbID: Int?
+    /// The file's video, from the server: a subtitle's match is scored
+    /// against these where the file's name doesn't say.
+    var frameRate: Double? = nil
+    var resolution: String? = nil
+    var codec: String? = nil
+    var isAnime = false
+
+    /// What the match is scored against: the file's name, filled in from
+    /// the server's media facts.
+    var fileFacts: SubtitleMatch.FileFacts {
+        var release = ReleaseParser.parse(fileName ?? "")
+        release.resolution = release.resolution ?? resolution
+        release.codec = release.codec ?? codec
+        return SubtitleMatch.FileFacts(release: release, frameRate: frameRate ?? release.frameRate,
+                                       season: season, episode: episode, isEpisode: isEpisode)
+    }
 
     var imdbNumber: Int? { Self.number(imdbID) }
     var showImdbNumber: Int? { Self.number(showImdbID) }
@@ -58,6 +74,10 @@ nonisolated struct SubtitleSearchResults: Sendable {
     var notices: [String] = []
     /// The sources this search asked, for the filter's tabs.
     var searched: [SubtitleOrigin] = []
+    /// What each result was scored against; nil when no search ran.
+    var file: SubtitleMatch.FileFacts?
+    var fileName: String?
+    var isAnime = false
 }
 
 /// How a pick ended.
@@ -129,7 +149,10 @@ enum SubtitleSearch {
                                                   includeGuids: true)
         }
         let canUsePlex = await canSearch(serverURL: serverURL, token: token)
-        return SubtitleSearchContext(
+        let video = part?.Stream?.first { $0.streamType == 1 }
+        let genres = Set(item.genreTags + (show?.genreTags ?? []))
+        let japaneseAudio = part?.Stream?.contains { $0.streamType == 2 && ["ja", "jpn"].contains($0.languageCode ?? "") } ?? false
+        var context = SubtitleSearchContext(
             serverURL: serverURL, token: token, ratingKey: ratingKey,
             serverKey: LocalSubtitleStore.serverKey(serverURL: serverURL), canUsePlex: canUsePlex,
             language: language,
@@ -140,6 +163,29 @@ enum SubtitleSearch {
             isEpisode: isEpisode, season: item.parentIndex, episode: item.index,
             showTitle: item.grandparentTitle ?? show?.title,
             showImdbID: show.flatMap(imdb), showTmdbID: show?.tmdbId ?? item.showTmdbId)
+        context.frameRate = video?.frameRate
+        context.resolution = version?.videoResolution.flatMap(Self.resolution)
+        context.codec = version?.videoCodec.flatMap(Self.codec)
+        context.isAnime = genres.contains("anime") || (genres.contains("animation") && japaneseAudio)
+        return context
+    }
+
+    /// Plex's "1080", "4k", "sd" as a release name writes it.
+    nonisolated static func resolution(_ plex: String) -> String? {
+        switch plex.lowercased() {
+        case "4k", "2160": "2160p"
+        case "1080", "720", "576", "480": "\(plex)p"
+        default: nil
+        }
+    }
+
+    nonisolated static func codec(_ plex: String) -> String? {
+        switch plex.lowercased() {
+        case "h264", "avc": "H.264"
+        case "hevc", "h265": "H.265"
+        case "av1": "AV1"
+        default: nil
+        }
     }
 
     private static func imdb(_ item: PlexMetadata) -> String? {
@@ -159,7 +205,19 @@ enum SubtitleSearch {
             results.notices += part.notices
             results.searched += part.searched
         }
-        results.candidates = SubtitleRanking.sorted(results.candidates, fileName: context.fileName)
+        let facts = context.fileFacts
+        results.file = facts
+        results.fileName = context.fileName
+        results.isAnime = context.isAnime
+        results.candidates = SubtitleSort.sorted(results.candidates.map { candidate in
+            var scored = candidate
+            let info = candidate.info
+            scored.matchPercent = SubtitleMatch.percent(info, frameRate: candidate.frameRate, season: candidate.season,
+                                                        episode: candidate.episode, isHashMatch: candidate.isHashMatch,
+                                                        file: facts)
+            scored.matchKind = SubtitleMatch.kind(info, isHashMatch: candidate.isHashMatch, file: facts)
+            return scored
+        })
         print("[SubtitleSearch] \(results.candidates.count) results "
               + "(\(results.candidates.filter(\.isHashMatch).count) exact), notices: \(results.notices)")
         return results
@@ -178,7 +236,7 @@ enum SubtitleSearch {
                     release: stream.title ?? stream.displayTitle ?? "",
                     language: stream.languageTag ?? stream.languageCode, isHearingImpaired: stream.hearingImpaired ?? false,
                     isForced: stream.forced ?? false, downloads: nil, rating: nil, isHashMatch: false,
-                    payload: .plex(stream))
+                    payload: .plex(stream), format: stream.codec)
             }, searched: searched)
         } catch {
             return SubtitleSearchResults(notices: ["Plex search failed."], searched: searched)

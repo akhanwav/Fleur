@@ -567,11 +567,24 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
     stream whose key is a `file:` URL, after the server's own, so `TrackMerge`
     pairs it by order like any sidecar. Its stream id (from 1,900,000,000) is
     never sent to Plex. Only the aether route can draw one.
-- **Search results filter by source** (`SubtitleResultFilter`: All, Plex,
-  OpenSubtitles, SubSource, each with its count), shown once two sources were
-  asked. On the detail page the filter rows are `keepsOpen` actions that
-  redraw the popup in place; a failed download reopens the results on the
-  failed row, the reason in the header.
+- **Results are a full page, `SubtitleResultsViewController`**, the same on
+  the detail page and in the player: a row per result with the release read
+  into columns (`ReleaseParser`: group, source, resolution, codec, service,
+  episode or season pack, SDH, forced, Signs & Songs, Dubtitles), filters for
+  source, language and type, and Match %, Match, Downloads and Rating as
+  sortable headers. For an episode, results for another episode are hidden
+  until Other Episodes; a pack of its season stays. A failed download stays on
+  the page with the reason, focus on its row. The page swallows every press,
+  so nothing reaches the player or the detail page behind it.
+- **Match % (`SubtitleMatch`) is Bazarr's idea**: an exact file hash is 100,
+  another episode 0, else weighted parts of the release against the file's
+  name, filled in from the server's media facts (resolution, codec, frame
+  rate): release group 30 and source 18 weigh most, since timing follows the
+  release; title 30 is the floor; service 7 (web files only), edition 5,
+  frame rate 5 (only when the source gives one, OpenSubtitles' `fps`),
+  resolution 3, codec 2. A part the file's name lacks still counts against
+  the total, so a renamed file scores low rather than everything at 99. No
+  source gives a subtitle's duration. Tune the weights, not per-title cases.
 - **A `TileMenuPopupViewController` must always hold focus.** With no enabled
   row, focus stays on the page behind, which the popup won't let it leave,
   and Menu goes to that page, not the popup: nothing responds. The popup's

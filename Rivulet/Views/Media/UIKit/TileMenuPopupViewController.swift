@@ -44,9 +44,6 @@ struct TileMenuAction {
     /// Names the row across `update(sections:)`, so focus stays on it while
     /// its title changes. nil falls back to the title.
     var id: String? = nil
-    /// Runs without closing the menu (a filter that redraws the rows through
-    /// `update(sections:)`).
-    var keepsOpen: Bool = false
     let handler: () -> Void
 }
 
@@ -537,7 +534,6 @@ private final class MenuRowButton: UIView {
 
     private let iconView = UIImageView()
     private let labelView = UILabel()
-    private var keepsOpen: Bool
     private var destructive: Bool
     private let onPress: (@escaping () -> Void) -> Void
     private var handler: () -> Void
@@ -550,7 +546,6 @@ private final class MenuRowButton: UIView {
 
     init(action: TileMenuAction, onPress: @escaping (@escaping () -> Void) -> Void) {
         self.destructive = action.destructive
-        self.keepsOpen = action.keepsOpen
         self.isEnabled = action.isEnabled
         self.title = action.title
         self.key = action.id ?? action.title
@@ -594,15 +589,11 @@ private final class MenuRowButton: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func pressed() {
-        guard isEnabled else { return }
-        if keepsOpen { handler() } else { onPress(handler) }
-    }
+    @objc private func pressed() { onPress(handler) }
 
     /// Show `action` instead, in place (`TileMenuPopupViewController.update`).
     func apply(_ action: TileMenuAction) {
         destructive = action.destructive
-        keepsOpen = action.keepsOpen
         isEnabled = action.isEnabled
         title = action.title
         key = action.id ?? action.title

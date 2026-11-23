@@ -64,24 +64,74 @@ nonisolated struct SubtitleCandidate: Identifiable, Sendable {
     /// The source matched the file's OpenSubtitles hash: made for this exact release.
     let isHashMatch: Bool
     let payload: Payload
+    /// "srt", "ass", where the source says (OpenSubtitles sends SRT).
+    var format: String? = nil
+    /// The source's own season and episode, else the release name's.
+    var season: Int? = nil
+    var episode: Int? = nil
+    /// The source's frame rate, where it gives one (OpenSubtitles' `fps`).
+    var frameRate: Double? = nil
+    /// Set by `SubtitleSearch.search` against the file (`SubtitleMatch`).
+    var matchPercent: Int = 0
+    var matchKind: SubtitleMatchKind = .title
+    /// The source marks it dub-matched (SubSource's commentary).
+    var isDubtitle = false
+
+    var info: ReleaseInfo { ReleaseParser.parse(release) }
+
+    /// The Type column: the source's flags, then what the release name says.
+    var kind: SubtitleKind {
+        let info = info
+        if isForced || info.isForced { return .forced }
+        if info.isSignsAndSongs { return .signsAndSongs }
+        if isDubtitle || info.isDubtitle { return .dubtitle }
+        if isHearingImpaired || info.isHearingImpaired { return .sdh }
+        return .full
+    }
 }
 
-/// Best match first: exact file-hash matches, then release names that match
-/// the file's, then download count, then rating.
-nonisolated enum SubtitleRanking {
-    static func sorted(_ candidates: [SubtitleCandidate], fileName: String?) -> [SubtitleCandidate] {
-        let scored = candidates.enumerated().map { offset, candidate in
-            (candidate, releaseScore(candidate.release, fileName: fileName ?? ""), offset)
-        }
-        return scored.sorted { a, b in
-            if a.0.isHashMatch != b.0.isHashMatch { return a.0.isHashMatch }
-            if a.1 != b.1 { return a.1 > b.1 }
-            if (a.0.downloads ?? -1) != (b.0.downloads ?? -1) { return (a.0.downloads ?? -1) > (b.0.downloads ?? -1) }
-            if (a.0.rating ?? -1) != (b.0.rating ?? -1) { return (a.0.rating ?? -1) > (b.0.rating ?? -1) }
-            return a.2 < b.2
-        }.map(\.0)
-    }
+nonisolated enum SubtitleKind: Int, CaseIterable, Sendable {
+    case full, sdh, forced, signsAndSongs, dubtitle
 
+    /// Anime names its plain subtitles "Subtitles", beside "Dubtitles"
+    /// (subtitles matched to the English dub).
+    func label(isAnime: Bool) -> String {
+        switch self {
+        case .full: isAnime ? "Subtitles" : "Full"
+        case .sdh: "SDH"
+        case .forced: "Forced"
+        case .signsAndSongs: "Signs & Songs"
+        case .dubtitle: "Dubtitles"
+        }
+    }
+}
+
+/// The table's sort orders. Match % is the default; each falls through to
+/// the others, then the sources' own order.
+nonisolated enum SubtitleSort: Sendable, CaseIterable {
+    case percent, match, downloads, rating
+
+    static func sorted(_ candidates: [SubtitleCandidate], by sort: SubtitleSort = .percent) -> [SubtitleCandidate] {
+        func keys(_ c: SubtitleCandidate) -> [Double] {
+            let percent = Double(c.matchPercent), kind = Double(c.matchKind.rawValue)
+            let downloads = Double(c.downloads ?? -1), rating = c.rating ?? -1
+            switch sort {
+            case .percent: return [percent, kind, downloads, rating]
+            case .match: return [kind, percent, downloads, rating]
+            case .downloads: return [downloads, percent, rating]
+            case .rating: return [rating, percent, downloads]
+            }
+        }
+        return candidates.enumerated().sorted { a, b in
+            let x = keys(a.element), y = keys(b.element)
+            return x != y ? x.lexicographicallyPrecedes(y, by: >) : a.offset < b.offset
+        }.map(\.element)
+    }
+}
+
+/// How alike a release name is to the file's, used to pick which of a
+/// SubSource entry's release names to show.
+nonisolated enum SubtitleRanking {
     /// How much of a release name agrees with the file's, in steps of 0.1 so
     /// near-equal names fall through to downloads: shared tokens over all of
     /// them, plus the release group (the token after the last "-") when it is

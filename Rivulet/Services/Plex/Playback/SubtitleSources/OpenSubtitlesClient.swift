@@ -152,7 +152,9 @@ actor OpenSubtitlesClient {
                   let fileID = (file["file_id"] as? NSNumber)?.intValue else { return nil }
             let release = (attributes["release"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 ?? (file["file_name"] as? String) ?? ""
-            return SubtitleCandidate(
+            let feature = attributes["feature_details"] as? [String: Any]
+            let fps = (attributes["fps"] as? NSNumber)?.doubleValue
+            var candidate = SubtitleCandidate(
                 id: "os:\(fileID)", origin: .openSubtitles, release: release,
                 language: attributes["language"] as? String,
                 isHearingImpaired: attributes["hearing_impaired"] as? Bool ?? false,
@@ -161,6 +163,12 @@ actor OpenSubtitlesClient {
                 rating: (attributes["ratings"] as? NSNumber)?.doubleValue,
                 isHashMatch: attributes["moviehash_match"] as? Bool ?? false,
                 payload: .openSubtitles(fileID: fileID))
+            // Downloads are asked for as SRT.
+            candidate.format = "srt"
+            candidate.season = (feature?["season_number"] as? NSNumber)?.intValue
+            candidate.episode = (feature?["episode_number"] as? NSNumber)?.intValue
+            if let fps, fps > 0 { candidate.frameRate = fps }
+            return candidate
         }
     }
 

@@ -14,16 +14,84 @@ final class SubtitleSourcesTests: XCTestCase {
 
     // MARK: Ranking
 
-    func test_ranking_hashMatchFirst_thenRelease_thenDownloads_thenRating() {
-        let file = "Shivers.1975.720p.BluRay.x264-AMIABLE.mkv"
-        let ranked = SubtitleRanking.sorted([
-            candidate("Shivers 1975 DVDRip", downloads: 90_000),
-            candidate("Shivers.1975.720p.BluRay.x264-AMIABLE", downloads: 10),
-            candidate("Something.Else", hash: true),
-            candidate("Shivers 1975 DVDRip.", downloads: 90_000, rating: 9),
-        ], fileName: file).map(\.release)
-        XCTAssertEqual(ranked, ["Something.Else", "Shivers.1975.720p.BluRay.x264-AMIABLE",
-                                "Shivers 1975 DVDRip.", "Shivers 1975 DVDRip"])
+    func test_sort_byPercent_thenDownloads_andByColumn() {
+        func scored(_ name: String, _ percent: Int, downloads: Int? = nil, rating: Double? = nil) -> SubtitleCandidate {
+            var c = candidate(name, downloads: downloads, rating: rating)
+            c.matchPercent = percent
+            return c
+        }
+        let list = [scored("a", 40, downloads: 900), scored("b", 95, downloads: 1), scored("c", 40, downloads: 5, rating: 9)]
+        XCTAssertEqual(SubtitleSort.sorted(list).map(\.release), ["b", "a", "c"])
+        XCTAssertEqual(SubtitleSort.sorted(list, by: .downloads).map(\.release), ["a", "c", "b"])
+        XCTAssertEqual(SubtitleSort.sorted(list, by: .rating).map(\.release), ["c", "b", "a"])
+    }
+
+    // MARK: Release names
+
+    func test_parse_sceneEpisode() {
+        let i = ReleaseParser.parse("Chainsaw.Man.S01E01.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG.mkv")
+        XCTAssertEqual(i.season, 1); XCTAssertEqual(i.episode, 1)
+        XCTAssertEqual(i.source, "WEB-DL"); XCTAssertEqual(i.service, "CR")
+        XCTAssertEqual(i.resolution, "1080p"); XCTAssertEqual(i.codec, "H.264")
+        XCTAssertEqual(i.group, "VARYG")
+        XCTAssertEqual(i.cleanName, "VARYG · CR WEB-DL · 1080p")
+    }
+
+    func test_parse_animeGroupInBrackets_absoluteEpisode() {
+        let i = ReleaseParser.parse("[SubsPlease] Chainsaw Man - 01 (1080p) [A1B2C3D4].mkv")
+        XCTAssertEqual(i.group, "SubsPlease"); XCTAssertNil(i.season); XCTAssertEqual(i.episode, 1)
+        XCTAssertEqual(i.resolution, "1080p")
+    }
+
+    func test_parse_seasonPack_andKinds() {
+        let pack = ReleaseParser.parse("Chainsaw.Man.S01.1080p.BluRay.x265-Group")
+        XCTAssertTrue(pack.isSeasonPack); XCTAssertEqual(pack.season, 1); XCTAssertNil(pack.episode)
+        XCTAssertEqual(pack.source, "BluRay"); XCTAssertEqual(pack.codec, "H.265")
+        XCTAssertTrue(ReleaseParser.parse("Show.S01E01.Signs.and.Songs").isSignsAndSongs)
+        XCTAssertTrue(ReleaseParser.parse("Show S01E01 Dubtitles").isDubtitle)
+        XCTAssertTrue(ReleaseParser.parse("Movie.2020.1080p.WEB.SDH").isHearingImpaired)
+        XCTAssertNil(ReleaseParser.parse("Movie.2020.1080p.WEB-DL.DD5.1").group)
+        XCTAssertTrue(ReleaseParser.parse("Chainsaw Man Ep 1-12").isSeasonPack)
+        XCTAssertEqual(ReleaseParser.parse("Chainsaw Man Ep02").episode, 2)
+        XCTAssertEqual(ReleaseParser.parse("Chainsaw.Man.S01E01.(480p-720p-1080p).[SubsPlease]").group, "SubsPlease")
+        let cr = ReleaseParser.parse("[CR] Chainsaw Man S01E01 DOG & CHAINSAW.en-US")
+        XCTAssertEqual(cr.service, "CR"); XCTAssertNil(cr.group)
+        XCTAssertEqual(ReleaseParser.parse("Chainsaw Man (2022) - S01E01.001 - DOG [Bluray-1080p Remux][AVC]-E.N.D.mkv").group, "E.N.D")
+    }
+
+    // MARK: Match %
+
+    private let file = SubtitleMatch.FileFacts(
+        release: ReleaseParser.parse("Chainsaw.Man.S01E01.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG.mkv"),
+        frameRate: 23.976, season: 1, episode: 1, isEpisode: true)
+
+    private func percent(_ name: String, season: Int? = nil, episode: Int? = nil, fps: Double? = nil,
+                         hash: Bool = false) -> Int {
+        SubtitleMatch.percent(ReleaseParser.parse(name), frameRate: fps, season: season, episode: episode,
+                              isHashMatch: hash, file: file)
+    }
+
+    func test_percent_hashIs100_wrongEpisodeIs0_packCounts() {
+        XCTAssertEqual(percent("anything", hash: true), 100)
+        XCTAssertEqual(percent("Chainsaw.Man.S01E02.1080p.CR.WEB-DL.H.264-VARYG"), 0)
+        XCTAssertEqual(percent("Chainsaw.Man.S02E01.1080p.WEB-DL-VARYG"), 0)
+        XCTAssertGreaterThan(percent("Chainsaw.Man.S01.1080p.CR.WEB-DL.H.264-VARYG"), 0)
+    }
+
+    func test_percent_groupAndSourceWeighMost() {
+        let same = percent("Chainsaw.Man.S01E01.1080p.CR.WEB-DL.AAC2.0.H.264-VARYG", fps: 23.976)
+        let otherResolution = percent("Chainsaw.Man.S01E01.720p.CR.WEB-DL.H.265-VARYG")
+        let otherGroup = percent("Chainsaw.Man.S01E01.1080p.CR.WEB-DL.H.264-SubsPlease")
+        let bluray = percent("Chainsaw.Man.S01E01.1080p.BluRay.H.264-VARYG")
+        XCTAssertEqual(same, 99)
+        XCTAssertGreaterThanOrEqual(otherResolution, 90)
+        XCTAssertLessThan(otherGroup, 75)
+        XCTAssertLessThan(bluray, otherResolution)
+        XCTAssertLessThan(percent("Chainsaw Man 01"), 40)
+        XCTAssertEqual(SubtitleMatch.kind(ReleaseParser.parse("Chainsaw.Man.S01E01.720p.WEB-VARYG"),
+                                          isHashMatch: false, file: file), .release)
+        XCTAssertEqual(SubtitleMatch.kind(ReleaseParser.parse("Chainsaw.Man.S01E01.BluRay-VARYG"),
+                                          isHashMatch: false, file: file), .title)
     }
 
     func test_releaseScore_groupMatchCountsExtra() {
@@ -200,5 +268,41 @@ final class SubtitleSourcesTests: XCTestCase {
         XCTAssertTrue(url.path.contains("/Library/Caches/Subtitles/"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
         try? FileManager.default.removeItem(at: url)
+    }
+
+    // MARK: Table
+
+    func test_table_hidesOtherEpisodes_untilAsked_andFilters() {
+        func c(_ name: String, origin: SubtitleOrigin = .openSubtitles, language: String = "en", hi: Bool = false) -> SubtitleCandidate {
+            SubtitleCandidate(id: name, origin: origin, release: name, language: language, isHearingImpaired: hi,
+                              isForced: false, downloads: nil, rating: nil, isHashMatch: false,
+                              payload: .openSubtitles(fileID: 1))
+        }
+        let list = [c("Chainsaw.Man.S01E01.WEB-VARYG"), c("Chainsaw.Man.S01E02.WEB-VARYG"),
+                    c("Chainsaw.Man.S01.BluRay-X", origin: .subSource), c("Chainsaw Man Ep01", language: "es", hi: true)]
+        var state = SubtitleTableState()
+        XCTAssertEqual(state.rows(list, file: file).map(\.id).sorted(),
+                       ["Chainsaw Man Ep01", "Chainsaw.Man.S01.BluRay-X", "Chainsaw.Man.S01E01.WEB-VARYG"])
+        state.showsOtherEpisodes = true
+        XCTAssertEqual(state.rows(list, file: file).count, 4)
+        state.language = "es"
+        XCTAssertEqual(state.rows(list, file: file).map(\.id), ["Chainsaw Man Ep01"])
+        state.language = nil
+        state.kind = .sdh
+        XCTAssertEqual(state.rows(list, file: file).map(\.id), ["Chainsaw Man Ep01"])
+        state.kind = nil
+        state.source = .source(.subSource)
+        XCTAssertEqual(state.rows(list, file: file).map(\.id), ["Chainsaw.Man.S01.BluRay-X"])
+        // A movie hides nothing.
+        XCTAssertEqual(SubtitleTableState(showsOtherEpisodes: false).rows(list, file: nil).count, 4)
+    }
+
+    func test_columns_fillTheRow() {
+        let columns = SubtitleColumn.columns(isEpisode: true)
+        let frames = SubtitleColumn.frames(width: 1760, columns: columns)
+        let last = frames[.percent]!
+        XCTAssertEqual(last.x + last.width, 1760 - SubtitleColumn.rowPadding, accuracy: 0.5)
+        XCTAssertGreaterThan(frames[.release]!.width, 350)
+        XCTAssertNil(SubtitleColumn.frames(width: 1760, columns: SubtitleColumn.columns(isEpisode: false))[.episode])
     }
 }

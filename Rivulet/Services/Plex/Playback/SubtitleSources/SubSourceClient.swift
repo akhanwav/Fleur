@@ -106,11 +106,12 @@ actor SubSourceClient {
             guard let id = Self.string(item["subtitleId"] ?? item["id"]) else { return nil }
             let releases: [String] = (item["releaseInfo"] as? [String])
                 ?? (item["releaseInfo"] as? String).map { [$0] } ?? []
-            let release = releases.max { SubtitleRanking.releaseScore($0, fileName: context.fileName ?? "")
-                < SubtitleRanking.releaseScore($1, fileName: context.fileName ?? "") } ?? ""
+            let release = (releases.max { SubtitleRanking.releaseScore($0, fileName: context.fileName ?? "")
+                < SubtitleRanking.releaseScore($1, fileName: context.fileName ?? "") } ?? "")
+                .replacingOccurrences(of: "&amp;", with: "&")
             let downloads = ["downloads", "downloadCount", "download_count"].lazy
                 .compactMap { (item[$0] as? NSNumber)?.intValue }.first
-            return SubtitleCandidate(
+            var candidate = SubtitleCandidate(
                 id: "ss:\(id)", origin: .subSource, release: release,
                 language: context.language,
                 isHearingImpaired: item["hearingImpaired"] as? Bool ?? false,
@@ -118,6 +119,15 @@ actor SubSourceClient {
                 downloads: downloads, rating: Self.rating(item["rating"]),
                 isHashMatch: false,
                 payload: .subSource(subtitleID: id))
+            let season = ["season", "seasonNumber"].lazy.compactMap { (item[$0] as? NSNumber)?.intValue }.first
+            let episode = ["episode", "episodeNumber"].lazy.compactMap { (item[$0] as? NSNumber)?.intValue }.first
+            candidate.season = season
+            candidate.episode = episode
+            // Only a word naming a kind of subtitle is worth reading from the commentary.
+            if let note = item["commentary"] as? String, ReleaseParser.parse(note).isDubtitle {
+                candidate.isDubtitle = true
+            }
+            return candidate
         }
     }
 

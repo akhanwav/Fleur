@@ -1010,11 +1010,10 @@ final class MediaDetailChromeView: UIView {
     }
 
     @discardableResult
-    private func present(_ sections: [[TileMenuAction]], title: String, detail: String? = nil, focusing key: String?,
+    private func present(_ sections: [[TileMenuAction]], title: String, focusing key: String?,
                          from button: UIView?, host: UIViewController) -> TileMenuPopupViewController {
         let frame = button.map { $0.convert($0.bounds, to: nil) }
-        let popup = TileMenuPopupViewController(sections: sections, sourceFrame: frame,
-                                                header: TileMenuHeader(title: title, detail: detail))
+        let popup = TileMenuPopupViewController(sections: sections, sourceFrame: frame, header: TileMenuHeader(title: title))
         popup.initialFocusKey = key
         host.topmostPresented.present(popup, animated: false)
         return popup
@@ -1034,131 +1033,65 @@ final class MediaDetailChromeView: UIView {
         Task { _ = await SubtitleSearch.canSearch(serverURL: server.serverURL, token: server.authToken) }
     }
 
-    /// The last search's results, kept so a failed download reopens them.
-    private struct SubtitleResultsState {
-        let results: SubtitleSearchResults
-        let context: SubtitleSearchContext?
-        let target: TrackTarget
-        let server: PlexProvider
-        var filter: SubtitleResultFilter = .all
-    }
-
-    private weak var subtitleResultsPopup: TileMenuPopupViewController?
-
     /// The button says "Searching…" while the sources look; the results
-    /// then open as their own picker, sized to them.
+    /// then open as a full page (`SubtitleResultsViewController`). A failed
+    /// download says why on that page, focus stays on the row, and Back
+    /// closes it.
     private func searchSubtitles(target: TrackTarget, from button: UIView?) {
         guard let server = Self.server(for: target) else { return }
         let ratingKey = target.playable.ref.itemID
         subtitlesButton?.focusCaption = "Searching…"
-        Task { @MainActor [weak self, weak button] in
+        Task { @MainActor [weak self] in
             let context = try? await SubtitleSearch.context(serverURL: server.serverURL, token: server.authToken,
                                                             ratingKey: ratingKey, mediaID: target.source.id)
             var results = SubtitleSearchResults(notices: ["Search Failed"])
             if let context { results = await SubtitleSearch.search(context) }
-            guard let self else { return }
+            guard let self, let host = self.hostViewController else { return }
             self.refreshTrackButtons()
-            self.presentSubtitleResults(
-                SubtitleResultsState(results: results, context: context, target: target, server: server),
-                from: button ?? self.subtitlesButton)
+            let item = target.playable
+            var heading = item.title
+            if let s = item.seasonNumber, let e = item.episodeNumber { heading = "S\(s) · E\(e)  \(heading)" }
+            let page = SubtitleResultsViewController(results: results, heading: heading) { [weak self] result in
+                guard let self, let context else { return "Search Failed" }
+                return await self.downloadSubtitle(result, context: context, target: target, server: server)
+            }
+            page.onDismiss = { [weak self] in self?.refreshTrackButtons() }
+            host.topmostPresented.present(page, animated: true)
         }
-    }
-
-    /// The results picker: a source filter on top when more than one source
-    /// was asked ("All (54)", "Plex (4)", …; picking one redraws the rows in
-    /// place), then the results, then a line per source that failed. After a
-    /// failed download it opens again on the row that failed, the reason in
-    /// its header; Back closes it either way.
-    private func presentSubtitleResults(_ state: SubtitleResultsState, failure: String? = nil,
-                                        focusing key: String? = nil, from button: UIView?) {
-        guard let host = hostViewController else { return }
-        let popup = present(subtitleResultSections(state), title: "Search Results", detail: failure,
-                            focusing: key ?? "filter:all", from: button, host: host)
-        subtitleResultsPopup = popup
-    }
-
-    private static func filterID(_ filter: SubtitleResultFilter) -> String {
-        switch filter {
-        case .all: "filter:all"
-        case .source(let origin): "filter:\(origin.rawValue)"
-        }
-    }
-
-    private func subtitleResultSections(_ state: SubtitleResultsState) -> [[TileMenuAction]] {
-        let candidates = state.results.candidates
-        var sections: [[TileMenuAction]] = []
-        let tabs = SubtitleResultFilter.tabs(for: candidates, searched: state.results.searched)
-        if tabs.count > 2 {
-            sections.append(tabs.map { tab in
-                TileMenuAction(title: tab.title,
-                               systemImage: tab.filter == state.filter ? "checkmark.circle.fill" : "circle",
-                               id: Self.filterID(tab.filter), keepsOpen: true) { [weak self] in
-                    guard let self else { return }
-                    var next = state
-                    next.filter = tab.filter
-                    self.subtitleResultsPopup?.update(sections: self.subtitleResultSections(next))
-                }
-            })
-        }
-        let shown = candidates.filter(state.filter.matches)
-        sections.append(shown.isEmpty
-            ? [TileMenuAction(title: "No Subtitles Found", systemImage: "xmark.circle", isEnabled: false, id: "none") {}]
-            : shown.map { result in
-                TileMenuAction(title: [SubtitleLabels.resultTitle(result), SubtitleLabels.resultDetail(result)]
-                                .joined(separator: " · "),
-                               systemImage: result.isHashMatch ? "checkmark.seal" : "arrow.down.circle",
-                               id: "result:\(result.id)") { [weak self] in
-                    self?.downloadSubtitle(result, state: state)
-                }
-            })
-        let notices = state.results.notices.enumerated().map { index, notice in
-            TileMenuAction(title: notice, systemImage: "exclamationmark.circle", isEnabled: false,
-                           id: "notice:\(index)") {}
-        }
-        if !notices.isEmpty { sections.append(notices) }
-        return sections
     }
 
     /// Fetches the pick, then lists it in the picker and selects it for the
     /// next play: the title's own subtitle choice, by its title among tracks
     /// of the same shape, and for a server's file Plex's per-file selection.
-    /// A failure reopens the results with the reason.
-    private func downloadSubtitle(_ result: SubtitleCandidate, state: SubtitleResultsState) {
-        guard let context = state.context else { return }
-        let target = state.target, server = state.server
+    /// Returns why it failed, nil otherwise.
+    private func downloadSubtitle(_ result: SubtitleCandidate, context: SubtitleSearchContext,
+                                  target: TrackTarget, server: PlexProvider) async -> String? {
         let sourceID = target.source.id
-        subtitlesButton?.focusCaption = "Downloading…"
-        Task { @MainActor [weak self] in
-            let known = Set(target.source.subtitleTracks.compactMap { Int($0.id) })
-            let outcome = await SubtitleSearch.install(
-                result, context: context, known: known,
-                media: { media in media.filter { String($0.id) == sourceID } })
-            guard let self else { return }
-            let track: SubtitleTrack?
-            switch outcome {
-            case .failed(let message)?:
-                self.refreshTrackButtons()
-                self.presentSubtitleResults(state, failure: message, focusing: "result:\(result.id)",
-                                            from: self.subtitlesButton)
-                return
-            case .plex(let stream, _)?:
-                try? await server.setSelectedSubtitleTrack(String(stream.id), source: sourceID, of: target.playable.ref)
-                track = PlexMediaMapper.subtitleTrack(stream)
-                if let detail = try? await server.fullDetail(for: target.playable.ref),
-                   let source = detail.mediaSources.first(where: { $0.id == sourceID }) {
-                    self.refreshedSources[sourceID] = source
-                }
-            case .local(let stored)?:
-                track = LocalSubtitleStore.subtitleTrack(stored)
-            case nil:
-                self.refreshTrackButtons()
-                return
+        let known = Set(target.source.subtitleTracks.compactMap { Int($0.id) })
+        let outcome = await SubtitleSearch.install(
+            result, context: context, known: known,
+            media: { media in media.filter { String($0.id) == sourceID } })
+        let track: SubtitleTrack?
+        switch outcome {
+        case .failed(let message)?:
+            return message
+        case .plex(let stream, _)?:
+            try? await server.setSelectedSubtitleTrack(String(stream.id), source: sourceID, of: target.playable.ref)
+            track = PlexMediaMapper.subtitleTrack(stream)
+            if let detail = try? await server.fullDetail(for: target.playable.ref),
+               let source = detail.mediaSources.first(where: { $0.id == sourceID }) {
+                refreshedSources[sourceID] = source
             }
-            if let key = self.trackChoiceKey, let track {
-                TitleTrackChoices.setSubtitle(SubtitleIntent(from: track), title: track.extendedTitle, for: key)
-            }
-            self.refreshTrackButtons()
+        case .local(let stored)?:
+            track = LocalSubtitleStore.subtitleTrack(stored)
+        case nil:
+            return nil
         }
+        if let key = trackChoiceKey, let track {
+            TitleTrackChoices.setSubtitle(SubtitleIntent(from: track), title: track.extendedTitle, for: key)
+        }
+        refreshTrackButtons()
+        return nil
     }
 
     /// Kept for the title, and sent to Plex for this file so other clients
