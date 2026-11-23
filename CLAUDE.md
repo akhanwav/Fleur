@@ -571,7 +571,8 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
   the detail page and in the player: a row per result with the release read
   into columns (`ReleaseParser`: group, source, resolution, codec, service,
   episode or season pack, SDH, forced, Signs & Songs, Dubtitles), filters for
-  source, language and type, and Match %, Match, Downloads and Rating as
+  source, language and type (SDH is its own column and filter choice: a forced
+  or dub track can be SDH too; no Format column, nearly every result is SRT), and Match %, Match, Downloads and Rating as
   sortable headers. For an episode, results for another episode are hidden
   until Other Episodes; a pack of its season stays. A failed download stays on
   the page with the reason, focus on its row. The page swallows every press,

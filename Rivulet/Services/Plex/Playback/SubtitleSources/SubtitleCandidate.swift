@@ -80,25 +80,27 @@ nonisolated struct SubtitleCandidate: Identifiable, Sendable {
     var info: ReleaseInfo { ReleaseParser.parse(release) }
 
     /// The Type column: the source's flags, then what the release name says.
+    /// SDH is its own column: a forced or dub track can be SDH too.
     var kind: SubtitleKind {
         let info = info
         if isForced || info.isForced { return .forced }
         if info.isSignsAndSongs { return .signsAndSongs }
         if isDubtitle || info.isDubtitle { return .dubtitle }
-        if isHearingImpaired || info.isHearingImpaired { return .sdh }
         return .full
     }
+
+    /// The SDH column: the source's flag, or the release name saying so.
+    var isSDH: Bool { isHearingImpaired || info.isHearingImpaired }
 }
 
 nonisolated enum SubtitleKind: Int, CaseIterable, Sendable {
-    case full, sdh, forced, signsAndSongs, dubtitle
+    case full, forced, signsAndSongs, dubtitle
 
     /// Anime names its plain subtitles "Subtitles", beside "Dubtitles"
     /// (subtitles matched to the English dub).
     func label(isAnime: Bool) -> String {
         switch self {
         case .full: isAnime ? "Subtitles" : "Full"
-        case .sdh: "SDH"
         case .forced: "Forced"
         case .signsAndSongs: "Signs & Songs"
         case .dubtitle: "Dubtitles"

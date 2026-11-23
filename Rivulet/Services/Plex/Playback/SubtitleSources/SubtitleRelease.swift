@@ -157,7 +157,9 @@ nonisolated enum ReleaseParser {
         }
 
         // Kind.
-        info.isHearingImpaired = !wordSet.isDisjoint(with: ["sdh", "hi", "cc"]) || lower.contains("hearing impaired")
+        // "SDH", "HI", "CC", "[HI]", "Hearing.Impaired", "hearing-impaired", "eng.hi.srt".
+        info.isHearingImpaired = !wordSet.isDisjoint(with: ["sdh", "hi", "cc", "hoh"])
+            || lower.replacingOccurrences(of: "[._-]", with: " ", options: .regularExpression).contains("hearing impaired")
         info.isForced = wordSet.contains("forced") || lower.contains("foreign parts")
         info.isSignsAndSongs = lower.contains("signs") || lower.contains("s&s") || lower.contains("songs")
         info.isDubtitle = lower.contains("dubtitle") || lower.contains("dub-matched") || lower.contains("dubmatched")

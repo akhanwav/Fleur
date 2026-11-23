@@ -17,6 +17,8 @@ struct SubtitleTableState {
     /// nil: every language.
     var language: String?
     var kind: SubtitleKind?
+    /// nil: either; true: SDH only; false: no SDH.
+    var sdh: Bool?
     var showsOtherEpisodes = false
     var sort: SubtitleSort = .percent
 
@@ -33,6 +35,7 @@ struct SubtitleTableState {
             source.matches(c)
                 && (language == nil || SubtitleTableState.languageKey(c) == language)
                 && (kind == nil || c.kind == kind)
+                && (sdh == nil || c.isSDH == sdh)
                 && (showsOtherEpisodes || !Self.isOtherEpisode(c, file: file))
         }
         return SubtitleSort.sorted(kept, by: sort)
@@ -46,7 +49,7 @@ struct SubtitleTableState {
 
 /// The table's columns, left to right, and where each one sits in a row.
 enum SubtitleColumn: CaseIterable {
-    case release, episode, language, type, format, source, downloads, rating, match, percent
+    case release, episode, language, type, sdh, source, downloads, rating, match, percent
 
     var title: String {
         switch self {
@@ -54,7 +57,7 @@ enum SubtitleColumn: CaseIterable {
         case .episode: "Episode"
         case .language: "Language"
         case .type: "Type"
-        case .format: "Format"
+        case .sdh: "SDH"
         case .source: "Source"
         case .downloads: "Downloads"
         case .rating: "Rating"
@@ -80,7 +83,7 @@ enum SubtitleColumn: CaseIterable {
         case .episode: 150
         case .language: 150
         case .type: 175
-        case .format: 90
+        case .sdh: 90
         case .source: 180
         case .downloads: 135
         case .rating: 95
@@ -268,7 +271,7 @@ final class SubtitleResultsViewController: UIViewController, UICollectionViewDat
             filterBar.addArrangedSubview(button)
         }
         let kinds = Set(candidates.map(\.kind))
-        if kinds.count > 1 {
+        if kinds.count > 1 || Set(candidates.map(\.isSDH)).count > 1 {
             let button = MusicChrome.pill(title: "Type: All", symbol: "chevron.down")
             button.configuration?.imagePlacement = .trailing
             button.showsMenuAsPrimaryAction = true
@@ -317,20 +320,33 @@ final class SubtitleResultsViewController: UIViewController, UICollectionViewDat
         if let button = typeButton {
             let isAnime = results.isAnime
             let kinds = SubtitleKind.allCases.filter { kind in candidates.contains { $0.kind == kind } }
-            let all = UIAction(title: "All Types", state: state.kind == nil ? .on : .off) { [weak self] _ in
+            let all = UIAction(title: "All Types", state: state.kind == nil && state.sdh == nil ? .on : .off) { [weak self] _ in
                 self?.state.kind = nil
+                self?.state.sdh = nil
                 self?.reload()
             }
-            button.menu = UIMenu(children: [all] + kinds.map { kind in
+            let types: [UIMenuElement] = kinds.count > 1 ? kinds.map { kind in
                 let count = candidates.count { $0.kind == kind }
                 return UIAction(title: "\(kind.label(isAnime: isAnime)) (\(count))",
                                 state: state.kind == kind ? .on : .off) { [weak self] _ in
-                    self?.state.kind = kind
+                    self?.state.kind = self?.state.kind == kind ? nil : kind
                     self?.reload()
                 }
-            })
-            setTitle(button, "Type: " + (state.kind?.label(isAnime: isAnime) ?? "All"))
-            button.isOn = state.kind != nil
+            } : []
+            // SDH crosses the types (a forced or dub track can be SDH), so it is its own choice.
+            let sdhChoices: [UIMenuElement] = Set(candidates.map(\.isSDH)).count > 1 ? [true, false].map { value in
+                let count = candidates.count { $0.isSDH == value }
+                return UIAction(title: "\(value ? "SDH" : "Not SDH") (\(count))",
+                                state: state.sdh == value ? .on : .off) { [weak self] _ in
+                    self?.state.sdh = self?.state.sdh == value ? nil : value
+                    self?.reload()
+                }
+            } : []
+            button.menu = UIMenu(children: [UIMenu(options: .displayInline, children: [all] + types),
+                                            UIMenu(options: .displayInline, children: sdhChoices)])
+            let parts = [state.kind?.label(isAnime: isAnime), state.sdh.map { $0 ? "SDH" : "Not SDH" }].compactMap { $0 }
+            setTitle(button, "Type: " + (parts.isEmpty ? "All" : parts.joined(separator: ", ")))
+            button.isOn = state.kind != nil || state.sdh != nil
         }
         if let button = episodesButton {
             button.configuration?.image = UIImage(systemName: state.showsOtherEpisodes ? "checkmark.square.fill" : "square")
@@ -538,7 +554,7 @@ final class SubtitleResultCell: UICollectionViewCell {
         labels[.episode]?.text = Self.episode(c, info)
         labels[.language]?.text = TrackLabels.languageName(c.language) ?? "—"
         labels[.type]?.text = c.kind.label(isAnime: isAnime)
-        labels[.format]?.text = c.format.map { TrackLabels.subtitleFormat($0) } ?? "—"
+        labels[.sdh]?.text = c.isSDH ? "SDH" : "—"
         labels[.source]?.text = c.origin == .plexSearch ? "Plex" : c.origin.label
         labels[.downloads]?.text = c.downloads.map { $0.formatted(.number) } ?? "—"
         // OpenSubtitles sends 0 for unrated.

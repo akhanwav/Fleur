@@ -50,6 +50,10 @@ final class SubtitleSourcesTests: XCTestCase {
         XCTAssertTrue(ReleaseParser.parse("Show.S01E01.Signs.and.Songs").isSignsAndSongs)
         XCTAssertTrue(ReleaseParser.parse("Show S01E01 Dubtitles").isDubtitle)
         XCTAssertTrue(ReleaseParser.parse("Movie.2020.1080p.WEB.SDH").isHearingImpaired)
+        XCTAssertTrue(ReleaseParser.parse("Movie.2020.1080p.WEB-GRP.eng.HI").isHearingImpaired)
+        XCTAssertTrue(ReleaseParser.parse("Movie [HI] 1080p").isHearingImpaired)
+        XCTAssertTrue(ReleaseParser.parse("Movie.2020.Hearing.Impaired").isHearingImpaired)
+        XCTAssertFalse(ReleaseParser.parse("Movie.2020.1080p.WEB-GRP").isHearingImpaired)
         XCTAssertNil(ReleaseParser.parse("Movie.2020.1080p.WEB-DL.DD5.1").group)
         XCTAssertTrue(ReleaseParser.parse("Chainsaw Man Ep 1-12").isSeasonPack)
         XCTAssertEqual(ReleaseParser.parse("Chainsaw Man Ep02").episode, 2)
@@ -288,9 +292,11 @@ final class SubtitleSourcesTests: XCTestCase {
         state.language = "es"
         XCTAssertEqual(state.rows(list, file: file).map(\.id), ["Chainsaw Man Ep01"])
         state.language = nil
-        state.kind = .sdh
+        state.sdh = true
         XCTAssertEqual(state.rows(list, file: file).map(\.id), ["Chainsaw Man Ep01"])
-        state.kind = nil
+        state.sdh = false
+        XCTAssertEqual(state.rows(list, file: file).count, 3)
+        state.sdh = nil
         state.source = .source(.subSource)
         XCTAssertEqual(state.rows(list, file: file).map(\.id), ["Chainsaw.Man.S01.BluRay-X"])
         // A movie hides nothing.
