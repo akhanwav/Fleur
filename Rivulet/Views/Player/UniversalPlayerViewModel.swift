@@ -541,13 +541,27 @@ final class UniversalPlayerViewModel: ObservableObject {
     private(set) var metadata: PlexMetadata {
         // Subtitles stored on the Apple TV for this title are its tracks too,
         // after the server's own, whichever path replaced the item.
-        didSet { injectLocalSubtitles() }
+        // The assignment must stay here: Swift skips the observer only for an
+        // assignment made in the observer's own body. Made from a method it
+        // calls, it re-enters didSet and recurses until the stack overflows
+        // (the crash at every play start in 9bd887eb).
+        didSet {
+            if let media = mediaWithLocalSubtitles() { metadata.Media = media }
+        }
     }
 
-    private func injectLocalSubtitles() {
-        guard case .plex = source, let media = metadata.Media else { return }
-        metadata.Media = LocalSubtitleStore.injecting(
+    /// `metadata`'s versions with this title's stored subtitles listed, nil
+    /// when that changes nothing.
+    private func mediaWithLocalSubtitles() -> [PlexMedia]? {
+        guard case .plex = source, let media = metadata.Media else { return nil }
+        let injected = LocalSubtitleStore.injecting(
             into: media, server: LocalSubtitleStore.serverKey(serverURL: serverURL), ratingKey: metadata.ratingKey)
+        return LocalSubtitleStore.sameStreams(injected, media) ? nil : injected
+    }
+
+    /// After a subtitle is stored: list it now.
+    private func injectLocalSubtitles() {
+        if let media = mediaWithLocalSubtitles() { metadata.Media = media }
     }
     /// Plex `Media.id` of the version playing, kept so a metadata refresh keeps it.
     private(set) var playingMediaID: String?

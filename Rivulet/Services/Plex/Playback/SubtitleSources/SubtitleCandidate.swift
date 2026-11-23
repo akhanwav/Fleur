@@ -97,10 +97,8 @@ nonisolated enum SubtitleRanking {
 
     /// "x264-AMIABLE.mkv" → "amiable".
     private static func releaseGroup(_ name: String) -> String? {
-        let base = tokens(name).joined(separator: ".")
-        guard let dash = name.lowercased().lastIndex(of: "-") else { return nil }
-        let tail = tokens(String(name[name.index(after: dash)...])).first
-        return base.isEmpty ? nil : tail
+        guard let dash = name.lastIndex(of: "-") else { return nil }
+        return tokens(String(name[name.index(after: dash)...])).first
     }
 
     /// Lower-cased words and numbers; the file's extension dropped.

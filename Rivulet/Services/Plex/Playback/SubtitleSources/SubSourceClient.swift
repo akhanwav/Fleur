@@ -185,13 +185,14 @@ nonisolated enum ZipArchive {
 
     /// Raw DEFLATE, which is what `COMPRESSION_ZLIB` reads.
     static func inflate(_ data: Data, size: Int) -> Data? {
-        guard size > 0 else { return Data() }
+        // A subtitle is small: a claim of more than 20 MB is a broken archive.
+        guard size > 0, size <= 20_000_000, !data.isEmpty else { return size == 0 ? Data() : nil }
         var output = Data(count: size)
-        let written = output.withUnsafeMutableBytes { out in
-            data.withUnsafeBytes { input in
-                compression_decode_buffer(out.bindMemory(to: UInt8.self).baseAddress!, size,
-                                          input.bindMemory(to: UInt8.self).baseAddress!, data.count,
-                                          nil, COMPRESSION_ZLIB)
+        let written = output.withUnsafeMutableBytes { out -> Int in
+            data.withUnsafeBytes { input -> Int in
+                guard let destination = out.bindMemory(to: UInt8.self).baseAddress,
+                      let source = input.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                return compression_decode_buffer(destination, size, source, data.count, nil, COMPRESSION_ZLIB)
             }
         }
         return written == size ? output : nil

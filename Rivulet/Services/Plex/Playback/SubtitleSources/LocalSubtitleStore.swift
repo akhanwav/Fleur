@@ -100,6 +100,8 @@ enum LocalSubtitleStore {
     /// run on every metadata change.
     static func injecting(into media: [PlexMedia], server: String, ratingKey: String?) -> [PlexMedia] {
         let stored = ratingKey.map { subtitles(server: server, ratingKey: $0) } ?? []
+        let hasInjected = media.contains { $0.Part?.first?.Stream?.contains { isLocal(streamID: $0.id) } ?? false }
+        guard !stored.isEmpty || hasInjected else { return media }
         return media.map { version in
             guard var parts = version.Part, let first = parts.first else { return version }
             let plexStreams = (first.Stream ?? []).filter { !isLocal(streamID: $0.id) }
@@ -112,6 +114,11 @@ enum LocalSubtitleStore {
                              videoCodec: version.videoCodec, videoResolution: version.videoResolution,
                              container: version.container, videoFrameRate: version.videoFrameRate, Part: parts)
         }
+    }
+
+    /// Whether two item listings carry the same streams, by id, version by version.
+    static func sameStreams(_ a: [PlexMedia], _ b: [PlexMedia]) -> Bool {
+        a.map { $0.Part?.first?.Stream?.map(\.id) ?? [] } == b.map { $0.Part?.first?.Stream?.map(\.id) ?? [] }
     }
 
     static func stream(for subtitle: LocalSubtitle) -> PlexStream {
