@@ -4882,8 +4882,10 @@ final class UniversalPlayerViewModel: ObservableObject {
     /// and listed after the server's own sidecars. A reload re-registers every
     /// sidecar in that order, which `TrackMerge` pairs on; adding one to the
     /// live engine would not.
-    func installSubtitle(_ result: SubtitleCandidate) async {
-        guard let context = subtitleSearchContext else { return }
+    /// Returns why it failed, nil otherwise (installed, or no longer wanted).
+    @discardableResult
+    func installSubtitle(_ result: SubtitleCandidate) async -> String? {
+        guard let context = subtitleSearchContext else { return nil }
         let generation = itemGeneration
         let known = Set(plexSubtitleTracksFromMetadata().map(\.id))
         var tracks = currentPlexTrackIDs()
@@ -4893,13 +4895,13 @@ final class UniversalPlayerViewModel: ObservableObject {
             media: { [playingMediaID] in VersionRanking.select(playingMediaID.map(VersionChoice.source) ?? .best,
                                                                in: $0).media },
             stillWanted: { [weak self] in generation == self?.itemGeneration })
-        guard generation == itemGeneration, let outcome else { return }
+        guard generation == itemGeneration, let outcome else { return nil }
         let added: PlexStream
         switch outcome {
         case .failed(let message):
             print("[SubtitleSearch] install failed: \(message)")
             showCompatibilityNotice(message)
-            return
+            return message
         case .plex(let stream, let media):
             metadata.Media = media
             added = stream
@@ -4917,13 +4919,14 @@ final class UniversalPlayerViewModel: ObservableObject {
         // route's subtitles come from the server.
         if LocalSubtitleStore.isLocal(streamID: added.id), aetherPlayer == nil {
             showCompatibilityNotice("Saved. These Subtitles Show When the File Plays Directly")
-            return
+            return nil
         }
         hideCompatibilityNotice()
         enqueueStreamWork { vm in
             await vm.reloadStream(toOriginal: vm.aetherPlayer != nil, reason: "subtitle_download",
                                   tracks: tracks, restoring: vm.planSnapshot)
         }
+        return nil
     }
 
     /// Native (AVKit) subtitle picker bridge. Track ids ARE engine indices on

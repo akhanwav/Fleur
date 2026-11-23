@@ -56,6 +56,8 @@ nonisolated struct SubtitleSearchResults: Sendable {
     var candidates: [SubtitleCandidate] = []
     /// One line per source that failed ("OpenSubtitles is busy…").
     var notices: [String] = []
+    /// The sources this search asked, for the filter's tabs.
+    var searched: [SubtitleOrigin] = []
 }
 
 /// How a pick ended.
@@ -155,6 +157,7 @@ enum SubtitleSearch {
         for part in parts {
             results.candidates += part.candidates
             results.notices += part.notices
+            results.searched += part.searched
         }
         results.candidates = SubtitleRanking.sorted(results.candidates, fileName: context.fileName)
         print("[SubtitleSearch] \(results.candidates.count) results "
@@ -164,6 +167,7 @@ enum SubtitleSearch {
 
     private static func searchPlex(_ context: SubtitleSearchContext) async -> SubtitleSearchResults {
         guard context.canUsePlex else { return SubtitleSearchResults() }
+        let searched: [SubtitleOrigin] = [.plexSearch]
         do {
             let streams = try await PlexNetworkManager.shared.searchSubtitles(
                 serverURL: context.serverURL, authToken: context.token, ratingKey: context.ratingKey,
@@ -175,9 +179,9 @@ enum SubtitleSearch {
                     language: stream.languageTag ?? stream.languageCode, isHearingImpaired: stream.hearingImpaired ?? false,
                     isForced: stream.forced ?? false, downloads: nil, rating: nil, isHashMatch: false,
                     payload: .plex(stream))
-            })
+            }, searched: searched)
         } catch {
-            return SubtitleSearchResults(notices: ["Plex search failed."])
+            return SubtitleSearchResults(notices: ["Plex search failed."], searched: searched)
         }
     }
 
@@ -185,18 +189,20 @@ enum SubtitleSearch {
         guard OpenSubtitlesClient.isConfigured else { return SubtitleSearchResults() }
         let hash = await fileHash(context)
         do {
-            return SubtitleSearchResults(candidates: try await OpenSubtitlesClient.shared.search(context, hash: hash))
+            return SubtitleSearchResults(candidates: try await OpenSubtitlesClient.shared.search(context, hash: hash),
+                                         searched: [.openSubtitles])
         } catch {
-            return SubtitleSearchResults(notices: [message(error, .openSubtitles)])
+            return SubtitleSearchResults(notices: [message(error, .openSubtitles)], searched: [.openSubtitles])
         }
     }
 
     private static func searchSubSource(_ context: SubtitleSearchContext) async -> SubtitleSearchResults {
         guard SubSourceClient.isConfigured else { return SubtitleSearchResults() }
         do {
-            return SubtitleSearchResults(candidates: try await SubSourceClient.shared.search(context))
+            return SubtitleSearchResults(candidates: try await SubSourceClient.shared.search(context),
+                                         searched: [.subSource])
         } catch {
-            return SubtitleSearchResults(notices: [message(error, .subSource)])
+            return SubtitleSearchResults(notices: [message(error, .subSource)], searched: [.subSource])
         }
     }
 
@@ -241,32 +247,42 @@ enum SubtitleSearch {
         case .plex(let result):
             return await downloadFromPlex(result, context: context, known: known, media: media, stillWanted: stillWanted)
         case .openSubtitles(let fileID):
+            let text: String
             do {
-                let text = try await OpenSubtitlesClient.shared.download(fileID: fileID)
-                return try store(text, format: "srt", candidate: candidate, context: context)
+                text = try await OpenSubtitlesClient.shared.download(fileID: fileID)
             } catch {
+                print("[SubtitleSearch] OpenSubtitles download failed: \(error)")
                 return .failed(message(error, .openSubtitles))
             }
+            return store(text, format: "srt", candidate: candidate, context: context)
         case .subSource(let subtitleID):
+            let file: (text: String, format: String)
             do {
-                let file = try await SubSourceClient.shared.download(subtitleID: subtitleID, context: context)
-                return try store(file.text, format: file.format, candidate: candidate, context: context)
+                file = try await SubSourceClient.shared.download(subtitleID: subtitleID, context: context)
             } catch {
+                print("[SubtitleSearch] SubSource download failed: \(error)")
                 return .failed(message(error, .subSource))
             }
+            return store(file.text, format: file.format, candidate: candidate, context: context)
         }
     }
 
+    /// A failure here is the Apple TV's, never the source's: it says so.
     private static func store(_ text: String, format: String, candidate: SubtitleCandidate,
-                              context: SubtitleSearchContext) throws -> SubtitleInstall {
+                              context: SubtitleSearchContext) -> SubtitleInstall {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .failed(SubtitleSourceError.noFile.message(candidate.origin))
         }
         let language = candidate.language.flatMap { Locale.LanguageCode($0).identifier(.alpha2) } ?? context.language
-        return .local(try LocalSubtitleStore.save(
-            text: text, format: format, server: context.serverKey, ratingKey: context.ratingKey,
-            origin: candidate.origin, release: candidate.release, language: language,
-            isHearingImpaired: candidate.isHearingImpaired, isForced: candidate.isForced))
+        do {
+            return .local(try LocalSubtitleStore.save(
+                text: text, format: format, server: context.serverKey, ratingKey: context.ratingKey,
+                origin: candidate.origin, release: candidate.release, language: language,
+                isHearingImpaired: candidate.isHearingImpaired, isForced: candidate.isForced))
+        } catch {
+            print("[SubtitleSearch] saving the subtitles failed: \(error)")
+            return .failed("The subtitles downloaded but couldn't be saved on this Apple TV.")
+        }
     }
 
     /// The longest a server is given to list a Plex download.

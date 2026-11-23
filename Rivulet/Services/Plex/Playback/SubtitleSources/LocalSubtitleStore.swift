@@ -6,7 +6,8 @@
 //  per title per server, and offered as that title's own tracks: each one is
 //  listed as a Plex sidecar stream whose key is the file's URL, so the player's
 //  track list, the sidecar registration and the saved choices all treat it like
-//  any other external subtitle. Only the aether route can show them: on the
+//  any other external subtitle, in Caches (the one writable place on tvOS).
+//  Only the aether route can show them: on the
 //  `hls` route subtitles come from the server.
 //
 
@@ -42,9 +43,14 @@ enum LocalSubtitleStore {
         MediaProviderRegistry.shared.plexProvider(serverURL: serverURL)?.id ?? "url:\(serverURL)"
     }
 
+    /// Caches: on tvOS an app may write only there and to tmp. Living Room's
+    /// container has no Application Support folder though the content filter
+    /// writes one, and the first SubSource download failed saving there. The system may
+    /// purge Caches when storage runs low; an entry whose file is gone is
+    /// simply not offered (`all()`).
     static var directory: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("Subtitles", isDirectory: true)
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent("Subtitles", isDirectory: true)
     }
 
     private static var indexURL: URL { directory.appendingPathComponent("index.json") }

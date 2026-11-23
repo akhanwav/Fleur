@@ -561,11 +561,21 @@ copy selected in Ways to Watch (a show page: the episode Play would start).
     `Secrets` (`OpenSubtitlesClient`, `SubSourceClient`; English unless the
     subtitle preference says otherwise). OpenSubtitles gets the file's hash,
     read from the server with two 64 KiB range requests (`partBytes`). A pick
-    is stored on the Apple TV per title per server (`LocalSubtitleStore`,
-    Application Support) and injected into the player's metadata as a sidecar
+    is stored on the Apple TV per title per server (`LocalSubtitleStore`, in
+    Caches: tvOS lets an app write only there and to tmp, and a save to
+    Application Support failed on Living Room) and injected into the player's metadata as a sidecar
     stream whose key is a `file:` URL, after the server's own, so `TrackMerge`
     pairs it by order like any sidecar. Its stream id (from 1,900,000,000) is
     never sent to Plex. Only the aether route can draw one.
+- **Search results filter by source** (`SubtitleResultFilter`: All, Plex,
+  OpenSubtitles, SubSource, each with its count), shown once two sources were
+  asked. On the detail page the filter rows are `keepsOpen` actions that
+  redraw the popup in place; a failed download reopens the results on the
+  failed row, the reason in the header.
+- **A `TileMenuPopupViewController` must always hold focus.** With no enabled
+  row, focus stays on the page behind, which the popup won't let it leave,
+  and Menu goes to that page, not the popup: nothing responds. The popup's
+  invisible focus anchor takes focus then; don't remove it.
 - **Subtitle rows name their origin** (`SubtitleLabels`): "English SDH · SRT",
   then Embedded, External file, Plex search, OpenSubtitles or SubSource,
   "Downloaded" for a search's file, and the release. `SubtitleOrigin(stream)`

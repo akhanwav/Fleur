@@ -153,4 +153,52 @@ final class SubtitleSourcesTests: XCTestCase {
         XCTAssertEqual(SubtitleSourceError.rateLimited(retryAfter: 600).message(.subSource),
                        "SubSource is busy. Try again in 10 minutes.")
     }
+
+    // MARK: Filter
+
+    func test_filterTabs_countEachSearchedSource() {
+        let results = [candidate("a"), candidate("b"), candidate("c", origin: .subSource)]
+        let tabs = SubtitleResultFilter.tabs(for: results, searched: [.plexSearch, .openSubtitles, .subSource])
+        XCTAssertEqual(tabs.map(\.title), ["All (3)", "Plex (0)", "OpenSubtitles (2)", "SubSource (1)"])
+        XCTAssertEqual(results.filter(SubtitleResultFilter.source(.subSource).matches).map(\.release), ["c"])
+        XCTAssertEqual(results.filter(SubtitleResultFilter.all.matches).count, 3)
+    }
+
+    // MARK: Stuck menu
+
+    /// A menu of status lines only (a failed download) must still hold focus,
+    /// or Menu never reaches it and the screen is stuck.
+    func test_menuWithNoEnabledRow_stillOffersFocus() throws {
+        let popup = TileMenuPopupViewController(sections: [[
+            TileMenuAction(title: "SubSource isn't responding.", systemImage: "exclamationmark.circle",
+                           isEnabled: false) {},
+        ]])
+        popup.loadViewIfNeeded()
+        let preferred = try XCTUnwrap(popup.preferredFocusEnvironments.first as? UIView)
+        XCTAssertTrue(preferred.canBecomeFocused)
+    }
+
+    func test_menuWithAnEnabledRow_focusesTheRow_notTheAnchor() throws {
+        let popup = TileMenuPopupViewController(sections: [[
+            TileMenuAction(title: "Note", systemImage: "circle", isEnabled: false) {},
+            TileMenuAction(title: "Pick", systemImage: "circle") {},
+        ]])
+        popup.loadViewIfNeeded()
+        let preferred = try XCTUnwrap(popup.preferredFocusEnvironments.first as? UIView)
+        XCTAssertTrue(preferred.canBecomeFocused)
+        XCTAssertNotNil(preferred.subviews.compactMap { $0 as? UILabel }.first { $0.text == "Pick" })
+    }
+
+    // MARK: Store
+
+    func test_store_writesToCaches() throws {
+        let saved = try LocalSubtitleStore.save(text: "1\n00:00:01,000 --> 00:00:02,000\nHi\n", format: "srt",
+                                                server: "test-server", ratingKey: "unit-\(UUID().uuidString)",
+                                                origin: .subSource, release: "R", language: "en",
+                                                isHearingImpaired: false, isForced: false)
+        let url = LocalSubtitleStore.fileURL(saved)
+        XCTAssertTrue(url.path.contains("/Library/Caches/Subtitles/"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        try? FileManager.default.removeItem(at: url)
+    }
 }

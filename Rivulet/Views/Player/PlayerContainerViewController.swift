@@ -1700,28 +1700,51 @@ class PlayerContainerViewController: UIViewController {
             self.subtitleSearchTask = nil
             row?.setTitle("Search for Subtitles")
             guard let vm, let origin, self.activeRailPanel === origin else { return }
-            let found = results?.candidates ?? []
-            // A source that failed says why, under the results or in place of them.
-            let notices = (results?.notices ?? []).map {
-                CardTrackListView.Row(title: $0, subtitle: nil, trackId: -1, isSelected: false)
-            }
-            let rows = found.isEmpty
-                ? [CardTrackListView.Row(title: results == nil ? "Search Failed" : "No Subtitles Found",
-                                         subtitle: nil, trackId: -1, isSelected: false)] + notices
-                : found.enumerated().map { index, result in
-                    CardTrackListView.Row(
-                        title: SubtitleLabels.resultTitle(result),
-                        subtitle: SubtitleLabels.resultDetail(result),
-                        trackId: index, isSelected: false)
-                } + notices
-            _ = self.presentRailPanel(
-                content: CardTrackListView(header: "Search Results", rows: rows, onSelect: { [weak vm, weak self] index in
-                    self?.activeRailPanel?.dismissPanel()
-                    guard let index, found.indices.contains(index), let vm else { return }
-                    Task { await vm.installSubtitle(found[index]) }
-                }),
-                width: CardTrackListView.menuWidth, from: self.rail?.subtitlesButton ?? self.view)
+            self.showSubtitleResults(results ?? SubtitleSearchResults(notices: ["Search Failed"]), filter: .all)
         }
+    }
+
+    /// The results panel: a source filter on top when more than one source
+    /// was asked ("All (54)", "Plex (4)", …), the results, then a line per
+    /// source that failed. Picking a filter redraws the panel on it; a failed
+    /// download reopens it with the reason on top.
+    private func showSubtitleResults(_ results: SubtitleSearchResults, filter: SubtitleResultFilter,
+                                     failure: String? = nil) {
+        let tabs = SubtitleResultFilter.tabs(for: results.candidates, searched: results.searched)
+        let showsTabs = tabs.count > 2
+        let found = results.candidates.filter(filter.matches)
+        // Row ids: results by index; filters from -100 down; status lines -1.
+        var rows: [CardTrackListView.Row] = []
+        if let failure {
+            rows.append(.init(title: failure, subtitle: nil, trackId: -1, isSelected: false))
+        }
+        if showsTabs {
+            rows += tabs.enumerated().map { index, tab in
+                .init(title: tab.title, subtitle: nil, trackId: -100 - index, isSelected: tab.filter == filter)
+            }
+        }
+        rows += found.isEmpty
+            ? [.init(title: "No Subtitles Found", subtitle: nil, trackId: -1, isSelected: false)]
+            : found.enumerated().map { index, result in
+                .init(title: SubtitleLabels.resultTitle(result), subtitle: SubtitleLabels.resultDetail(result),
+                      trackId: index, isSelected: false)
+            }
+        rows += results.notices.map { .init(title: $0, subtitle: nil, trackId: -1, isSelected: false) }
+        _ = presentRailPanel(
+            content: CardTrackListView(header: "Search Results", rows: rows, onSelect: { [weak self] id in
+                guard let self else { return }
+                if let id, id <= -100, tabs.indices.contains(-100 - id) {
+                    self.showSubtitleResults(results, filter: tabs[-100 - id].filter)
+                    return
+                }
+                self.activeRailPanel?.dismissPanel()
+                guard let id, found.indices.contains(id), let vm = self.viewModel else { return }
+                Task { [weak self] in
+                    guard let failure = await vm.installSubtitle(found[id]) else { return }
+                    self?.showSubtitleResults(results, filter: filter, failure: failure)
+                }
+            }),
+            width: CardTrackListView.menuWidth, from: rail?.subtitlesButton ?? view)
     }
 
     // MARK: - Full description

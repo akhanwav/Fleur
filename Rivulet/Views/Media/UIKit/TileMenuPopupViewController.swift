@@ -44,6 +44,9 @@ struct TileMenuAction {
     /// Names the row across `update(sections:)`, so focus stays on it while
     /// its title changes. nil falls back to the title.
     var id: String? = nil
+    /// Runs without closing the menu (a filter that redraws the rows through
+    /// `update(sections:)`).
+    var keepsOpen: Bool = false
     let handler: () -> Void
 }
 
@@ -110,6 +113,11 @@ final class TileMenuPopupViewController: UIViewController {
     private let sourceFrame: CGRect?
     private var firstRow: MenuRowButton?
     private var rows: [MenuRowButton] = []
+    /// Holds focus when no row can (a menu of status lines only, "Download
+    /// Failed"): without it focus stays on the page behind, which
+    /// `shouldUpdateFocus` will not leave, and Menu goes to that page instead
+    /// of this menu's recognizer, so nothing responds.
+    private let focusAnchor = FocusAnchorView()
     private var stack: UIStackView!
     private let rowScroller = UIScrollView()
     /// Rows shown before the list scrolls: five, and half of the sixth so it
@@ -178,6 +186,10 @@ final class TileMenuPopupViewController: UIViewController {
         rowScroller.clipsToBounds = true
         rowScroller.contentInsetAdjustmentBehavior = .never
         rowScroller.addSubview(stack)
+        focusAnchor.frame = panel.contentView.bounds
+        focusAnchor.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        focusAnchor.isFocusable = firstRow == nil
+        panel.contentView.addSubview(focusAnchor)
         panel.contentView.addSubview(rowScroller)
         let rowsTop: NSLayoutConstraint
         if let headerView {
@@ -287,8 +299,8 @@ final class TileMenuPopupViewController: UIViewController {
     /// the dim, and then `setNeedsFocusUpdate` here is ignored: only an
     /// environment that holds focus can move it. The focus system can.
     private func claimFocusIfLost() {
-        guard !isDismissing, !rows.contains(where: \.isFocused),
-              let target = rows.first(where: \.canBecomeFocused),
+        guard !isDismissing, !rows.contains(where: \.isFocused), !focusAnchor.isFocused,
+              let target = rows.first(where: \.canBecomeFocused) ?? (focusAnchor.isFocusable ? focusAnchor : nil),
               let system = UIFocusSystem.focusSystem(for: view) else { return }
         system.requestFocusUpdate(to: target)
         system.updateFocusIfNeeded()
@@ -325,6 +337,7 @@ final class TileMenuPopupViewController: UIViewController {
                 arranged.append(row)
             }
         }
+        focusAnchor.isFocusable = firstRow == nil
         let keep = Set(arranged.map(ObjectIdentifier.init))
         for view in stack.arrangedSubviews where !keep.contains(ObjectIdentifier(view)) {
             view.removeFromSuperview()
@@ -457,7 +470,8 @@ final class TileMenuPopupViewController: UIViewController {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        [refocusTarget ?? firstRow].compactMap { $0 }
+        if let row = refocusTarget ?? firstRow { return [row] }
+        return [focusAnchor]
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -523,6 +537,7 @@ private final class MenuRowButton: UIView {
 
     private let iconView = UIImageView()
     private let labelView = UILabel()
+    private var keepsOpen: Bool
     private var destructive: Bool
     private let onPress: (@escaping () -> Void) -> Void
     private var handler: () -> Void
@@ -535,6 +550,7 @@ private final class MenuRowButton: UIView {
 
     init(action: TileMenuAction, onPress: @escaping (@escaping () -> Void) -> Void) {
         self.destructive = action.destructive
+        self.keepsOpen = action.keepsOpen
         self.isEnabled = action.isEnabled
         self.title = action.title
         self.key = action.id ?? action.title
@@ -578,11 +594,15 @@ private final class MenuRowButton: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func pressed() { onPress(handler) }
+    @objc private func pressed() {
+        guard isEnabled else { return }
+        if keepsOpen { handler() } else { onPress(handler) }
+    }
 
     /// Show `action` instead, in place (`TileMenuPopupViewController.update`).
     func apply(_ action: TileMenuAction) {
         destructive = action.destructive
+        keepsOpen = action.keepsOpen
         isEnabled = action.isEnabled
         title = action.title
         key = action.id ?? action.title
@@ -624,4 +644,10 @@ private final class MenuRowButton: UIView {
             }
         }
     }
+}
+
+/// The invisible focus stop of a menu with no enabled row.
+private final class FocusAnchorView: UIView {
+    var isFocusable = false
+    override var canBecomeFocused: Bool { isFocusable }
 }

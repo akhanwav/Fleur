@@ -207,3 +207,27 @@ enum SubtitleLabels {
         return parts.joined(separator: " · ")
     }
 }
+
+/// The source filter above search results: All, then each source the search
+/// asked, with its count ("OpenSubtitles (12)").
+nonisolated enum SubtitleResultFilter: Hashable, Sendable {
+    case all
+    case source(SubtitleOrigin)
+
+    func matches(_ candidate: SubtitleCandidate) -> Bool {
+        switch self {
+        case .all: true
+        case .source(let origin): candidate.origin == origin
+        }
+    }
+
+    /// "All (54)", "Plex (4)", …: All first, then the sources in a fixed order.
+    static func tabs(for candidates: [SubtitleCandidate], searched: [SubtitleOrigin]) -> [(filter: Self, title: String)] {
+        let order: [SubtitleOrigin] = [.plexSearch, .openSubtitles, .subSource]
+        let sources = order.filter { origin in searched.contains(origin) || candidates.contains { $0.origin == origin } }
+        return [(.all, "All (\(candidates.count))")] + sources.map { origin in
+            let name = origin == .plexSearch ? "Plex" : origin.label
+            return (.source(origin), "\(name) (\(candidates.count { $0.origin == origin }))")
+        }
+    }
+}
